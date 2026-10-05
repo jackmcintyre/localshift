@@ -455,6 +455,11 @@ class LocalShiftCoordinator:
             SOLCAST_MAX_STARTUP_RETRIES,
         )
 
+        # Issue #1097: learn when export can physically happen before the first
+        # plan is computed.
+        if self._entity_monitor is not None:
+            await self._entity_monitor.refresh_tesla_tariff()
+
         # Wait for Solcast data to be ready before computing forecasts
         # This prevents errors when Solcast hasn't initialized yet
         await self._forecast_bootstrapper.wait_for_solcast_and_compute()

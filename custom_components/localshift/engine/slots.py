@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 from ..coordinator.data import AdaptiveParameters
 from ..forecast.solar import get_solar_for_slot_by_interval
 from ..forecast.solar_accuracy import SolarAccuracyTracker
+from ..utils.export_availability import export_available_at
 from .optimizer_dp import SlotContext
 from .price_calculator import get_price_for_slot_or_none
 from .slot_schedule import compute_hybrid_slot_schedule
@@ -386,9 +387,22 @@ class SlotBuilder:
             is_demand_window_entry=is_demand_window_entry,
             is_demand_window_slot=in_demand_window,
             price_source=slot.get("price_source", "unknown"),
+            export_available=self._export_available(data, slot_start),
         )
 
         return ctx, counts, in_demand_window
+
+    def _export_available(self, data: Any, slot_start: datetime) -> bool:
+        """Whether export selected in this slot would physically export (#1097)."""
+        blocked = getattr(data, "export_blocked_periods", None)
+        suppressed_until = getattr(data, "export_suppressed_until", None)
+        # ``data`` is loosely typed here (callers pass bare mocks and replay
+        # stand-ins): anything but the real field type means "no restriction".
+        return export_available_at(
+            slot_start,
+            blocked if isinstance(blocked, list) else None,
+            suppressed_until if isinstance(suppressed_until, datetime) else None,
+        )
 
     def _get_slot_time_for_dw(
         self, slot_start: datetime, local_tz: ZoneInfo | None

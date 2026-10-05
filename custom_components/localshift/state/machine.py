@@ -22,6 +22,9 @@ from ..const import (
     DEFAULT_BATTERY_TARGET,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MINIMUM_TARGET_SOC,
+    EXPORT_INVERSION_CONFIRM_SECONDS,
+    EXPORT_INVERSION_HOLDOFF_MINUTES,
+    EXPORT_INVERSION_POWER_KW,
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
     STATE_MACHINE_TRANSITION_GRACE_SECONDS,
@@ -35,6 +38,7 @@ from ..const import (
     BatteryMode,
 )
 from ..coordinator.data import CoordinatorData, PhysicalResponseWatch
+from ..utils.export_availability import export_available_at
 from .mode_configs import (
     MODE_CONFIG_BUILDERS,
     MODE_EXECUTORS,
@@ -125,6 +129,9 @@ class StateMachine:
         self._manual_override_set_at: datetime | None = None
         # Track dynamic reserve for PROACTIVE_EXPORT mode
         self._proactive_export_reserve: float | None = None
+        # Issue #1097: when the battery was first seen charging off the grid
+        # during PROACTIVE_EXPORT (export-inversion watchdog).
+        self._export_inversion_since: datetime | None = None
         # Issue #972: the reserve SPIKE_DISCHARGE actually wrote, so the health
         # check expects it instead of a hardcoded 10 and stops correcting a
         # conservative spike every 5 minutes.
@@ -1125,6 +1132,16 @@ class StateMachine:
         # data.active_mode and the transition logic drives toward the new mode.
         desired = data.active_mode
 
+        # Issue #1097: never drive the hardware into export, or leave it there,
+        # while Tesla would hold or grid-charge instead. The planner stops
+        # selecting export in these slots too; this covers the gap until its
+        # next allowed decision, and an export already running when the tariff
+        # period turns over.
+        if desired == BatteryMode.PROACTIVE_EXPORT and not export_available_at(
+            now, data.export_blocked_periods, data.export_suppressed_until
+        ):
+            desired = BatteryMode.SELF_CONSUMPTION
+
         if desired == self._commanded_mode:
             await self._handle_stable_mode(data)
         else:
@@ -1143,9 +1160,61 @@ class StateMachine:
             return
 
         if not self._get_switch_state("dry_run"):
+            if await self._abandon_inverted_export(data):
+                return
             if await self._step_proactive_export_reserve(data):
                 return
             await self._perform_health_check(data)
+
+    async def _abandon_inverted_export(self, data: CoordinatorData) -> bool:
+        """Leave PROACTIVE_EXPORT when the battery is charging off the grid.
+
+        Issue #1097: export hands control to Tesla's time-based control, which
+        can do the opposite and grid-charge at full rate. The grid-charging
+        switch the health check reads lags Tesla's real flag by minutes
+        (2026-10-05: 8+ minutes of 5 kW charging with the switch reading off),
+        so this acts on the power flows themselves: battery charging while the
+        grid imports is never export.
+
+        Returns True when export was abandoned, so the caller skips this tick's
+        reserve step and health check.
+        """
+        inverted = (
+            self._commanded_mode == BatteryMode.PROACTIVE_EXPORT
+            and data.battery_power_kw <= -EXPORT_INVERSION_POWER_KW
+            and data.grid_power_kw >= EXPORT_INVERSION_POWER_KW
+        )
+        if not inverted:
+            self._export_inversion_since = None
+            return False
+
+        now = dt_util.now()
+        if self._export_inversion_since is None:
+            self._export_inversion_since = now
+            return False
+        if now - self._export_inversion_since < timedelta(
+            seconds=EXPORT_INVERSION_CONFIRM_SECONDS
+        ):
+            return False
+
+        self._export_inversion_since = None
+        suppressed_until = now + timedelta(minutes=EXPORT_INVERSION_HOLDOFF_MINUTES)
+        data.export_suppressed_until = suppressed_until
+        _LOGGER.warning(
+            "PROACTIVE_EXPORT abandoned: battery charging %.1f kW while grid "
+            "importing %.1f kW (SOC=%.1f%%). Export suppressed until %s.",
+            -data.battery_power_kw,
+            data.grid_power_kw,
+            data.soc,
+            suppressed_until.isoformat(),
+        )
+        # Let the planner re-decide now, with export off the table, instead of
+        # holding the stale export decision until the next price tick.
+        self.invalidate_decision_fingerprint("export inversion (#1097)")
+        await self._handle_desired_mode_transition(
+            data, BatteryMode.SELF_CONSUMPTION, now
+        )
+        return True
 
     async def _step_proactive_export_reserve(self, data: CoordinatorData) -> bool:
         """Re-step the PROACTIVE_EXPORT reserve once SOC has drained to it.

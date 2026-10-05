@@ -137,6 +137,11 @@ class SlotContext:
     price_source: str = "unknown"
     """Source of price data (e.g. 'forecast_current', '5min', '30min', 'synthetic')."""
 
+    export_available: bool = True
+    """False when selecting export in this slot would not physically export
+    (Issue #1097: Tesla's stored tariff is below its top rate, or the
+    export-inversion hold-off is active)."""
+
 
 # -----------------------------------------------------------------------------
 # Optimizer configuration

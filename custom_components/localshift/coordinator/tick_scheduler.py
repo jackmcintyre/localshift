@@ -150,6 +150,14 @@ class TickScheduler:
         # Check entity health
         if self._coordinator.entity_monitor is not None:
             self._coordinator.entity_monitor.check_entity_health()
+            # Issue #1097: keep the export-capable periods current. On this
+            # tier rather than the slow one so a restart inside Tesla's
+            # off-peak is unguarded for minutes, not half an hour, if the
+            # calendar was not ready for the startup read.
+            self._coordinator.hass.async_create_task(
+                self._coordinator.entity_monitor.refresh_tesla_tariff(),
+                "localshift_tesla_tariff",
+            )
 
         # Refresh load data (historical and recent)
         if self._coordinator.computation_engine is not None:

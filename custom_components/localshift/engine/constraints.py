@@ -57,7 +57,9 @@ def _determine_export_actions(
     actions = []
     can_discharge = soc_pct > config.discharge_floor_pct
 
-    if not can_discharge:
+    # Issue #1097: export is only worth planning where the hardware will do it.
+    # Outside Tesla's top sell rate, autonomous mode holds or grid-charges.
+    if not can_discharge or not slot.export_available:
         return actions
 
     # Avoidance applies through the *end* of the risk window, not just ahead of

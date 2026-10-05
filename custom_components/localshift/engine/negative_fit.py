@@ -168,7 +168,10 @@ def derive_negative_fit_avoidance_context(
     # and the planner loses its export action for the whole horizon. On a
     # scattered-negative afternoon the usable slots are the positive blips
     # *inside* the window, so scan through ``risk_end_idx`` instead.
-    has_export_opportunity = any(s.sell_price > 0 for s in slots[: risk_end_idx + 1])
+    # Issue #1097: a slot the hardware will not export in is not an opportunity.
+    has_export_opportunity = any(
+        s.sell_price > 0 and s.export_available for s in slots[: risk_end_idx + 1]
+    )
     if not has_export_opportunity:
         return None
 
