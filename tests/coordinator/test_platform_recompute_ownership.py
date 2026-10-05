@@ -237,7 +237,6 @@ class TestSwitchToggleRecomputeOwnership:
         switch = LocalShiftSwitch(real_coordinator, entry, SWITCH_AUTOMATION_ENABLED)
         switch.hass = fake_hass
         switch._attr_entity_id = "switch.localshift_automation_enabled"
-        switch._is_on = True
 
         seen = {}
 
