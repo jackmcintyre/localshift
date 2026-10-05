@@ -115,6 +115,9 @@ CONF_TESLEMETRY_ALLOW_CHARGING_FROM_GRID = "teslemetry_allow_charging_from_grid"
 # Corroboration signals for Tesla override detection (Storm Watch / Grid Event / VPP)
 CONF_TESLEMETRY_GRID_SERVICES = "teslemetry_grid_services"
 CONF_TESLEMETRY_STORM_WATCH = "teslemetry_storm_watch"
+# Issue #1097: Tesla's stored sell tariff, which decides whether autonomous
+# mode exports. Not in the config flow; resolved through DEFAULT_ENTITY_IDS.
+CONF_TESLEMETRY_SELL_TARIFF = "teslemetry_sell_tariff"
 
 CONF_TESLEMETRY_SOLAR_ENERGY = "teslemetry_solar_energy"
 
@@ -196,6 +199,7 @@ DEFAULT_ENTITY_IDS = {
     CONF_TESLEMETRY_ALLOW_CHARGING_FROM_GRID: "switch.my_home_allow_charging_from_grid",
     CONF_TESLEMETRY_GRID_SERVICES: "binary_sensor.my_home_grid_services_enabled",
     CONF_TESLEMETRY_STORM_WATCH: "binary_sensor.my_home_storm_watch_active",
+    CONF_TESLEMETRY_SELL_TARIFF: "calendar.my_home_sell_tariff",
     CONF_TESLEMETRY_SOLAR_ENERGY: "sensor.my_home_solar_energy",
     CONF_PRICING_GENERAL_PRICE: "",  # Empty - discovered during config flow
     CONF_PRICING_FEED_IN_PRICE: "",  # Empty - discovered during config flow
@@ -683,6 +687,20 @@ PROACTIVE_EXPORT_SOC_BUFFER_PERCENT = 5.0
 # reserve (2026-09-15: SOC 26.2-27.0 against a reserve of 27), so an exact
 # comparison would never fire.
 PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT = 1.0
+
+# Issue #1097: how far ahead to read Tesla's sell tariff. Covers the planning
+# horizon (~24h) with room for the 30-minute refresh.
+TESLA_TARIFF_LOOKAHEAD_HOURS = 48
+
+# Issue #1097: export-inversion watchdog. While PROACTIVE_EXPORT is commanded,
+# the battery charging at this rate with the grid importing at this rate is
+# Tesla grid-charging instead of exporting (2026-10-05: -5.0 kW / +5.56 kW).
+EXPORT_INVERSION_POWER_KW = 1.0
+# The power sensors report about once a minute; require the reading to persist
+# past one report so a single stale sample cannot trip it.
+EXPORT_INVERSION_CONFIRM_SECONDS = 90
+# How long export stays off the table after the watchdog trips.
+EXPORT_INVERSION_HOLDOFF_MINUTES = 60
 
 # -----------------------------------------------------------------------------
 # Negative FIT Avoidance Constants (Issue #719)

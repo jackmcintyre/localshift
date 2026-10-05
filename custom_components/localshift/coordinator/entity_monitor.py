@@ -6,15 +6,24 @@ Responsibilities:
 - Track broken/recovered entities
 - Reset tracking on config changes
 - Weather forecast refresh
+- Tesla tariff refresh (when export can physically happen)
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import time
+from datetime import time, timedelta
 from typing import TYPE_CHECKING
 
-from ..const import CONF_PRICING_GENERAL_FORECAST, CONF_WEATHER_ENTITY
+from homeassistant.util import dt as dt_util
+
+from ..const import (
+    CONF_PRICING_GENERAL_FORECAST,
+    CONF_TESLEMETRY_SELL_TARIFF,
+    CONF_WEATHER_ENTITY,
+    TESLA_TARIFF_LOOKAHEAD_HOURS,
+)
+from ..utils.export_availability import export_blocked_periods
 from .synthetic_slot_health import SyntheticSlotHealth
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -36,6 +45,8 @@ class EntityMonitor:
             coordinator: Parent coordinator instance
         """
         self._coordinator = coordinator
+        # Issue #1097: warn once per failure streak, not on every 5-minute tick.
+        self._tesla_tariff_read_failing = False
 
     def read_all_external_state(self) -> None:
         """Read current state of all monitored external entities."""
@@ -207,6 +218,66 @@ class EntityMonitor:
                 "Updated weather forecast: %d hours of temperature data",
                 len(self._coordinator.data.weather_temperature_forecast),
             )
+
+    async def refresh_tesla_tariff(self) -> None:
+        """Refresh the periods in which Tesla's tariff will not export (#1097).
+
+        Reads the sell-tariff calendar and stores the below-top-rate periods on
+        CoordinatorData for the planner and state machine. Whenever the tariff
+        cannot be read the previous periods are kept: they are absolute times,
+        so a stale set ages out on its own rather than blocking the wrong hours.
+        Never raises — this runs in the startup path.
+        """
+        entity_id = self._coordinator.get_entity_id(CONF_TESLEMETRY_SELL_TARIFF)
+        if not entity_id:
+            return
+
+        now = dt_util.now()
+        try:
+            response = await self._coordinator.hass.services.async_call(
+                "calendar",
+                "get_events",
+                {
+                    "entity_id": entity_id,
+                    "start_date_time": now.isoformat(),
+                    "end_date_time": (
+                        now + timedelta(hours=TESLA_TARIFF_LOOKAHEAD_HOURS)
+                    ).isoformat(),
+                },
+                blocking=True,
+                return_response=True,
+            )
+        except Exception as err:
+            if not self._tesla_tariff_read_failing:
+                _LOGGER.warning(
+                    "Cannot read Tesla tariff from %s, keeping the last known "
+                    "export periods: %s",
+                    entity_id,
+                    err,
+                )
+            self._tesla_tariff_read_failing = True
+            return
+        self._tesla_tariff_read_failing = False
+
+        calendar = response.get(entity_id) if isinstance(response, dict) else None
+        events = calendar.get("events") if isinstance(calendar, dict) else None
+        if not isinstance(events, list) or not events:
+            _LOGGER.debug("No Tesla tariff events returned by %s", entity_id)
+            return
+
+        periods = export_blocked_periods(events)
+        if periods != self._coordinator.data.export_blocked_periods:
+            _LOGGER.info(
+                "Tesla tariff: export unavailable in %d period(s) over the next %dh: %s",
+                len(periods),
+                TESLA_TARIFF_LOOKAHEAD_HOURS,
+                ", ".join(
+                    f"{start.isoformat()} to {end.isoformat()}"
+                    for start, end in periods
+                )
+                or "none",
+            )
+        self._coordinator.data.export_blocked_periods = periods
 
     def parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object.
