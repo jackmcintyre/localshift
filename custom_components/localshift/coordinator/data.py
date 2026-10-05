@@ -379,7 +379,7 @@ class CoordinatorData:
     load_shift_recommended_duration_minutes: int = 0  # How long to maintain change
     load_shift_reason: str = ""  # Human-readable explanation
     load_shift_confidence: str = "low"  # low/medium/high
-    grid_charge_risk: bool = False  # Would adding load trigger grid charging?
+    grid_charge_risk: bool = False  # Current load alone forecast to grid charge
     current_excess_rate_kw: float = 0.0  # Current excess generation rate (Real-time)
 
     # Weather correlation fields (Issue #61)

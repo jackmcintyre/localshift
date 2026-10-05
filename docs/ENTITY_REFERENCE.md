@@ -502,6 +502,8 @@ Attributes:
   safe_additional_load_kw: 0.0
 ```
 
+`grid_charge_risk` is true when the current load, with nothing added, is forecast to need grid charging before the demand window. `REDUCE_LOAD` is emitted only in that case; it is forecast-derived and never comes from battery SOC alone. Finite headroom (for example 4 kW safe, 5 kW not) is not risk and reads `INCREASE_LOAD` with `safe_additional_load_kw: 4.0`.
+
 **Icon:** Dynamic based on signal (arrow-up-bold, arrow-down-bold, check-circle, pause-circle)
 
 ---
