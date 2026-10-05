@@ -1198,16 +1198,15 @@ class StateMachine:
             return False
 
         self._export_inversion_since = None
-        data.export_suppressed_until = now + timedelta(
-            minutes=EXPORT_INVERSION_HOLDOFF_MINUTES
-        )
+        suppressed_until = now + timedelta(minutes=EXPORT_INVERSION_HOLDOFF_MINUTES)
+        data.export_suppressed_until = suppressed_until
         _LOGGER.warning(
             "PROACTIVE_EXPORT abandoned: battery charging %.1f kW while grid "
             "importing %.1f kW (SOC=%.1f%%). Export suppressed until %s.",
             -data.battery_power_kw,
             data.grid_power_kw,
             data.soc,
-            data.export_suppressed_until.isoformat(),
+            suppressed_until.isoformat(),
         )
         # Let the planner re-decide now, with export off the table, instead of
         # holding the stale export decision until the next price tick.
