@@ -1147,6 +1147,7 @@ State: on
 **Behavior:**
 - ON: State machine evaluates and controls battery
 - OFF: Returns to self consumption, no commands sent
+- Mirrors `select.localshift_battery_mode`: picking a manual mode there turns this switch OFF, picking `automatic` turns it ON
 
 ---
 

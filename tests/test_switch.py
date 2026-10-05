@@ -28,12 +28,19 @@ from custom_components.localshift.switch import (
 
 @pytest.fixture
 def mock_coordinator():
-    """Create a mock coordinator."""
+    """Create a mock coordinator.
+
+    The switch-state bridge is dict-backed so it behaves like the production
+    coordinator's: the switch entity holds no state of its own and reads
+    `is_on` straight back from `get_switch_state`.
+    """
     coordinator = MagicMock()
     coordinator.async_set_self_consumption = AsyncMock()
     coordinator.async_recompute_and_evaluate = AsyncMock()
     coordinator._notification_service = None
-    coordinator.set_switch_state = MagicMock()
+    switch_states: dict[str, bool] = {}
+    coordinator.set_switch_state = MagicMock(side_effect=switch_states.__setitem__)
+    coordinator.get_switch_state = MagicMock(side_effect=switch_states.__getitem__)
     return coordinator
 
 
@@ -64,7 +71,6 @@ class TestLocalShiftSwitch:
         switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
 
         expected_default = SWITCH_DEFAULTS[SWITCH_AUTOMATION_ENABLED]
-        assert switch._is_on == expected_default
         assert switch.is_on == expected_default
 
     def test_switch_loads_persisted_state(self, mock_coordinator, mock_entry):
@@ -74,7 +80,7 @@ class TestLocalShiftSwitch:
 
         switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
 
-        assert switch._is_on is False
+        assert switch.is_on is False
 
     def test_switch_attributes(self, mock_coordinator, mock_entry):
         """Test switch has correct unique_id, name, and icon."""
@@ -107,16 +113,18 @@ class TestLocalShiftSwitch:
         mock_hass = MagicMock()
         mock_hass.config_entries = MagicMock()
         mock_hass.config_entries.async_update_entry = MagicMock()
+        option_key = f"{SWITCH_STATE_PREFIX}{SWITCH_AUTOMATION_ENABLED}"
+        mock_entry.options = {option_key: False}
 
         switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
         switch.hass = mock_hass
         switch._attr_entity_id = "switch.localshift_automation_enabled"
-        switch._is_on = False
+        assert switch.is_on is False
 
         with patch.object(switch, "async_write_ha_state"):
             await switch.async_turn_on()
 
-        assert switch._is_on is True
+        assert switch.is_on is True
         mock_coordinator.set_switch_state.assert_called_with(SWITCH_AUTOMATION_ENABLED, True)
 
     @pytest.mark.asyncio
@@ -144,16 +152,18 @@ class TestLocalShiftSwitch:
         mock_hass = MagicMock()
         mock_hass.config_entries = MagicMock()
         mock_hass.config_entries.async_update_entry = MagicMock()
+        option_key = f"{SWITCH_STATE_PREFIX}{SWITCH_AUTOMATION_ENABLED}"
+        mock_entry.options = {option_key: True}
 
         switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
         switch.hass = mock_hass
         switch._attr_entity_id = "switch.localshift_automation_enabled"
-        switch._is_on = True
+        assert switch.is_on is True
 
         with patch.object(switch, "async_write_ha_state"):
             await switch.async_turn_off()
 
-        assert switch._is_on is False
+        assert switch.is_on is False
 
     @pytest.mark.asyncio
     async def test_turn_off_automation_disabled_sets_self_consumption(

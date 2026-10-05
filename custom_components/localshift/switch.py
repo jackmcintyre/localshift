@@ -13,7 +13,7 @@ import logging
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -81,7 +81,13 @@ async def async_setup_entry(
 
 
 class LocalShiftSwitch(SwitchEntity):
-    """A toggle switch for automation features."""
+    """A toggle switch for automation features.
+
+    The coordinator's switch-state bridge is the single source of truth: the
+    entity holds no copy of its own, so a writer that goes through the bridge
+    without touching this entity (the battery-mode select flipping
+    automation_enabled) still shows up here on the next coordinator update.
+    """
 
     _attr_has_entity_name = True
 
@@ -96,17 +102,17 @@ class LocalShiftSwitch(SwitchEntity):
         self._entry = entry
         self._key = key
 
-        # Load persisted state from options, or use default
-        option_key = f"{SWITCH_STATE_PREFIX}{key}"
-        self._is_on = self._entry.options.get(option_key, SWITCH_DEFAULTS[key])
-
         self._attr_unique_id = f"localshift_{key}"
         self._attr_name = SWITCH_NAMES[key]
         self._attr_icon = SWITCH_ICONS[key]
         self._attr_entity_category = SWITCH_CATEGORIES.get(key)
 
-        # Sync initial state to coordinator's switch state bridge
-        self.coordinator.set_switch_state(key, self._is_on)
+        # Seed the coordinator's switch state bridge from the persisted
+        # option, or the default
+        option_key = f"{SWITCH_STATE_PREFIX}{key}"
+        self.coordinator.set_switch_state(
+            key, self._entry.options.get(option_key, SWITCH_DEFAULTS[key])
+        )
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -122,11 +128,21 @@ class LocalShiftSwitch(SwitchEntity):
     @property
     def is_on(self) -> bool:
         """Return True if the switch is on."""
-        return self._is_on
+        return self.coordinator.get_switch_state(self._key)
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to coordinator updates."""
+        self.async_on_remove(
+            self.coordinator.async_add_listener(self._handle_coordinator_update)
+        )
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from coordinator."""
+        self.async_write_ha_state()
 
     async def async_turn_on(self, **_kwargs) -> None:
         """Turn the switch on."""
-        self._is_on = True
         self.coordinator.set_switch_state(self._key, True)
         self.async_write_ha_state()
 
@@ -144,7 +160,6 @@ class LocalShiftSwitch(SwitchEntity):
 
     async def async_turn_off(self, **_kwargs) -> None:
         """Turn the switch off."""
-        self._is_on = False
         self.coordinator.set_switch_state(self._key, False)
         self.async_write_ha_state()
 
