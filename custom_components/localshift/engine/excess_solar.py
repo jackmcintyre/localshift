@@ -8,11 +8,7 @@ from datetime import datetime, time, timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.util import dt as dt_util
 
-from ..const import (
-    BATTERY_CAPACITY_KWH,
-    CONF_BATTERY_TARGET,
-    DEFAULT_BATTERY_TARGET,
-)
+from ..const import BATTERY_CAPACITY_KWH
 from ..coordinator.data import CoordinatorData
 from ..forecast.solar import get_solar_for_15min_slot
 from .price_calculator import get_price_for_slot_or_none
@@ -247,8 +243,13 @@ class ExcessSolarEngine:
     ) -> tuple[float, bool]:
         """Calculate max additional load that won't trigger grid charging.
 
-        Uses simulation to find the safe threshold. Tests progressively
-        higher additional loads until grid charging would be required.
+        Uses simulation to find the safe threshold. Simulates the current load
+        first, then progressively higher additional loads until grid charging
+        would be required.
+
+        grid_charge_risk means the current load, with nothing added, is forecast
+        to need grid charging. Headroom below the largest tested load is not
+        risk (#1100).
 
         Args:
             base_slot: Starting slot time
@@ -268,17 +269,9 @@ class ExcessSolarEngine:
             (safe_additional_load_kw, grid_charge_risk)
 
         """
-        # Quick check: if SOC is below target, adding load is risky
-        if current_soc < target_pct - 5:
-            return 0.0, True
 
-        # Simulate with progressively higher loads
-        # Test loads: 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0 kW
-        test_loads = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0]
-        safe_load = 0.0
-
-        for additional_load in test_loads:
-            would_grid_charge = self._simulate_with_additional_load(
+        def would_grid_charge(additional_load_kw: float) -> bool:
+            return self._simulate_with_additional_load(
                 base_slot=base_slot,
                 all_solcast=all_solcast,
                 historical_avg_kw=historical_avg_kw,
@@ -289,15 +282,25 @@ class ExcessSolarEngine:
                 dw_start_time=dw_start_time,
                 effective_cheap_price=effective_cheap_price,
                 general_forecast=general_forecast,
-                additional_load_kw=additional_load,
+                additional_load_kw=additional_load_kw,
                 min_soc_pct=min_soc_pct,
                 current_hour=current_hour,
             )
 
-            if would_grid_charge:
+        # The current load alone is forecast to need grid charging
+        if would_grid_charge(0.0):
+            return 0.0, True
+
+        # Simulate with progressively higher loads
+        # Test loads: 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0 kW
+        test_loads = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0]
+        safe_load = 0.0
+
+        for additional_load in test_loads:
+            if would_grid_charge(additional_load):
                 # This load would trigger grid charging
                 # Return the previous safe value
-                return safe_load, safe_load < additional_load
+                return safe_load, False
 
             safe_load = additional_load
 
@@ -320,7 +323,8 @@ class ExcessSolarEngine:
             excess_by_windows: Excess amounts for different time windows
             negative_fit_start: When negative FIT window starts
             safe_additional_load: Max safe additional load in kW
-            grid_charge_risk: Whether adding load might trigger grid charging
+            grid_charge_risk: Whether the current load, with nothing added, is
+                forecast to need grid charging
             fill_point_minutes: Minutes until battery fills (or None)
 
         Returns:
@@ -351,18 +355,6 @@ class ExcessSolarEngine:
                 60,
                 "Current load may trigger grid charging",
                 "high",
-            )
-
-        target_pct = float(
-            self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-        )
-        if data.soc < target_pct - 10:
-            return (
-                "REDUCE_LOAD",
-                -0.5,
-                60,
-                f"Battery below target ({data.soc:.0f}% < {target_pct:.0f}%) - reduce discretionary load",
-                "medium",
             )
 
         # INCREASE_LOAD conditions

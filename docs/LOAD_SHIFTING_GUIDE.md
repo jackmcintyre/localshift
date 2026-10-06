@@ -50,8 +50,10 @@ The LocalShift integration provides sensors that forecast excess solar productio
 | `signal_reason` | string | Human-readable explanation |
 | `signal_confidence` | string | low/medium/high |
 | `current_excess_rate_kw` | float | Current excess generation rate |
-| `grid_charge_risk` | bool | Would adding load trigger grid charging? |
+| `grid_charge_risk` | bool | The current load, with nothing added, is forecast to need grid charging before the demand window |
 | `time_until_signal_change_minutes` | int | When signal might change |
+
+`REDUCE_LOAD` is forecast-derived: it is emitted only when `grid_charge_risk` is true, meaning a simulation of the current load shows a shortfall before the demand window. It is no longer emitted from battery SOC alone, so a battery below target with solar surplus forecast reads `INCREASE_LOAD` or `MAINTAIN_LOAD`. Headroom below the 5 kW simulation ceiling is not risk: it is reported as `safe_additional_load_kw`.
 
 ### 3. `binary_sensor.localshift_excess_solar_available`
 
