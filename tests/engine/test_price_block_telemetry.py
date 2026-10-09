@@ -10,13 +10,15 @@ cannot carry values from a plan made with it on.
 from __future__ import annotations
 
 import copy
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from custom_components.localshift.computation_engine import ComputationEngine
 from custom_components.localshift.coordinator.data import CoordinatorData
 from custom_components.localshift.engine.optimizer_runner import (
     TARGET_BLOCK_TELEMETRY_KEYS,
@@ -206,6 +208,88 @@ def test_turning_the_switch_on_reports_on_the_next_plan() -> None:
     )
 
     assert run.data.optimizer_summary["target_block_active"] is True
+
+
+# A cycle that produces no plan. Each is one of run_inline's three exits that
+# never reach _write_optimizer_fields, so the summary is the previous plan's.
+
+
+def _no_slots(engine: ComputationEngine, data: CoordinatorData, stack: ExitStack):
+    stack.enter_context(
+        patch.object(
+            SlotBuilder, "build_slots", lambda self, *a, **kw: ([], MagicMock())
+        )
+    )
+
+
+def _unreadable_soc(engine: ComputationEngine, data: CoordinatorData, stack: ExitStack):
+    stack.enter_context(
+        patch(
+            "custom_components.localshift.engine.optimizer_facade"
+            "._normalize_initial_soc",
+            return_value=(None, {"raw_soc": None, "error": "non_numeric"}),
+        )
+    )
+
+
+def _planner_raises(engine: ComputationEngine, data: CoordinatorData, stack: ExitStack):
+    stack.enter_context(
+        patch.object(engine._dp_planner, "plan", side_effect=RuntimeError("boom"))
+    )
+
+
+_FAILURES = pytest.mark.parametrize(
+    "fail",
+    [_no_slots, _unreadable_soc, _planner_raises],
+    ids=["no-slots", "unreadable-soc", "planner-raises"],
+)
+
+
+@_FAILURES
+@pytest.mark.parametrize("switch", [False, True], ids=["switched-off", "still-on"])
+def test_failed_cycle_after_a_block_reports_no_block(fail: Any, switch: bool) -> None:
+    """A good plan with a block, then a cycle that produces no plan at all."""
+    run = drive(
+        load(CAPTURE_0907),
+        price_block_target=switch,
+        live=True,
+        first_pass_switch=True,
+        before_reported_pass=fail,
+    )
+    summary = run.data.optimizer_summary
+
+    # The cycle really failed: the planner was never handed slots it solved.
+    assert run.slots == []
+    assert _telemetry(summary) == INACTIVE
+    # The rest of the last good plan's summary is left as it was.
+    assert summary["success"] is True
+    assert summary["dw_entry_soc_pct"] is not None
+
+    coordinator = MagicMock()
+    coordinator.data = run.data
+    attrs = OptimizerSummarySensor(coordinator, MagicMock()).extra_state_attributes
+    assert {key: attrs[key] for key in INACTIVE} == INACTIVE
+
+
+def test_failed_first_cycle_leaves_the_empty_summary_empty() -> None:
+    """Nothing to reset before the first plan: the summary stays empty."""
+    scenario = load(CAPTURE_0907)
+    calls: list[int] = []
+
+    def fail_both(
+        engine: ComputationEngine, data: CoordinatorData, stack: ExitStack
+    ) -> None:
+        calls.append(1)
+
+    with patch.object(
+        SlotBuilder, "build_slots", lambda self, *a, **kw: ([], MagicMock())
+    ):
+        run = drive(
+            scenario, price_block_target=True, live=True, before_reported_pass=fail_both
+        )
+
+    assert calls == [1]
+    assert run.data.optimizer_summary == {}
 
 
 # ---------------------------------------------------------------------------

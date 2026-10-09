@@ -27,6 +27,7 @@ from .optimizer_runner import (
     target_block_telemetry,
 )
 from .slots import SlotBuilder
+from .types import OptimizerConfig
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -266,6 +267,7 @@ class OptimizerFacade:
             if not slots:
                 _LOGGER.warning("DP optimizer: no slots available, skipping")
                 self._mark_mode_debug_fallback(data)
+                self._clear_target_block_telemetry(data)
                 # Issue #956: an empty build is the WORST case the tracker
                 # exists to catch -- the configured forecast source produced
                 # nothing covering "now" at all, so _ensure_current_slot_coverage
@@ -299,6 +301,7 @@ class OptimizerFacade:
                     "DP optimizer: invalid SOC %s, skipping", soc_info.get("error")
                 )
                 self._mark_mode_debug_fallback(data)
+                self._clear_target_block_telemetry(data)
                 return
 
             cycle_id = uuid.uuid4().hex[:12]
@@ -345,6 +348,7 @@ class OptimizerFacade:
                 "Inline DP optimizer failed (non-blocking): %s", exc, exc_info=True
             )
             self._mark_mode_debug_fallback(data)
+            self._clear_target_block_telemetry(data)
 
     def _write_optimizer_fields(
         self,
@@ -1226,6 +1230,26 @@ class OptimizerFacade:
         data.active_mode = new_mode
         data.debug_mode_source = mode_source
         data.debug_plan_mode_pending = None
+
+    @staticmethod
+    def _clear_target_block_telemetry(data: CoordinatorData) -> None:
+        """Reset the summary's ``target_block_*`` keys on a cycle with no plan.
+
+        Called from run_inline's early exits, which leave ``optimizer_summary``
+        as the last good plan wrote it. Without this the summary sensor keeps
+        reporting that plan's price block after the switch is turned off or the
+        block has gone, for as long as cycles keep failing (#1109).
+
+        Only these keys are reset; the rest of the last good plan's summary is
+        left alone, as it was before. A summary no plan has written yet stays
+        empty, which the sensor already reads as inactive.
+        """
+        if not data.optimizer_summary:
+            return
+        data.optimizer_summary = {
+            **data.optimizer_summary,
+            **target_block_telemetry(None, [], OptimizerConfig()),
+        }
 
     @staticmethod
     def _mark_mode_debug_fallback(data: CoordinatorData) -> None:

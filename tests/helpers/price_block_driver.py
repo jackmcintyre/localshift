@@ -19,6 +19,7 @@ import copy
 import hashlib
 import json
 import subprocess
+from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime
@@ -158,6 +159,10 @@ def drive(
     live: bool,
     previous_entry_iso: str | None = None,
     first_pass_switch: bool | None = None,
+    before_reported_pass: Callable[
+        [ComputationEngine, CoordinatorData, ExitStack], None
+    ]
+    | None = None,
 ) -> Run:
     """Run a scenario through the engine as ``replay_no_dw.run_arm`` does.
 
@@ -173,6 +178,9 @@ def drive(
         first_pass_switch: Switch state for the first pass only, when it should
             differ from the reported pass: the operator flipping the switch
             between two plans on the same coordinator data (#1109).
+        before_reported_pass: Called between the two passes with the engine,
+            the coordinator data and the open patch stack, to change what the
+            reported pass sees: a failed cycle after a good one (#1109).
 
     """
     payload = dict(scenario["input"])
@@ -234,6 +242,8 @@ def drive(
         if first_pass_switch is not None:
             # The resolver closes over this dict, so the next pass sees it.
             switches["price_block_target"] = bool(price_block_target)
+        if before_reported_pass is not None:
+            before_reported_pass(engine, data, stack)
         engine.compute_derived_values(data)
 
     # The primary plan is the first solve of a pass; a shadow comparison, when a

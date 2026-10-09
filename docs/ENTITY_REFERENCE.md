@@ -945,7 +945,7 @@ target_block_needed_kwh: 29.677
 target_block_reason: "dear run of 8.0 h from slot 20 to 35 (>= $0.08/kWh above the cheapest earlier price), net load 28.19 kWh at solar accuracy 1.00"
 ```
 
-- All six are rewritten on every plan, so they never hold a value from a plan made before the switch was turned off.
+- All six are rewritten on every plan, and reset to the right-hand column on a cycle that produces no plan (no forecast slots, an unreadable SOC, or a planner error), so they never hold a value from a plan made before the switch was turned off. The rest of the summary is not reset on such a cycle: it still shows the last good plan.
 - They describe the block **ahead of now** in the current plan. A block is measured against the cheapest price earlier in the same horizon, so as the cheap hours pass the detected block shortens, and once the clock reaches the expensive hours no block is found: the attributes read inactive during the evening itself. Read them in the hours before the block, not during it.
 - With a block active, `dw_entry_soc_pct` and `terminal_shortfall_pct` are the projected SOC and shortfall at the **block** entry, measured against `target_block_target_pct`.
 - The `dw_entry_actual_*` attributes do **not** follow the block. They are still captured at the start of the clock demand window, only while `switch.localshift_demand_window_block` is on (#1049), and against `battery_target`. To see the SOC the battery actually entered a price block at, read the SOC history at `target_block_entry`.

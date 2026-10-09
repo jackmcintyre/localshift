@@ -190,9 +190,10 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
                 summary, d, "hard_floor_suppressed_by_solar", False
             ),
             # Price block (docs/PRICE_BLOCK_TARGET.md, #1109). Read from the
-            # summary, which every plan rewrites: with the switch off, no block
-            # found, or a failed cycle these read inactive, never a value left
-            # over from an earlier plan.
+            # summary. Every plan rewrites them and a cycle that produces no
+            # plan resets them (OptimizerFacade._clear_target_block_telemetry):
+            # with the switch off, no block found, or a failed cycle these read
+            # inactive, never a value left over from an earlier plan.
             "target_block_active": bool(summary.get("target_block_active", False)),
             "target_block_entry": summary.get("target_block_entry"),
             "target_block_end": summary.get("target_block_end"),
