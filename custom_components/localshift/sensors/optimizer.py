@@ -189,6 +189,16 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "hard_floor_suppressed_by_solar": _resolve_optional(
                 summary, d, "hard_floor_suppressed_by_solar", False
             ),
+            # Price block (docs/PRICE_BLOCK_TARGET.md, #1109). Read from the
+            # summary, which every plan rewrites: with the switch off, no block
+            # found, or a failed cycle these read inactive, never a value left
+            # over from an earlier plan.
+            "target_block_active": bool(summary.get("target_block_active", False)),
+            "target_block_entry": summary.get("target_block_entry"),
+            "target_block_end": summary.get("target_block_end"),
+            "target_block_target_pct": summary.get("target_block_target_pct"),
+            "target_block_needed_kwh": summary.get("target_block_needed_kwh"),
+            "target_block_reason": summary.get("target_block_reason"),
             "forecast_accuracy": summary.get("forecast_accuracy"),
             "accuracy_discount_factor": summary.get("accuracy_discount_factor"),
             "solar_confidence_avg": avg_confidence,

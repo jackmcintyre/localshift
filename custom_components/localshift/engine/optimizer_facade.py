@@ -24,6 +24,7 @@ from .optimizer_runner import (
     _serialize_decision,
     _serialize_result,
     apply_price_block,
+    target_block_telemetry,
 )
 from .slots import SlotBuilder
 
@@ -288,7 +289,9 @@ class OptimizerFacade:
             # After the solar corrections above: the block is detected on the
             # slots the planner solves, and the target sized to it. A no-op
             # with the switch off (#1107, #1108).
-            apply_price_block(slots, optimizer_config, config_options, data)
+            target_block = apply_price_block(
+                slots, optimizer_config, config_options, data
+            )
 
             initial_soc, soc_info = _normalize_initial_soc(data.soc, optimizer_config)
             if initial_soc is None:
@@ -322,6 +325,7 @@ class OptimizerFacade:
                 cycle_id,
                 soc_info,
                 optimizer_config,
+                target_block_telemetry(target_block, slots, optimizer_config),
             )
 
             self._assign_active_mode(data, result, optimizer_config, config_options)
@@ -351,6 +355,7 @@ class OptimizerFacade:
         cycle_id: str,
         initial_soc_info: dict[str, Any] | None = None,
         optimizer_config: Any | None = None,
+        target_block: dict[str, Any] | None = None,
     ) -> None:
         """Write optimizer results to coordinator data fields.
 
@@ -368,6 +373,8 @@ class OptimizerFacade:
                 same reason: the runway telemetry the DP writes onto it has no other
                 route to the summary sensor. Optional so the batch/test callers that
                 only need the result-derived fields are unaffected.
+            target_block: This plan's ``target_block_telemetry`` record. Optional
+                for the same callers; without it the summary reports no block.
 
         """
         data.optimizer_result = _serialize_result(result)
@@ -422,6 +429,16 @@ class OptimizerFacade:
         )
         data.optimizer_summary["precharge_runway_margin_min"] = getattr(
             optimizer_config, "precharge_runway_margin_min", None
+        )
+
+        # Price block telemetry (#1109). Written on every plan, block or not, so
+        # the summary never carries a block from a plan made before the switch
+        # was turned off. Same route as the two groups above: ``_build_summary``
+        # has neither the slots nor the block.
+        data.optimizer_summary.update(
+            target_block
+            if target_block is not None
+            else target_block_telemetry(None, [], optimizer_config)
         )
 
         data.forecast_horizon_hours = slot_metadata.horizon_hours

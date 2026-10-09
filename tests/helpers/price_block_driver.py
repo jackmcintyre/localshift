@@ -157,6 +157,7 @@ def drive(
     price_block_target: bool | None,
     live: bool,
     previous_entry_iso: str | None = None,
+    first_pass_switch: bool | None = None,
 ) -> Run:
     """Run a scenario through the engine as ``replay_no_dw.run_arm`` does.
 
@@ -169,6 +170,9 @@ def drive(
             its own configuration only.
         previous_entry_iso: Seed for the hysteresis, as if a previous plan had
             entered the block at this timestamp.
+        first_pass_switch: Switch state for the first pass only, when it should
+            differ from the reported pass: the operator flipping the switch
+            between two plans on the same coordinator data (#1109).
 
     """
     payload = dict(scenario["input"])
@@ -191,6 +195,8 @@ def drive(
         switches.update(LIVE_SWITCHES)
     if price_block_target is not None:
         switches["price_block_target"] = price_block_target
+    if first_pass_switch is not None:
+        switches["price_block_target"] = first_pass_switch
 
     engine = ComputationEngine(
         hass,
@@ -225,6 +231,9 @@ def drive(
         engine.compute_derived_values(data)
         seen.clear()
         targets.clear()
+        if first_pass_switch is not None:
+            # The resolver closes over this dict, so the next pass sees it.
+            switches["price_block_target"] = bool(price_block_target)
         engine.compute_derived_values(data)
 
     # The primary plan is the first solve of a pass; a shadow comparison, when a

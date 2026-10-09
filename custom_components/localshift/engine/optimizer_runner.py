@@ -166,7 +166,7 @@ def _run(
     # 1a. Price block replaces the clock window's flags when its switch is on,
     # and sizes the target to the block (docs/PRICE_BLOCK_TARGET.md, #1107,
     # #1108). A no-op with the switch off.
-    apply_price_block(slots, optimizer_config, config_options, data)
+    target_block = apply_price_block(slots, optimizer_config, config_options, data)
 
     # 1b. Validate slot alignment (Phase B #403)
     alignment = _validate_slot_alignment(data.daily_forecast, slots)
@@ -219,6 +219,9 @@ def _run(
         alignment,
         config_options,
         soc_info,
+    )
+    data.optimizer_summary.update(
+        target_block_telemetry(target_block, slots, optimizer_config)
     )
 
     _LOGGER.debug(
@@ -596,6 +599,69 @@ def apply_price_block(
         headroom_pct=_target_headroom_pct(data),
     )
     return block
+
+
+TARGET_BLOCK_TELEMETRY_KEYS: tuple[str, ...] = (
+    "target_block_active",
+    "target_block_entry",
+    "target_block_end",
+    "target_block_target_pct",
+    "target_block_needed_kwh",
+    "target_block_reason",
+)
+"""The price block's attributes on ``sensor.localshift_optimizer_summary`` (#1109)."""
+
+
+def _slot_end_iso(slot: SlotContext) -> str | None:
+    """When ``slot`` ends, in the same form as its ``timestamp_iso``."""
+    try:
+        start = datetime.fromisoformat(slot.timestamp_iso)
+    except (TypeError, ValueError):
+        return None
+    return (start + timedelta(minutes=slot.slot_interval_minutes)).isoformat()
+
+
+def target_block_telemetry(
+    block: TargetBlock | None,
+    slots: list[SlotContext],
+    optimizer_config: OptimizerConfig,
+) -> dict[str, Any]:
+    """What the price block did on this plan, for the summary sensor.
+
+    Always returns every key in ``TARGET_BLOCK_TELEMETRY_KEYS``. The summary is
+    rebuilt on each plan and this record is written into it each time, so a plan
+    made with the switch off, or one that finds no block, overwrites whatever
+    the plan before it reported: ``target_block_active`` False and the rest None.
+
+    Args:
+        block: What ``apply_price_block`` returned for this plan.
+        slots: The slots it was applied to.
+        optimizer_config: The planner's config after ``apply_price_block``, so
+            ``demand_window_target_soc_pct`` is the block's clamped target.
+
+    Returns:
+        ``target_block_active``; ``target_block_entry`` and ``target_block_end``
+        (ISO timestamps: the start of the block's first slot and the end of its
+        last); ``target_block_target_pct`` (the clamped target the planner
+        used); ``target_block_needed_kwh`` (the unclamped need, which can exceed
+        the battery); ``target_block_reason``.
+
+    """
+    if block is None or not optimizer_config.price_block_target:
+        return {
+            key: False if key == "target_block_active" else None
+            for key in TARGET_BLOCK_TELEMETRY_KEYS
+        }
+    return {
+        "target_block_active": True,
+        "target_block_entry": slots[block.entry_idx].timestamp_iso,
+        "target_block_end": _slot_end_iso(slots[block.end_idx]),
+        "target_block_target_pct": round(
+            optimizer_config.demand_window_target_soc_pct, 2
+        ),
+        "target_block_needed_kwh": round(block.needed_kwh, 3),
+        "target_block_reason": block.reason,
+    }
 
 
 def _normalize_initial_soc(

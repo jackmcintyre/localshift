@@ -923,6 +923,33 @@ Attributes:
 - `forecast_accuracy` - Current forecast accuracy (0-1)
 - `accuracy_discount_factor` - Applied discount (0.5-1.0)
 
+**Attributes (price block, [PRICE_BLOCK_TARGET.md](PRICE_BLOCK_TARGET.md)):**
+
+What [`switch.localshift_price_block_target`](#8-switchlocalshift_price_block_target) did on the last plan.
+
+| Attribute | Block found | No block, switch off, or failed cycle |
+|---|---|---|
+| `target_block_active` | `true` | `false` |
+| `target_block_entry` | ISO timestamp: start of the block's first slot | `null` |
+| `target_block_end` | ISO timestamp: end of the block's last slot | `null` |
+| `target_block_target_pct` | The target SOC the planner used: `minimum_target_soc` + need + headroom, clamped to [`minimum_target_soc`, `battery_target`] | `null` |
+| `target_block_needed_kwh` | Battery energy needed to carry the block's net load, before the clamp. It can exceed the battery's capacity; the target is then `battery_target` | `null` |
+| `target_block_reason` | Why this block was chosen: its length, slot range, spread, net load and solar accuracy, and whether the entry was held from the previous plan | `null` |
+
+```
+target_block_active: true
+target_block_entry: "2026-09-07T16:30:00+10:00"
+target_block_end: "2026-09-08T00:30:00+10:00"
+target_block_target_pct: 95.0
+target_block_needed_kwh: 29.677
+target_block_reason: "dear run of 8.0 h from slot 20 to 35 (>= $0.08/kWh above the cheapest earlier price), net load 28.19 kWh at solar accuracy 1.00"
+```
+
+- All six are rewritten on every plan, so they never hold a value from a plan made before the switch was turned off.
+- They describe the block **ahead of now** in the current plan. A block is measured against the cheapest price earlier in the same horizon, so as the cheap hours pass the detected block shortens, and once the clock reaches the expensive hours no block is found: the attributes read inactive during the evening itself. Read them in the hours before the block, not during it.
+- With a block active, `dw_entry_soc_pct` and `terminal_shortfall_pct` are the projected SOC and shortfall at the **block** entry, measured against `target_block_target_pct`.
+- The `dw_entry_actual_*` attributes do **not** follow the block. They are still captured at the start of the clock demand window, only while `switch.localshift_demand_window_block` is on (#1049), and against `battery_target`. To see the SOC the battery actually entered a price block at, read the SOC history at `target_block_entry`.
+
 **Icon:** Dynamic (mdi:check-circle-outline for success, mdi:alert-circle-outline for failed, mdi:minus-circle-outline for disabled)
 
 ---
