@@ -1276,9 +1276,10 @@ State: off
 
 **Behavior:**
 - OFF: the planner is unchanged. The clock demand window sets the deadline.
-- ON: on every plan the clock window's slot flags are cleared and the detected block takes their place, so the planner's deadline, terminal target, pre-charge funding and grid-import ban all follow the block. When no block is found the planner has no deadline at all. The target is still `battery_target`; a load-sized target is a later change.
+- ON: on every plan the clock window's slot flags are cleared and the detected block takes their place, so the planner's deadline, terminal target, pre-charge funding and grid-import ban all follow the block. When no block is found the planner has no deadline at all.
+- ON, the target is sized to the block: `minimum_target_soc` plus the battery share needed to carry the block's net load (solar discounted by forecast accuracy, divided by discharge efficiency), plus the adaptive headroom, never below `minimum_target_soc` and never above `battery_target`. An evening that needs more than one battery, or an inflated load forecast, is capped at `battery_target`. With no block the target is `minimum_target_soc`.
 - The grid-import ban now covers the block instead of the clock window. That is an accepted side effect: charging inside the expensive block is not wanted anyway.
-- Only the plan changes. Anything that reads the clock window directly (Demand Block mode at execution, the `dw_entry_actual_*` capture) still uses the clock.
+- Only the plan changes. Anything that reads the clock window or `battery_target` directly (Demand Block mode at execution, the `dw_entry_actual_*` capture, the state machine's target checks) still uses the clock and `battery_target`.
 - The switch state is published on `sensor.localshift_optimizer_summary` under `config_options.price_block_target`.
 
 ---

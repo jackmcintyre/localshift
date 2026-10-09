@@ -31,6 +31,7 @@ from .optimizer_dp import (
     SlotContext,
 )
 from .slots import SlotBuilder, apply_price_block_flags
+from .target_block import TargetBlock
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -162,9 +163,10 @@ def _run(
         }
         return
 
-    # 1a. Price block replaces the clock window's flags when its switch is on
-    # (docs/PRICE_BLOCK_TARGET.md, #1107). A no-op with the switch off.
-    apply_price_block_flags(slots, optimizer_config, data)
+    # 1a. Price block replaces the clock window's flags when its switch is on,
+    # and sizes the target to the block (docs/PRICE_BLOCK_TARGET.md, #1107,
+    # #1108). A no-op with the switch off.
+    apply_price_block(slots, optimizer_config, config_options, data)
 
     # 1b. Validate slot alignment (Phase B #403)
     alignment = _validate_slot_alignment(data.daily_forecast, slots)
@@ -419,6 +421,8 @@ def _build_optimizer_config(
     base_cheap_price: float | None = getattr(data, "base_cheap_price", None)
 
     # grid_charge_soc_headroom + overnight_drain_safety_margin -> demand_window_target_soc_pct
+    # This is the clock window's target. With the price block switch on,
+    # apply_price_block replaces it once the slots are built (#1108).
     grid_charge_soc_headroom = (
         adaptive.get("grid_charge_soc_headroom", 0.0) if adaptive else 0.0
     )
@@ -479,6 +483,119 @@ def _build_optimizer_config(
         export_price_margin=export_price_margin,
         forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
     )
+
+
+def _target_headroom_pct(data: Any) -> float:
+    """Adaptive headroom added on top of a demand-window target (%-points).
+
+    ``grid_charge_soc_headroom + overnight_drain_safety_margin``, the same two
+    terms ``_build_optimizer_config`` adds to the clock window's target. Zero
+    when no adaptive parameters are present.
+    """
+    adaptive = getattr(data, "adaptive_params", None)
+    if not adaptive:
+        return 0.0
+    return adaptive.get("grid_charge_soc_headroom", 0.0) + adaptive.get(
+        "overnight_drain_safety_margin", 0.0
+    )
+
+
+def price_block_target_soc(
+    block: TargetBlock | None,
+    *,
+    minimum_target_soc: float,
+    battery_target: float,
+    headroom_pct: float = 0.0,
+) -> float:
+    """Target SOC for a price-only block (docs/PRICE_BLOCK_TARGET.md step 4).
+
+    ``clamp(minimum_target_soc + needed_pct + headroom, minimum_target_soc,
+    battery_target)``: enough to carry the block's net load on top of the floor
+    the battery may not discharge below, and never more than the operator's
+    target. A long or heavily loaded evening routinely needs more than one
+    battery (the 2026-09-07 capture needs about 220%), and an inflated load
+    forecast (the 2026-09-05 weather extrapolation) inflates the need with it;
+    the ceiling bounds both at ``battery_target``.
+
+    With no block there is nothing to prepare for and the target is
+    ``minimum_target_soc``, which the battery sits at or above already, so the
+    terminal machinery is inert.
+
+    Args:
+        block: The detected block, or None.
+        minimum_target_soc: The discharge floor (%).
+        battery_target: The operator's demand-window target (%). The ceiling,
+            deliberately without headroom on top.
+        headroom_pct: The adaptive headroom the clock window's target carries.
+
+    Returns:
+        The target in [minimum_target_soc, battery_target]. Should the floor be
+        configured above the target, the target wins.
+
+    """
+    floor = min(minimum_target_soc, battery_target)
+    if block is None:
+        return floor
+    sized = minimum_target_soc + block.needed_pct + headroom_pct
+    if math.isnan(sized):
+        # No usable sizing: prepare fully, as the clock window would.
+        return battery_target
+    return max(floor, min(battery_target, sized))
+
+
+def apply_price_block(
+    slots: list[SlotContext],
+    optimizer_config: OptimizerConfig,
+    config_options: dict[str, Any],
+    data: Any,
+    *,
+    persist: bool = True,
+) -> TargetBlock | None:
+    """Apply the price block to the slots and size the planner's target to it.
+
+    The one call a planning path makes for the price block. With
+    ``switch.localshift_price_block_target`` off it changes neither a slot nor
+    the config. With it on, ``apply_price_block_flags`` moves the demand-window
+    flags onto the block and ``demand_window_target_soc_pct`` becomes the
+    block's load-sized target, or ``minimum_target_soc`` when there is no block.
+
+    The target can only be set here and not in ``_build_optimizer_config``: the
+    block is found on the built slots, after the solar corrections.
+
+    Args:
+        slots: The planning horizon, modified in place.
+        optimizer_config: The planner's config, modified in place.
+        config_options: Runner config options (``battery_target``,
+            ``minimum_target_soc``).
+        data: Coordinator data (previous block entry, adaptive headroom).
+        persist: Passed to ``apply_price_block_flags``.
+
+    Returns:
+        The block applied, or None when the switch is off or nothing qualified.
+
+    """
+    from custom_components.localshift.const import (
+        CONF_BATTERY_TARGET,
+        CONF_MINIMUM_TARGET_SOC,
+        DEFAULT_BATTERY_TARGET,
+        DEFAULT_MINIMUM_TARGET_SOC,
+    )
+
+    block = apply_price_block_flags(slots, optimizer_config, data, persist=persist)
+    if not optimizer_config.price_block_target:
+        return None
+
+    optimizer_config.demand_window_target_soc_pct = price_block_target_soc(
+        block,
+        minimum_target_soc=float(
+            config_options.get(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        ),
+        battery_target=float(
+            config_options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+        ),
+        headroom_pct=_target_headroom_pct(data),
+    )
+    return block
 
 
 def _normalize_initial_soc(

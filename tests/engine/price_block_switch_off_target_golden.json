@@ -1,0 +1,22 @@
+{
+  "captured_from": "96f75af",
+  "targets": {
+    "simulations/replay-nodw/2026-09-07.json": 95.0,
+    "simulations/replay/2026-08-25.json": 95.0,
+    "simulations/replay/2026-08-27.json": 95.0,
+    "simulations/replay/2026-09-03.json": 95.0,
+    "simulations/scenarios/allow-dw-entry-under-target.json": 80.0,
+    "simulations/scenarios/cloudy-day.json": 90.0,
+    "simulations/scenarios/cross-day-first-dw-only.json": 80.0,
+    "simulations/scenarios/high-solar-negative-fit.json": 90.0,
+    "simulations/scenarios/high-target-soc.json": 80.0,
+    "simulations/scenarios/hot-day-spike.json": 90.0,
+    "simulations/scenarios/inverted-night-no-dw.json": 90.0,
+    "simulations/scenarios/inverted-night.json": 90.0,
+    "simulations/scenarios/manual-override-bypass.json": null,
+    "simulations/scenarios/negative-fit-bounded-predischarge.json": 70.0,
+    "simulations/scenarios/recoverable-negative-fit-preexport.json": 100.0,
+    "simulations/scenarios/recoverable-negative-fit-value-priority.json": 100.0,
+    "simulations/scenarios/sunny-day.json": 90.0
+  }
+}

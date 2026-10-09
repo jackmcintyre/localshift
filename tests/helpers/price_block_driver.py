@@ -88,6 +88,10 @@ class Run:
     slots: list[SlotContext]
     """The slots handed to the planner on the reported (second) pass."""
 
+    target_soc: float | None = None
+    """``demand_window_target_soc_pct`` on the config handed to the planner with
+    those slots (#1108)."""
+
     @property
     def decisions(self) -> list[dict[str, Any]]:
         return self.data.optimizer_decisions or []
@@ -196,10 +200,12 @@ def drive(
     )
 
     seen: list[list[SlotContext]] = []
+    targets: list[float] = []
     real_plan = engine._dp_planner.plan
 
     def recording_plan(inputs: Any) -> Any:
         seen.append(copy.deepcopy(inputs.slots))
+        targets.append(inputs.config.demand_window_target_soc_pct)
         return real_plan(inputs)
 
     recent_load = payload.get("load_power_kw", 0.5)
@@ -218,11 +224,16 @@ def drive(
             stack.enter_context(p)
         engine.compute_derived_values(data)
         seen.clear()
+        targets.clear()
         engine.compute_derived_values(data)
 
     # The primary plan is the first solve of a pass; a shadow comparison, when a
     # scenario enables one, solves after it.
-    return Run(data=data, slots=seen[0] if seen else [])
+    return Run(
+        data=data,
+        slots=seen[0] if seen else [],
+        target_soc=targets[0] if targets else None,
+    )
 
 
 def load(path: str) -> dict[str, Any]:
@@ -232,6 +243,20 @@ def load(path: str) -> dict[str, Any]:
 def is_live(path: str) -> bool:
     """Replay captures run under the harness's live config; scenarios do not."""
     return not path.startswith("simulations/scenarios/")
+
+
+TARGET_GOLDEN = REPO / "tests" / "engine" / "price_block_switch_off_target_golden.json"
+
+
+def capture_targets() -> dict[str, Any]:
+    """Planner target per fixture. Run only against the code before #1108."""
+    paths = tracked_scenario_paths()
+    if paths is None:
+        raise RuntimeError("capture_targets needs a git checkout")
+    return {
+        path: drive(load(path), price_block_target=None, live=is_live(path)).target_soc
+        for path in paths
+    }
 
 
 def capture_all() -> dict[str, Any]:
