@@ -1275,7 +1275,11 @@ State: off
 ```
 
 **Behavior:**
-- ON / OFF: **no effect yet.** The switch state reaches the planner as `OptimizerConfig.price_block_target` and is published on `sensor.localshift_optimizer_summary` under `config_options.price_block_target`, but nothing reads it until the price block is wired into the planner (slice 1 of the design).
+- OFF: the planner is unchanged. The clock demand window sets the deadline.
+- ON: on every plan the clock window's slot flags are cleared and the detected block takes their place, so the planner's deadline, terminal target, pre-charge funding and grid-import ban all follow the block. When no block is found the planner has no deadline at all. The target is still `battery_target`; a load-sized target is a later change.
+- The grid-import ban now covers the block instead of the clock window. That is an accepted side effect: charging inside the expensive block is not wanted anyway.
+- Only the plan changes. Anything that reads the clock window directly (Demand Block mode at execution, the `dw_entry_actual_*` capture) still uses the clock.
+- The switch state is published on `sensor.localshift_optimizer_summary` under `config_options.price_block_target`.
 
 ---
 
@@ -1439,7 +1443,7 @@ State: 30.0
 
 **This is not `min_cycle_saving`.** The cycle hurdle governs speculative arbitrage and sits at $0.25/kWh. The block spread answers a different question: is this evening expensive enough to prepare for. The $0.08 default is about the round-trip loss on a typical Amber evening.
 
-**Status:** the value reaches the planner as `OptimizerConfig.block_min_spread` and is published on `sensor.localshift_optimizer_summary` under `config_options.block_min_spread`. It has **no effect yet**: nothing reads it until the price block is wired into the planner behind [`switch.localshift_price_block_target`](#8-switchlocalshift_price_block_target).
+**Status:** the value reaches the planner as `OptimizerConfig.block_min_spread` and is published on `sensor.localshift_optimizer_summary` under `config_options.block_min_spread`. It is read only while [`switch.localshift_price_block_target`](#8-switchlocalshift_price_block_target) is on; with the switch off it has no effect.
 
 **Example Data:**
 ```

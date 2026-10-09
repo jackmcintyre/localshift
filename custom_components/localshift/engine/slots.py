@@ -9,6 +9,10 @@ Design principles:
 - DO NOT apply consumption_forecast_bias (already applied by LoadForecaster)
 - Compute demand window flags independently
 - Return typed SlotBuildMetadata for diagnostics
+
+``apply_price_block_flags`` is the one place those flags are rewritten after the
+build: with ``switch.localshift_price_block_target`` on, the price block replaces
+the clock window as the thing that sets them (docs/PRICE_BLOCK_TARGET.md).
 """
 
 from __future__ import annotations
@@ -26,6 +30,8 @@ from ..utils.export_availability import export_available_at
 from .optimizer_dp import SlotContext
 from .price_calculator import get_price_for_slot_or_none
 from .slot_schedule import compute_hybrid_slot_schedule
+from .target_block import TargetBlock, find_target_block
+from .types import OptimizerConfig
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -521,3 +527,88 @@ class SlotBuilder:
 
         # Fallback to default
         return time(18, 0)
+
+
+def _slot_index_at(slots: list[SlotContext], stamp: Any) -> int | None:
+    """Index of the slot covering ``stamp``, or None when the horizon has none.
+
+    The horizon slides and re-slices between plans (a 30-minute slot becomes
+    5-minute slots as it nears), so a boundary is identified by its time and
+    resolved to whichever slot now contains it.
+    """
+    if not isinstance(stamp, str):
+        return None
+    try:
+        when = datetime.fromisoformat(stamp)
+        for slot in slots:
+            start = datetime.fromisoformat(slot.timestamp_iso)
+            if 0 <= (when - start).total_seconds() < slot.slot_interval_minutes * 60:
+                return slot.slot_index
+    except (TypeError, ValueError):
+        # Unparseable, or aware against naive: no usable previous entry.
+        return None
+    return None
+
+
+def apply_price_block_flags(
+    slots: list[SlotContext],
+    config: OptimizerConfig,
+    data: Any,
+    *,
+    persist: bool = True,
+) -> TargetBlock | None:
+    """Let the price block, not the clock window, set the demand-window flags.
+
+    With ``config.price_block_target`` off this changes no slot. With it on, the
+    clock window's flags are cleared from every slot and the detected block
+    takes their place: ``is_demand_window_slot`` across the block and
+    ``is_demand_window_entry`` on its first slot. When no block is found every
+    flag stays clear, so the planner has no deadline.
+
+    Nothing downstream is told about the block. The terminal penalty, hard
+    floor, water level, urgency window and import ban all read these two flags
+    and follow, which is the whole design (docs/PRICE_BLOCK_TARGET.md). The
+    import ban inside the block is an accepted side effect for slice 1.
+
+    Call it on the slots the planner will actually solve, after any solar
+    correction: a slot is only dear when it carries positive net load.
+
+    Args:
+        slots: The planning horizon, modified in place.
+        config: Optimizer configuration (the switch, spread and duration).
+        data: Coordinator data. ``target_block_entry_iso`` from the previous
+            plan feeds the detector's hysteresis.
+        persist: Record this plan's entry for the next one. False for a plan
+            that must not move the live boundary (the shadow comparison, which
+            solves on a different price series).
+
+    Returns:
+        The block applied, or None when the switch is off or nothing qualified.
+
+    """
+    if not config.price_block_target:
+        if persist:
+            data.target_block_entry_idx = None
+            data.target_block_entry_iso = None
+        return None
+
+    previous_entry_idx = _slot_index_at(
+        slots, getattr(data, "target_block_entry_iso", None)
+    )
+    block = find_target_block(slots, config, previous_entry_idx)
+
+    for slot in slots:
+        slot.is_demand_window_slot = False
+        slot.is_demand_window_entry = False
+    if block is not None:
+        for slot in slots[block.entry_idx : block.end_idx + 1]:
+            slot.is_demand_window_slot = True
+        slots[block.entry_idx].is_demand_window_entry = True
+        _LOGGER.debug("Price block target: %s", block.reason)
+
+    if persist:
+        data.target_block_entry_idx = block.entry_idx if block else None
+        data.target_block_entry_iso = (
+            slots[block.entry_idx].timestamp_iso if block else None
+        )
+    return block

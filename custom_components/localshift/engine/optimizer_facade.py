@@ -24,7 +24,7 @@ from .optimizer_runner import (
     _serialize_decision,
     _serialize_result,
 )
-from .slots import SlotBuilder
+from .slots import SlotBuilder, apply_price_block_flags
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -284,6 +284,9 @@ class OptimizerFacade:
             )
 
             optimizer_config = _build_optimizer_config(data, config_options)
+            # After the solar corrections above: the block is detected on the
+            # slots the planner solves. A no-op with the switch off (#1107).
+            apply_price_block_flags(slots, optimizer_config, data)
 
             initial_soc, soc_info = _normalize_initial_soc(data.soc, optimizer_config)
             if initial_soc is None:
@@ -1284,6 +1287,9 @@ class OptimizerFacade:
                 return
 
             optimizer_config = _build_optimizer_config(data, config_options)
+            # The shadow plan gets its own block from its own prices, and must
+            # not move the boundary the live plan holds for hysteresis.
+            apply_price_block_flags(shadow_slots, optimizer_config, data, persist=False)
             initial_soc, soc_info = _normalize_initial_soc(data.soc, optimizer_config)
             if initial_soc is None:
                 _LOGGER.warning("Shadow optimizer: invalid SOC")

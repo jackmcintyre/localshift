@@ -30,7 +30,7 @@ from .optimizer_dp import (
     PlannerAction,
     SlotContext,
 )
-from .slots import SlotBuilder
+from .slots import SlotBuilder, apply_price_block_flags
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -161,6 +161,10 @@ def _run(
             "parity_completeness_pct": 0.0,
         }
         return
+
+    # 1a. Price block replaces the clock window's flags when its switch is on
+    # (docs/PRICE_BLOCK_TARGET.md, #1107). A no-op with the switch off.
+    apply_price_block_flags(slots, optimizer_config, data)
 
     # 1b. Validate slot alignment (Phase B #403)
     alignment = _validate_slot_alignment(data.daily_forecast, slots)
@@ -357,8 +361,8 @@ def _build_optimizer_config(
         config_options.get(CONF_MIN_HOLD_SAVING, DEFAULT_MIN_HOLD_SAVING)
     )
 
-    # Price block controls (docs/PRICE_BLOCK_TARGET.md slice 1). Carried on the
-    # config only: nothing in the planner reads them yet.
+    # Price block controls (docs/PRICE_BLOCK_TARGET.md slice 1). Read by
+    # apply_price_block_flags once the slots are built.
     block_min_spread = float(
         config_options.get(CONF_BLOCK_MIN_SPREAD, DEFAULT_BLOCK_MIN_SPREAD)
     )
@@ -456,7 +460,7 @@ def _build_optimizer_config(
         target_shortfall_penalty_per_pct=target_penalty,
         min_cycle_saving=min_cycle_saving,
         min_hold_saving=min_hold_saving,
-        # --- Price block (slice 1: carried, not yet consumed) ---
+        # --- Price block (read by apply_price_block_flags) ---
         block_min_spread=block_min_spread,
         price_block_target=price_block_target,
         # --- Charge curve (Issue #905: configurable to match hardware) ---

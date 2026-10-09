@@ -592,7 +592,8 @@ class OptimizerConfig:
     price forecast (``engine/target_block.py``) instead of the clock demand
     window. Set from ``switch.localshift_price_block_target``; default OFF.
 
-    Slice 1 status: carried on the config only. Nothing reads it yet."""
+    Read by ``apply_price_block_flags`` (``engine/slots.py``), which rewrites the
+    slot flags from the block once the slots are built."""
 
     block_min_spread: float = DEFAULT_BLOCK_MIN_SPREAD
     """How far above the cheapest earlier buy price ($/kWh) a slot must sit to

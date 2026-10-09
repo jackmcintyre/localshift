@@ -678,3 +678,19 @@ class CoordinatorData:
 
     dw_entry_actual_date: date | None = None
     """Date the capture belongs to — the once-per-day latch."""
+
+    # ---------------------------------------------------------------------------
+    # --- Price-driven target block (docs/PRICE_BLOCK_TARGET.md, #1107) ---
+    # ---------------------------------------------------------------------------
+    # Where the last plan put the block's entry, kept so the next plan can hold it
+    # against one slot of forecast jitter. Both are None while
+    # switch.localshift_price_block_target is off or no block is found, and neither
+    # survives a restart: the first plan after one simply detects afresh.
+
+    target_block_entry_idx: int | None = None
+    """Slot index of the block entry in the horizon of the plan that set it."""
+
+    target_block_entry_iso: str | None = None
+    """Start time of that entry slot. This, not the index, is what the next plan
+    reads: the horizon slides between plans, so the same boundary sits at a
+    different index every time."""
