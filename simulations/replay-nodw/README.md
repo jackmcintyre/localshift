@@ -11,6 +11,7 @@ scripts/export_replay_days.py --days 10 --hour 9 --out simulations/replay-nodw
 uv run scripts/replay_no_dw.py --arms dw,no_dw,gateless_mcs25,gateless_mcs10,gateless_mcs0
 uv run scripts/replay_no_dw.py --day 2026-09-07 --arms dw,no_dw --detail
 uv run scripts/replay_no_dw.py --arms dw,no_dw,block      # slice 1 gate (below)
+uv run scripts/replay_no_dw.py --flap simulations/replay-nodw-flap   # flap test (below)
 ```
 
 Ten days, 2026-08-29 to 2026-09-07, captured at 09:00. Only
@@ -211,6 +212,116 @@ below, 1 above)`; the ten are these four plus 08-29 to 09-03 again.
   three days are an in-season question for slice 2, where the charge window
   keeps the 95% target.
 
-### Flap test
+### Wider sweep, 2026-09-08 to 2026-10-08 (not part of the acceptance)
 
-Not yet run (#1111).
+Because the recorder still held them, the 31 days after the study were
+captured at 09:00 as well and put through the same gate. They are not
+committed; `scripts/export_replay_days.py --date <day> --time 09:00` rebuilds
+any of them while the recorder has it.
+
+Harness verdict: `FAIL (31 day(s): 21 identical to dw, 6 below, 4 above)`.
+Overnight grid charging in the block arm is zero on all 31. The ten days that
+differ:
+
+| day | `dw` | `no_dw` | `block` | `block` − `dw` | note |
+|---|---|---|---|---|---|
+| 2026-09-10 | 0.349 | 0.367 | 0.367 | +0.018 | no block: the evening clears the 8c spread for less than the 2 h minimum |
+| 2026-09-11 | 1.378 | 1.866 | 1.349 | -0.029 | |
+| 2026-09-14 | 0.695 | 0.696 | 0.696 | +0.000 | under a tenth of a cent |
+| **2026-09-21** | **7.430** | **7.961** | **7.669** | **+0.239** | see below |
+| 2026-09-22 | 0.847 | 0.377 | 0.377 | -0.471 | no block; `dw` buys 7.3 kWh for readiness |
+| 2026-09-23 | 1.441 | 1.202 | 1.132 | -0.309 | |
+| 2026-09-26 | 2.721 | 2.745 | 2.724 | +0.004 | one boost slot at 15.1c just before a 15.6c block |
+| 2026-09-27 | 4.350 | 3.864 | 3.864 | -0.486 | no block; `dw` buys 18 kWh for readiness |
+| 2026-09-28 | 0.206 | 0.000 | 0.000 | -0.206 | no block |
+| 2026-10-06 | -0.619 | -0.646 | -0.646 | -0.027 | |
+
+Summed over the 31 days `block` is $1.27 below `dw` and `no_dw` is $0.37 below
+it, most of both being readiness charging the cost function does not price.
+
+**2026-09-21 is the second day above `dw`, and for a different reason than
+2026-08-26.** The afternoon shoulder is almost as dear as the evening: 17.5,
+17.9, 16.6 and 17.2c from 15:00 to 16:30 against a 17.8c threshold, then
+19–20c. The block therefore starts at 17:00. The battery spends 15:00–16:00
+carrying a 3.75 kW load forecast, and the 95% target at 17:00 then forces two
+boost slots at 16.6 and 17.2c (8.4 kWh imported) to displace 19–20c energy,
+which loses money after round-trip loss. `dw` simply arrives full at 15:00 and rides. The
+entry target is a hard deadline, and when the slots just before the block are
+nearly as dear as the block it buys at the top. Nothing was tuned in response.
+
+### Flap test (#1111)
+
+```bash
+scripts/export_replay_days.py --date 2026-09-07 \
+    --time 09:00,11:00,13:00,14:30 --out simulations/replay-nodw-flap
+uv run scripts/replay_no_dw.py --flap simulations/replay-nodw-flap
+```
+
+The block's entry time sets the planner's deadline, so the same day is captured
+at 09:00, 11:00, 13:00 and 14:30 and the block arm is run on each. PASS when
+the entry moves by at most one 30-minute slot between consecutive captures and
+the slot-0 action never goes charge / hold / charge. A block that appears or
+disappears between two captures counts as a move of more than one slot. Each
+capture is a cold start for the detector; the harness also prints the entry
+with the previous capture's entry carried into the hysteresis, as live would
+carry it.
+
+Captures are in `simulations/replay-nodw-flap/`, committed: 2026-09-07, plus
+every day of the wider sweep on which the block arm grid-charged (09-11, 09-21,
+09-23, 09-26). The 09:00 capture of 2026-09-07 is byte-identical to
+`simulations/replay-nodw/2026-09-07.json`.
+
+**Verdict (2026-10-09): FAIL. Two of five solar-deficit days pass.**
+
+| day | 09:00 | 11:00 | 13:00 | 14:30 | slot-0 action | verdict |
+|---|---|---|---|---|---|---|
+| 2026-09-07 | 16:30 | 16:30 | 16:30 | 16:30 | hold, hold, hold, hold | PASS |
+| 2026-09-11 | 17:00 | none | none | none | hold, hold, hold, hold | **FAIL** |
+| 2026-09-21 | 17:00 | 15:00 | 17:00 | none | charge, hold, hold, hold | **FAIL** |
+| 2026-09-23 | 18:00 | none | none | none | hold, hold, hold, hold | **FAIL** |
+| 2026-09-26 | 17:30 | 17:00 | 17:30 | 18:00 | boost, boost, hold, hold | PASS |
+
+Block entry time per capture. Per pair:
+
+- **2026-09-07** 09→11 +0 min, 11→13 +0, 13→14:30 +0. PASS.
+- **2026-09-11** 09→11 block disappears (FAIL), 11→13 none→none, 13→14:30
+  none→none.
+- **2026-09-21** 09→11 −120 min (FAIL), 11→13 +120 min (FAIL), 13→14:30 block
+  disappears (FAIL).
+- **2026-09-23** 09→11 block disappears (FAIL), then none→none twice.
+- **2026-09-26** 09→11 −30 min, 11→13 +30, 13→14:30 +30. PASS.
+
+Carrying the previous capture's entry through the hysteresis does not change
+any verdict. The slot-0 action never went charge / hold / charge on any day;
+every failure is the boundary.
+
+Two mechanisms, both visible in the captured price forecasts:
+
+1. **The trough rolls off the horizon.** `p_ref` is the cheapest price among
+   the slots still ahead. Within one plan it cannot rise, but between plans it
+   does, as the cheap morning slots become the past. On 2026-09-11 the trough
+   is 8.2c at 09:00, 9.4c at 11:00 and 11.1c at 13:00, so the dear threshold
+   climbs 16.2 → 17.4 → 19.1c while the evening stays at 17.0–17.5c. The block
+   exists at 09:00 and is gone by 11:00. 2026-09-23 is the same (trough 12.3 →
+   12.8 → 15.7c against an evening that also softened from 21.9 to 20.4c), and
+   so is the 14:30 capture of 2026-09-21. The consequence is worse than a
+   moved boundary: the 09:00 plan holds at slot 0 and schedules 9.1 kWh of
+   pre-charge for later (09-11), and by the time "later" arrives the deadline
+   that funded it no longer exists. The single 09:00 capture in the gate above
+   therefore overstates what the block arm would do across a real day.
+2. **Forecast revision on a knife edge.** On 2026-09-21 the 11:00 forecast
+   put 15:00 and 15:30 at 22.3 and 21.0c (17.5 and 17.9c two hours earlier),
+   which pulls the entry from 17:00 to 15:00; by 13:00 they are back to 14.4
+   and 17.6c and the entry returns to 17:00.
+
+What the test does not exercise: solar is measured, so every capture of a day
+sees the same solar and forecast revisions to solar are absent; and each later
+capture starts from the SOC live actually reached that day under the clock
+window, not from where the block arm would have taken it, so the slot-0 column
+is weaker evidence than the entry column. The entry time depends on neither.
+
+Per #1111 the hysteresis was not widened. The lever the issue names is a
+minimum dwell on the entry time. That would cover the second mechanism; the
+first needs the block's existence held as well as its entry, or a `p_ref` that
+remembers the cheapest price the day has already offered. That is a design
+decision for the follow-up, not something this gate settles.

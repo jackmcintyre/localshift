@@ -365,3 +365,259 @@ def test_print_gate_is_silent_without_the_block_arm(
 ) -> None:
     assert harness._print_gate({"a": {"dw": _arm(0.1)}}) is None
     assert capsys.readouterr().out == ""
+
+
+# ---------------------------------------------------------------------------
+# Flap test (#1111): the same day captured at several hours
+# ---------------------------------------------------------------------------
+
+DAY = "2026-09-07"
+
+
+def _point(clock: str, slot0: str, entry: str | None) -> dict[str, Any]:
+    return {
+        "at": f"{DAY}T{clock}:00+10:00",
+        "slot0_action": slot0,
+        "entry": f"{DAY}T{entry}:00+10:00" if entry else None,
+    }
+
+
+def test_flap_steady_entry_and_action_passes() -> None:
+    verdict = harness.flap_verdict([
+        _point("09:00", "hold", "16:30"),
+        _point("11:00", "charge_grid_boost", "16:30"),
+        _point("13:00", "charge_grid_boost", "16:30"),
+        _point("14:30", "hold", "16:30"),
+    ])
+
+    assert verdict["verdict"] == "PASS"
+    assert verdict["reasons"] == []
+    assert [p["entry_moved_min"] for p in verdict["pairs"]] == [0, 0, 0]
+    assert [p["action_changed"] for p in verdict["pairs"]] == [True, False, True]
+
+
+def test_flap_entry_moving_one_slot_passes() -> None:
+    verdict = harness.flap_verdict([
+        _point("09:00", "hold", "16:30"),
+        _point("11:00", "hold", "17:00"),
+        _point("13:00", "hold", "16:30"),
+    ])
+
+    assert verdict["verdict"] == "PASS"
+    assert [p["entry_moved_min"] for p in verdict["pairs"]] == [30, -30]
+    assert all(p["entry_ok"] for p in verdict["pairs"])
+
+
+def test_flap_entry_moving_two_slots_fails() -> None:
+    verdict = harness.flap_verdict([
+        _point("09:00", "hold", "16:30"),
+        _point("11:00", "hold", "17:30"),
+    ])
+
+    assert verdict["verdict"] == "FAIL"
+    assert verdict["pairs"][0]["entry_moved_min"] == 60
+    assert verdict["pairs"][0]["entry_ok"] is False
+    assert any("09:00 -> 11:00" in reason for reason in verdict["reasons"])
+
+
+def test_flap_block_disappearing_fails() -> None:
+    verdict = harness.flap_verdict([
+        _point("09:00", "hold", "16:30"),
+        _point("11:00", "hold", None),
+    ])
+
+    assert verdict["verdict"] == "FAIL"
+    assert verdict["pairs"][0]["entry_moved_min"] is None
+    assert verdict["pairs"][0]["entry_ok"] is False
+
+
+def test_flap_charge_hold_charge_fails() -> None:
+    verdict = harness.flap_verdict([
+        _point("09:00", "charge_grid_normal", "16:30"),
+        _point("11:00", "hold", "16:30"),
+        _point("13:00", "charge_grid_boost", "16:30"),
+        _point("14:30", "hold", "16:30"),
+    ])
+
+    assert verdict["verdict"] == "FAIL"
+    assert verdict["action_alternates"] is True
+    assert any("charge / hold / charge" in reason for reason in verdict["reasons"])
+
+
+def test_flap_charge_resuming_after_two_holds_still_fails() -> None:
+    verdict = harness.flap_verdict([
+        _point("09:00", "charge_grid_normal", "16:30"),
+        _point("11:00", "hold", "16:30"),
+        _point("13:00", "hold_strict", "16:30"),
+        _point("14:30", "charge_grid_normal", "16:30"),
+    ])
+
+    assert verdict["action_alternates"] is True
+    assert verdict["verdict"] == "FAIL"
+
+
+def test_flap_hold_charge_hold_is_a_finished_charge_not_a_flap() -> None:
+    verdict = harness.flap_verdict([
+        _point("09:00", "hold", "16:30"),
+        _point("11:00", "charge_grid_boost", "16:30"),
+        _point("13:00", "hold", "16:30"),
+    ])
+
+    assert verdict["action_alternates"] is False
+    assert verdict["verdict"] == "PASS"
+
+
+def test_flap_normal_to_boost_is_one_charge_run() -> None:
+    verdict = harness.flap_verdict([
+        _point("09:00", "charge_grid_normal", "16:30"),
+        _point("11:00", "charge_grid_boost", "16:30"),
+        _point("13:00", "hold", "16:30"),
+    ])
+
+    assert verdict["action_alternates"] is False
+    assert verdict["pairs"][0]["action_changed"] is True
+
+
+def test_flap_with_no_block_in_any_capture_is_not_a_pass() -> None:
+    """Nothing to flap means nothing was tested."""
+    verdict = harness.flap_verdict([
+        _point("09:00", "hold", None),
+        _point("11:00", "hold", None),
+    ])
+
+    assert verdict["verdict"] == "INCONCLUSIVE"
+
+
+def test_flap_needs_two_captures() -> None:
+    verdict = harness.flap_verdict([_point("09:00", "hold", "16:30")])
+
+    assert verdict["verdict"] == "INCONCLUSIVE"
+    assert verdict["pairs"] == []
+
+
+def test_flap_points_are_ordered_by_capture_time() -> None:
+    verdict = harness.flap_verdict([
+        _point("13:00", "hold", "17:30"),
+        _point("09:00", "hold", "16:30"),
+        _point("11:00", "hold", "17:00"),
+    ])
+
+    assert [(p["from"][11:16], p["to"][11:16]) for p in verdict["pairs"]] == [
+        ("09:00", "11:00"),
+        ("11:00", "13:00"),
+    ]
+    assert verdict["verdict"] == "PASS"
+
+
+def _capture_at(scenario: dict[str, Any], clock: str) -> dict[str, Any]:
+    """The 2026-09-07 capture as it would look taken later the same day: the
+    price forecast starts at ``clock`` and the earlier slots are gone."""
+    later = copy.deepcopy(scenario)
+    start = datetime.fromisoformat(f"{DAY}T{clock}:00+10:00")
+    later["input"]["test_time"] = start.isoformat()
+    for key in ("general_forecast", "feed_in_forecast"):
+        later["input"][key] = [
+            row
+            for row in later["input"][key]
+            if datetime.fromisoformat(row["start_time"]) >= start
+        ]
+    return later
+
+
+def test_load_flap_days_groups_by_day_in_time_order(tmp_path: Path) -> None:
+    scenario = json.loads(CAPTURE_0907.read_text())
+    other = _capture_at(scenario, "09:00")
+    other["input"]["test_time"] = "2026-09-08T09:00:00+10:00"
+    # Written out of order, and named so that a name sort would get it wrong.
+    (tmp_path / "b.json").write_text(json.dumps(_capture_at(scenario, "09:00")))
+    (tmp_path / "a.json").write_text(json.dumps(_capture_at(scenario, "13:00")))
+    (tmp_path / "c.json").write_text(json.dumps(other))
+
+    days = harness.load_flap_days(tmp_path)
+
+    assert list(days) == ["2026-09-07", "2026-09-08"]
+    assert [name for name, _ in days["2026-09-07"]] == ["b.json", "a.json"]
+    assert [name for name, _ in days["2026-09-08"]] == ["c.json"]
+
+
+def test_load_flap_days_empty_directory(tmp_path: Path) -> None:
+    assert harness.load_flap_days(tmp_path) == {}
+
+
+@pytest.fixture(scope="module")
+def flap_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    scenario = json.loads(CAPTURE_0907.read_text())
+    out = tmp_path_factory.mktemp("flap")
+    (out / "2026-09-07T0900.json").write_text(json.dumps(scenario))
+    (out / "2026-09-07T1300.json").write_text(
+        json.dumps(_capture_at(scenario, "13:00"))
+    )
+    return out
+
+
+def test_run_flap_drives_the_block_arm_on_each_capture(flap_dir: Path) -> None:
+    captures = harness.load_flap_days(flap_dir)["2026-09-07"]
+
+    points = harness.flap_points(captures)
+
+    assert [p["capture"] for p in points] == [
+        "2026-09-07T0900.json",
+        "2026-09-07T1300.json",
+    ]
+    assert [p["at"][11:16] for p in points] == ["09:00", "13:00"]
+    # The first capture is the committed one, run as the block arm runs it.
+    assert _local(points[0]["entry"]) == "16:30"
+    assert points[0]["slot0_action"] == "hold"
+    for point in points:
+        assert point["entry"] is not None
+        assert point["slot0_action"] in harness.ACTION_LETTER
+        assert point["cost"] is not None
+        # Carried forward from the capture before it, as live carries it.
+        assert "entry_carried" in point
+    assert points[0]["entry_carried"] == points[0]["entry"]
+
+
+def test_run_flap_prints_a_verdict_per_day(
+    flap_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    passed = harness.run_flap(flap_dir)
+
+    out = capsys.readouterr().out
+    assert "flap test 2026-09-07" in out
+    assert "09:00 -> 13:00" in out
+    expected = harness.flap_verdict(
+        harness.flap_points(harness.load_flap_days(flap_dir)["2026-09-07"])
+    )["verdict"]
+    assert f"flap test 2026-09-07: {expected}" in out
+    assert passed is (expected == "PASS")
+
+
+def test_run_flap_with_no_captures_is_not_a_pass(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert harness.run_flap(tmp_path) is False
+    assert "flap captures not present" in capsys.readouterr().out
+
+
+def test_flap_argument_defaults_to_the_flap_directory() -> None:
+    assert harness._parse_args(["--flap"]).flap == "simulations/replay-nodw-flap"
+    assert harness._parse_args(["--flap", "somewhere"]).flap == "somewhere"
+    assert harness._parse_args([]).flap is None
+
+
+def test_committed_0907_flap_captures_pass() -> None:
+    """The reference solar-deficit day, captured at 09:00, 11:00, 13:00, 14:30."""
+    days = harness.load_flap_days(REPO / "simulations" / "replay-nodw-flap")
+    captures = days["2026-09-07"]
+
+    points = harness.flap_points(captures)
+
+    assert [p["at"][11:16] for p in points] == ["09:00", "11:00", "13:00", "14:30"]
+    assert [_local(p["entry"]) for p in points] == ["16:30"] * 4
+    assert harness.flap_verdict(points)["verdict"] == "PASS"
+
+
+def test_committed_0907_0900_flap_capture_is_the_gate_capture() -> None:
+    flap = REPO / "simulations" / "replay-nodw-flap" / "2026-09-07T0900.json"
+
+    assert flap.read_bytes() == CAPTURE_0907.read_bytes()

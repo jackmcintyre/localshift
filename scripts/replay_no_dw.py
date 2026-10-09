@@ -29,6 +29,13 @@ Whenever both ``dw`` and ``block`` run, the slice 1 gate is printed: per day,
 whether the block plan is identical to, below or above ``dw``, and how much the
 block arm grid-charges overnight (21:00-06:00, the #800 sawtooth check).
 
+``--flap DIR`` runs the block arm over captures of the SAME day taken at
+different hours (scripts/export_replay_days.py --date D --time 09:00,11:00,...)
+in time order and reports, per consecutive pair, whether the block's entry time
+and the committed slot-0 action changed. PASS when the entry moves by at most
+one 30-minute slot between consecutive captures and the slot-0 action never
+goes charge / hold / charge.
+
 Why: the tariff's demand charge is seasonal, and the shoulder season has just
 started. The planner has never run without a deadline, so before a live
 switch exists this measures what "trust the rate all day" actually does on
@@ -44,6 +51,7 @@ Usage
   uv run scripts/replay_no_dw.py --arms dw,no_dw,gateless_mcs10 --json out.json
   uv run scripts/replay_no_dw.py --day 2026-09-07 --detail
   uv run scripts/replay_no_dw.py --arms dw,no_dw,block     # slice 1 gate
+  uv run scripts/replay_no_dw.py --flap simulations/replay-nodw-flap
 """
 
 from __future__ import annotations
@@ -207,8 +215,16 @@ def _seed_horizon(data: Any, payload: dict[str, Any]) -> None:
     data.forecast_horizon_hours = max(0.0, span_h)
 
 
-def run_arm(scenario: dict[str, Any], arm: dict[str, Any]) -> dict[str, Any]:
-    """Run one scenario under one arm and extract the plan's behaviour."""
+def run_arm(
+    scenario: dict[str, Any],
+    arm: dict[str, Any],
+    previous_entry_iso: str | None = None,
+) -> dict[str, Any]:
+    """Run one scenario under one arm and extract the plan's behaviour.
+
+    ``previous_entry_iso`` seeds the price block's hysteresis, as if the plan
+    before this one had entered the block at that time.
+    """
     payload = dict(scenario["input"])
     payload["adaptive_params"] = {}  # learning layer retired 2026-09-04
 
@@ -216,6 +232,8 @@ def run_arm(scenario: dict[str, Any], arm: dict[str, Any]) -> dict[str, Any]:
     data = setup_coordinator_data(payload)
     hass = setup_mock_hass(payload)
     _seed_horizon(data, payload)
+    if previous_entry_iso is not None:
+        data.target_block_entry_iso = previous_entry_iso
 
     overrides = dict(scenario.get("config_overrides", {}))
     overrides.update(LIVE_OVERRIDES)
@@ -604,7 +622,196 @@ def _print_gate(results: dict[str, dict[str, Any]]) -> bool | None:
     return passed
 
 
-def _parse_args() -> argparse.Namespace:
+# ---------------------------------------------------------------------------
+# Flap test: the same day captured at several hours (#1111)
+# ---------------------------------------------------------------------------
+
+FLAP_DIR = "simulations/replay-nodw-flap"
+FLAP_SLOT_MINUTES = 30  # the block's entry sits on the 30-minute part of the horizon
+
+
+def load_flap_days(directory: Path) -> dict[str, list[tuple[str, dict[str, Any]]]]:
+    """Captures in ``directory`` grouped by local day, each day in time order.
+
+    Ordered by each capture's own ``test_time``, not by file name.
+    """
+    stamped = []
+    for path in sorted(Path(directory).glob("*.json")):
+        scenario = json.loads(path.read_text())
+        at = datetime.fromisoformat(scenario["input"]["test_time"])
+        stamped.append((at, path.name, scenario))
+    stamped.sort(key=lambda item: item[0])
+    days: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for at, name, scenario in stamped:
+        days.setdefault(at.date().isoformat(), []).append((name, scenario))
+    return days
+
+
+def flap_points(captures: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Run the block arm on each capture of one day, in the order given.
+
+    Each capture is planned twice. ``entry`` / ``slot0_action`` are a cold
+    start: the detector sees only that capture, which is what the verdict is
+    read from. ``entry_carried`` / ``slot0_action_carried`` seed the detector's
+    hysteresis with the entry the capture before it settled on, the way live
+    carries it from one plan to the next.
+    """
+    arm = ARMS["block"]
+    points: list[dict[str, Any]] = []
+    carried: str | None = None
+    for name, scenario in captures:
+        cold = run_arm(scenario, arm)
+        held = cold if carried is None else run_arm(scenario, arm, carried)
+        carried = held["target_block_entry"]
+        points.append({
+            "capture": name,
+            "at": scenario["input"]["test_time"],
+            "soc": scenario["input"].get("soc"),
+            "slot0_action": cold["slot0_action"],
+            "entry": cold["target_block_entry"],
+            "end": cold["target_block_end"],
+            "target_pct": cold["target_block_target_pct"],
+            "cost": cold["projected_net_cost"],
+            "charge_kwh": cold["charge_kwh"],
+            "entry_carried": held["target_block_entry"],
+            "slot0_action_carried": held["slot0_action"],
+        })
+    return points
+
+
+def _is_charge(action: Any) -> bool:
+    return str(action).startswith("charge_grid")
+
+
+def _charge_resumes(actions: list[Any]) -> bool:
+    """True when grid charging stops and then starts again: charge / hold / charge."""
+    runs = 0
+    previous = False
+    for action in actions:
+        charging = _is_charge(action)
+        if charging and not previous:
+            runs += 1
+        previous = charging
+    return runs > 1
+
+
+def _entry_move_minutes(a: str | None, b: str | None) -> int | None:
+    """Minutes the entry moved from ``a`` to ``b``; None if a block came or went."""
+    if a is None and b is None:
+        return 0
+    if a is None or b is None:
+        return None
+    delta = datetime.fromisoformat(b) - datetime.fromisoformat(a)
+    return int(delta.total_seconds() // 60)
+
+
+def _flap_pair(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    moved = _entry_move_minutes(a["entry"], b["entry"])
+    return {
+        "from": a["at"],
+        "to": b["at"],
+        "from_entry": a["entry"],
+        "to_entry": b["entry"],
+        "entry_moved_min": moved,
+        "entry_ok": moved is not None and abs(moved) <= FLAP_SLOT_MINUTES,
+        "from_action": a["slot0_action"],
+        "to_action": b["slot0_action"],
+        "action_changed": a["slot0_action"] != b["slot0_action"],
+    }
+
+
+def _pair_label(pair: dict[str, Any]) -> str:
+    return f"{_clock(pair['from'])} -> {_clock(pair['to'])}"
+
+
+def flap_verdict(points: list[dict[str, Any]]) -> dict[str, Any]:
+    """PASS / FAIL / INCONCLUSIVE for one day's captures.
+
+    PASS: between every consecutive pair the block's entry moves by at most one
+    slot, and the slot-0 action never goes charge / hold / charge. A block that
+    appears or disappears between two captures has moved by more than a slot.
+    INCONCLUSIVE: fewer than two captures, or no capture found a block, so
+    there was no boundary to flap.
+    """
+    ordered = sorted(points, key=lambda p: datetime.fromisoformat(p["at"]))
+    pairs = [_flap_pair(a, b) for a, b in zip(ordered, ordered[1:], strict=False)]
+    alternates = _charge_resumes([p["slot0_action"] for p in ordered])
+
+    reasons = []
+    for pair in pairs:
+        if pair["entry_ok"]:
+            continue
+        moved = pair["entry_moved_min"]
+        what = (
+            "block appeared or disappeared"
+            if moved is None
+            else f"block entry moved {moved:+d} min, more than one slot"
+        )
+        reasons.append(f"{_pair_label(pair)}: {what}")
+    if alternates:
+        sequence = " / ".join(str(p["slot0_action"]) for p in ordered)
+        reasons.append(f"slot-0 action goes charge / hold / charge: {sequence}")
+
+    if len(ordered) < 2 or all(p["entry"] is None for p in ordered):
+        verdict = "INCONCLUSIVE"
+    else:
+        verdict = "FAIL" if reasons else "PASS"
+    return {
+        "verdict": verdict,
+        "pairs": pairs,
+        "action_alternates": alternates,
+        "reasons": reasons,
+    }
+
+
+def _print_flap_day(day: str, points: list[dict[str, Any]]) -> str:
+    result = flap_verdict(points)
+    print(f"\nflap test {day} (block arm, {len(points)} capture(s))")
+    print(
+        f"  {'capture':<8}{'SOC':>6}  {'slot-0 action':<20}{'block':<14}"
+        f"{'target':>7}{'cost':>8}{'chg kWh':>9}  carried: entry, slot-0"
+    )
+    for p in points:
+        print(
+            f"  {_clock(p['at']):<8}{fmt(p['soc'], '6.1f')}  "
+            f"{str(p['slot0_action']):<20}"
+            f"{_clock(p['entry']) + '-' + _clock(p['end']):<14}"
+            f"{fmt(p['target_pct'], '7.1f')}{fmt(p['cost'], '8.3f')}"
+            f"{fmt(p['charge_kwh'], '9.2f')}  "
+            f"{_clock(p['entry_carried'])}, {p['slot0_action_carried']}"
+        )
+    for pair in result["pairs"]:
+        moved = pair["entry_moved_min"]
+        print(
+            f"  {_pair_label(pair)}: entry {_clock(pair['from_entry'])} -> "
+            f"{_clock(pair['to_entry'])} "
+            f"({'n/a' if moved is None else format(moved, '+d') + ' min'}, "
+            f"{'ok' if pair['entry_ok'] else 'FAIL'})  "
+            f"slot-0 {pair['from_action']} -> {pair['to_action']} "
+            f"({'changed' if pair['action_changed'] else 'same'})"
+        )
+    for reason in result["reasons"]:
+        print(f"  reason: {reason}")
+    carried = flap_verdict([
+        {**p, "entry": p["entry_carried"], "slot0_action": p["slot0_action_carried"]}
+        for p in points
+    ])
+    print(f"  with the previous capture's entry carried: {carried['verdict']}")
+    print(f"flap test {day}: {result['verdict']}")
+    return result["verdict"]
+
+
+def run_flap(directory: Path) -> bool:
+    """Run the flap test on every day captured in ``directory``. True if all PASS."""
+    days = load_flap_days(directory)
+    if not days:
+        print(f"flap captures not present in {directory}")
+        return False
+    verdicts = [_print_flap_day(day, flap_points(caps)) for day, caps in days.items()]
+    return all(verdict == "PASS" for verdict in verdicts)
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dir", default="simulations/replay-nodw")
     parser.add_argument("--json", help="also write full results here")
@@ -615,11 +822,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--detail", action="store_true", help="dump every slot of every arm"
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--flap",
+        nargs="?",
+        const=FLAP_DIR,
+        metavar="DIR",
+        help=f"flap test over same-day captures in DIR (default {FLAP_DIR})",
+    )
+    return parser.parse_args(argv)
 
 
 def main() -> int:
     args = _parse_args()
+    if args.flap:
+        return 0 if run_flap(Path(args.flap)) else 1
     arms = {k: ARMS[k] for k in args.arms.split(",")}
 
     paths = sorted(Path(args.dir).glob("*.json"))
