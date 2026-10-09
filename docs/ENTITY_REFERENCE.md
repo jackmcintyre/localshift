@@ -69,6 +69,7 @@ user-facing entities with no category and appear on the main device card.
 | `button.localshift_update_forecast` | `localshift_update_forecast` | `button` | — |
 | `number.localshift_away_reserve` | `localshift_away_reserve` | `number` | config |
 | `number.localshift_battery_target` | `localshift_battery_target` | `number` | config |
+| `number.localshift_block_min_spread` | `localshift_block_min_spread` | `number` | config |
 | `number.localshift_charge_taper_min_factor` | `localshift_charge_taper_min_factor` | `number` | config |
 | `number.localshift_charge_taper_start` | `localshift_charge_taper_start_pct` | `number` | config |
 | `number.localshift_cheap_price_percentile` | `localshift_cheap_price_percentile` | `number` | config |
@@ -119,6 +120,7 @@ user-facing entities with no category and appear on the main device card.
 | `switch.localshift_demand_window_block` | `localshift_demand_window_block` | `switch` | — |
 | `switch.localshift_dry_run` | `localshift_dry_run` | `switch` | config |
 | `switch.localshift_notifications_enabled` | `localshift_notifications_enabled` | `switch` | config |
+| `switch.localshift_price_block_target` | `localshift_price_block_target` | `switch` | config |
 | `switch.localshift_spike_discharge_conservative` | `localshift_spike_discharge_conservative` | `switch` | config |
 | `switch.localshift_spike_discharge_enabled` | `localshift_spike_discharge_enabled` | `switch` | config |
 | `switch.localshift_stale_solar_conservative` | `localshift_stale_solar_conservative` | `switch` | config |
@@ -921,6 +923,33 @@ Attributes:
 - `forecast_accuracy` - Current forecast accuracy (0-1)
 - `accuracy_discount_factor` - Applied discount (0.5-1.0)
 
+**Attributes (price block, [PRICE_BLOCK_TARGET.md](PRICE_BLOCK_TARGET.md)):**
+
+What [`switch.localshift_price_block_target`](#8-switchlocalshift_price_block_target) did on the last plan.
+
+| Attribute | Block found | No block, switch off, or failed cycle |
+|---|---|---|
+| `target_block_active` | `true` | `false` |
+| `target_block_entry` | ISO timestamp: start of the block's first slot | `null` |
+| `target_block_end` | ISO timestamp: end of the block's last slot | `null` |
+| `target_block_target_pct` | The target SOC the planner used: `minimum_target_soc` + need + headroom, clamped to [`minimum_target_soc`, `battery_target`] | `null` |
+| `target_block_needed_kwh` | Battery energy needed to carry the block's net load, before the clamp. It can exceed the battery's capacity; the target is then `battery_target` | `null` |
+| `target_block_reason` | Why this block was chosen: its length, slot range, spread, net load and solar accuracy, and whether the entry was held from the previous plan | `null` |
+
+```
+target_block_active: true
+target_block_entry: "2026-09-07T16:30:00+10:00"
+target_block_end: "2026-09-08T00:30:00+10:00"
+target_block_target_pct: 95.0
+target_block_needed_kwh: 29.677
+target_block_reason: "dear run of 8.0 h from slot 20 to 35 (>= $0.08/kWh above the cheapest earlier price), net load 28.19 kWh at solar accuracy 1.00"
+```
+
+- All six are rewritten on every plan, and reset to the right-hand column on a cycle that produces no plan (no forecast slots, an unreadable SOC, or a planner error), so they never hold a value from a plan made before the switch was turned off. The rest of the summary is not reset on such a cycle: it still shows the last good plan.
+- They describe the block **ahead of now** in the current plan. A block is measured against the cheapest price earlier in the same horizon, so as the cheap hours pass the detected block shortens, and once the clock reaches the expensive hours no block is found: the attributes read inactive during the evening itself. Read them in the hours before the block, not during it.
+- With a block active, `dw_entry_soc_pct` and `terminal_shortfall_pct` are the projected SOC and shortfall at the **block** entry, measured against `target_block_target_pct`.
+- The `dw_entry_actual_*` attributes do **not** follow the block. They are still captured at the start of the clock demand window, only while `switch.localshift_demand_window_block` is on (#1049), and against `battery_target`. To see the SOC the battery actually entered a price block at, read the SOC history at `target_block_entry`.
+
 **Icon:** Dynamic (mdi:check-circle-outline for success, mdi:alert-circle-outline for failed, mdi:minus-circle-outline for disabled)
 
 ---
@@ -1261,6 +1290,27 @@ State: on
 
 ---
 
+### 8. switch.localshift_price_block_target
+
+**Purpose:** Prepare for the expensive evening block found in the price forecast, instead of the fixed demand-window clock. Design: [PRICE_BLOCK_TARGET.md](PRICE_BLOCK_TARGET.md).
+
+**Default:** OFF
+
+**Example Data:**
+```
+State: off
+```
+
+**Behavior:**
+- OFF: the planner is unchanged. The clock demand window sets the deadline.
+- ON: on every plan the clock window's slot flags are cleared and the detected block takes their place, so the planner's deadline, terminal target, pre-charge funding and grid-import ban all follow the block. When no block is found the planner has no deadline at all.
+- ON, the target is sized to the block: `minimum_target_soc` plus the battery share needed to carry the block's net load (solar discounted by forecast accuracy, divided by discharge efficiency), plus the adaptive headroom, never below `minimum_target_soc` and never above `battery_target`. An evening that needs more than one battery, or an inflated load forecast, is capped at `battery_target`. With no block the target is `minimum_target_soc`.
+- The grid-import ban now covers the block instead of the clock window. That is an accepted side effect: charging inside the expensive block is not wanted anyway.
+- Only the plan changes. Anything that reads the clock window or `battery_target` directly (Demand Block mode at execution, the `dw_entry_actual_*` capture, the state machine's target checks) still uses the clock and `battery_target`.
+- The switch state is published on `sensor.localshift_optimizer_summary` under `config_options.price_block_target`.
+
+---
+
 
 ## Numbers (Configuration Thresholds)
 
@@ -1402,6 +1452,30 @@ State: 0.25
 **Example Data:**
 ```
 State: 30.0
+```
+
+---
+
+### 8. number.localshift_block_min_spread
+
+**Purpose:** How far above the cheapest earlier buy price a slot must sit to count as part of the expensive block worth pre-charging for. Design: [PRICE_BLOCK_TARGET.md](PRICE_BLOCK_TARGET.md).
+
+| Property | Value |
+|----------|-------|
+| Range | $0.00-$0.50/kWh |
+| Step | $0.01/kWh |
+| Default | $0.08/kWh |
+| Unit | $/kWh |
+
+**How it works:** Read by the block detector (`engine/target_block.py`). A slot is *dear* when its buy price is at least this much above the cheapest price in any earlier slot of the horizon and its forecast consumption exceeds its forecast solar. The block is the first run of dear slots lasting at least 2 hours.
+
+**This is not `min_cycle_saving`.** The cycle hurdle governs speculative arbitrage and sits at $0.25/kWh. The block spread answers a different question: is this evening expensive enough to prepare for. The $0.08 default is about the round-trip loss on a typical Amber evening.
+
+**Status:** the value reaches the planner as `OptimizerConfig.block_min_spread` and is published on `sensor.localshift_optimizer_summary` under `config_options.block_min_spread`. It is read only while [`switch.localshift_price_block_target`](#8-switchlocalshift_price_block_target) is on; with the switch off it has no effect.
+
+**Example Data:**
+```
+State: 0.08
 ```
 
 ---

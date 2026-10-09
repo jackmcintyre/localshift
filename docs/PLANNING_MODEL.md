@@ -172,6 +172,23 @@ charging purely to harvest the credit always loses at least half the outlay, so 
 cannot regress into overnight reserve-holding. It never touches the strict-mode
 DW-entry penalty rows. Disable via `OptimizerConfig.terminal_salvage_enabled=False`.
 
+### Price-driven target block
+
+"DW entry slot" and "target" in the table above are normally the clock demand
+window and `battery_target`. With `switch.localshift_price_block_target` on they
+are instead the expensive block found in the price forecast and a target sized
+to that block's net load, clamped to [`minimum_target_soc`, `battery_target`].
+With no block there is no entry slot and the target is `minimum_target_soc`, so
+this terminal cost is inert.
+
+`terminal_cost()` itself is unchanged: the block sets the same two slot flags
+the clock window sets (`engine/slots.py` `apply_price_block_flags`) and the
+runner sets the target (`engine/optimizer_runner.py` `apply_price_block`).
+Design, detection rule and slices: [PRICE_BLOCK_TARGET.md](PRICE_BLOCK_TARGET.md).
+What the block did on the last plan is published as the `target_block_*`
+attributes of `sensor.localshift_optimizer_summary`
+([ENTITY_REFERENCE.md](ENTITY_REFERENCE.md)).
+
 ### Why Terminal Cost Works
 
 The terminal cost creates a "backwards incentive" through DP:

@@ -205,7 +205,9 @@ class TestSwitchKeys:
 
     def test_switch_keys_count(self):
         """Test there are 9 switch keys."""
-        assert len(SWITCH_KEYS) == 8  # enable_learning retired with the learning layer
+        # enable_learning retired with the learning layer; price_block_target
+        # added by #1106.
+        assert len(SWITCH_KEYS) == 9
 
 
 class TestAsyncSetupEntry:

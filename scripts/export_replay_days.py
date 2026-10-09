@@ -40,6 +40,16 @@ Usage
   scripts/export_replay_days.py                     # last 10 days at 09:00 local
   scripts/export_replay_days.py --days 14 --hour 13
   scripts/export_replay_days.py --out simulations/replay
+
+One day at several hours, for the flap test (scripts/replay_no_dw.py --flap).
+More than one --time names each file <day>T<HHMM>.json so the captures of a day
+sit side by side and sort in time order:
+
+  scripts/export_replay_days.py --date 2026-09-07 \
+      --time 09:00,11:00,13:00,14:30 --out simulations/replay-nodw-flap
+
+Times are Sydney wall-clock, so 09:00 is 09:00 on either side of daylight
+saving.
 """
 
 from __future__ import annotations
@@ -52,11 +62,14 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
-AEST = timezone(timedelta(hours=10))
+# Home Assistant's own timezone (LIVE_CONFIG ha_timezone). A fixed +10:00 would
+# capture an hour late once daylight saving starts.
+LOCAL_TZ = ZoneInfo("Australia/Sydney")
 
 PRICE_GENERAL = "sensor.amber_express_100h_general_price"
 PRICE_FEED_IN = "sensor.amber_express_100h_feed_in_price"
@@ -325,9 +338,53 @@ def build_day(url: str, token: str, decision_at: datetime) -> dict[str, Any] | N
     }
 
 
-def main() -> int:
+def parse_clock(text: str) -> time:
+    """A capture time: "9", "09:00" or "14:30". Hours and minutes only."""
+    hour, sep, minute = text.strip().partition(":")
+    if not hour.isdigit() or (sep and not minute.isdigit()):
+        raise ValueError(f"not a time of day: {text!r}")
+    return time(int(hour), int(minute) if sep else 0)
+
+
+def decision_times(
+    now: datetime, *, days: int, dates: list[str], clocks: list[time]
+) -> list[datetime]:
+    """Every moment to capture, as Sydney wall-clock datetimes.
+
+    With no ``dates`` this is the last ``days`` days before ``now``, newest
+    first. With ``dates`` it is exactly those days, in the order given. Each day
+    is captured at every clock in ``clocks``, earliest first.
+    """
+    if dates:
+        targets = [date.fromisoformat(d) for d in dates]
+    else:
+        today = now.astimezone(LOCAL_TZ).date()
+        targets = [today - timedelta(days=back) for back in range(1, days + 1)]
+    return [
+        datetime.combine(day, clock, tzinfo=LOCAL_TZ)
+        for day in targets
+        for clock in sorted(clocks)
+    ]
+
+
+def capture_filename(decision_at: datetime, *, suffix_time: bool) -> str:
+    """``2026-09-07.json``, or ``2026-09-07T1430.json`` with the time suffix."""
+    day = decision_at.strftime("%Y-%m-%d")
+    if not suffix_time:
+        return f"{day}.json"
+    return f"{day}T{decision_at.strftime('%H%M')}.json"
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=10, help="days back (default 10)")
+    parser.add_argument(
+        "--date",
+        action="append",
+        default=[],
+        metavar="YYYY-MM-DD",
+        help="capture this day instead of the last --days; repeatable",
+    )
     parser.add_argument(
         "--hour",
         type=int,
@@ -335,39 +392,70 @@ def main() -> int:
         help="local decision hour to capture (default 9, before pre-charge)",
     )
     parser.add_argument(
+        "--time",
+        metavar="HH:MM[,HH:MM...]",
+        help="local decision time(s) to capture; overrides --hour",
+    )
+    parser.add_argument(
+        "--suffix-time",
+        action="store_true",
+        help="name files <day>T<HHMM>.json (implied by more than one --time)",
+    )
+    parser.add_argument(
         "--out",
         default="simulations/replay",
         help="output directory (default simulations/replay)",
     )
-    args = parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def clocks_from_args(args: argparse.Namespace) -> list[time]:
+    if args.time:
+        return [parse_clock(part) for part in args.time.split(",")]
+    return [time(args.hour, 0)]
+
+
+def wants_time_suffix(args: argparse.Namespace) -> bool:
+    """Several captures of a day must not overwrite each other."""
+    return bool(args.suffix_time) or len(clocks_from_args(args)) > 1
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        targets = decision_times(
+            datetime.now(LOCAL_TZ),
+            days=args.days,
+            dates=args.date,
+            clocks=clocks_from_args(args),
+        )
+    except ValueError as exc:
+        sys.exit(f"ERROR: {exc}")
+    suffix_time = wants_time_suffix(args)
 
     url, token = load_credentials()
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    now = datetime.now(AEST)
     written, skipped = [], []
-    for back in range(1, args.days + 1):
-        target = (now - timedelta(days=back)).replace(
-            hour=args.hour, minute=0, second=0, microsecond=0
-        )
-        day = target.strftime("%Y-%m-%d")
+    for target in targets:
+        name = capture_filename(target, suffix_time=suffix_time)
         scenario = build_day(url, token, target)
         if scenario is None:
-            skipped.append(day)
-            print(f"  skip {day}: inputs not retained")
+            skipped.append(name)
+            print(f"  skip {name}: inputs not retained")
             continue
-        (out_dir / f"{day}.json").write_text(json.dumps(scenario, indent=2) + "\n")
+        (out_dir / name).write_text(json.dumps(scenario, indent=2) + "\n")
         i = scenario["input"]
         print(
-            f"  wrote {day}.json  soc={i['soc']:>5.1f}%  "
+            f"  wrote {name}  soc={i['soc']:>5.1f}%  "
             f"price_slots={len(i['general_forecast']):>2}  "
             f"solar_measured={i['solar_measured_kwh']:>5.1f}kWh  "
             f"solcast_said={i['solcast_forecast_kwh']}"
         )
-        written.append(day)
+        written.append(name)
 
-    print(f"\n{len(written)} day(s) written, {len(skipped)} skipped -> {out_dir}")
+    print(f"\n{len(written)} capture(s) written, {len(skipped)} skipped -> {out_dir}")
     if skipped:
         print(f"skipped: {', '.join(skipped)}")
     return 0 if written else 1

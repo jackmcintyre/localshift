@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, Any
 # const.py is dependency-free (stdlib only) and imports nothing from the engine, so this
 # cannot cycle. Imported so the runway-margin dataclass default and the live number
 # entity's default are literally the same object rather than two literals that drift.
-from ..const import DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN
+from ..const import (
+    DEFAULT_BLOCK_MIN_DURATION_HOURS,
+    DEFAULT_BLOCK_MIN_SPREAD,
+    DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
+    DEFAULT_PRICE_BLOCK_TARGET,
+)
 
 if TYPE_CHECKING:
     from custom_components.localshift.forecast.solar_accuracy import (
@@ -580,6 +585,29 @@ class OptimizerConfig:
     0.0 disables the action entirely (legacy behaviour). Production default is 0.0
     as a kill switch for the first live night.
     """
+
+    # --- Price-driven target block (docs/PRICE_BLOCK_TARGET.md) ---
+    price_block_target: bool = DEFAULT_PRICE_BLOCK_TARGET
+    """If True, the planner keys its deadline on the expensive block found in the
+    price forecast (``engine/target_block.py``) instead of the clock demand
+    window. Set from ``switch.localshift_price_block_target``; default OFF.
+
+    Read by ``apply_price_block`` (``engine/optimizer_runner.py``), which rewrites
+    the slot flags from the block once the slots are built and sizes
+    ``demand_window_target_soc_pct`` to it."""
+
+    block_min_spread: float = DEFAULT_BLOCK_MIN_SPREAD
+    """How far above the cheapest earlier buy price ($/kWh) a slot must sit to
+    count as dear in ``find_target_block``. Set from ``CONF_BLOCK_MIN_SPREAD``.
+
+    This is NOT ``min_cycle_saving``. The cycle hurdle governs speculative
+    arbitrage and sits at $0.25/kWh to keep the planner off the #800 knife edge;
+    the block spread answers a different question, namely whether this evening is
+    expensive enough to prepare for."""
+
+    block_min_duration_hours: float = DEFAULT_BLOCK_MIN_DURATION_HOURS
+    """Shortest dear run (hours) that counts as a block in ``find_target_block``.
+    A design constant, not an operator knob: there is no entity for it."""
 
     forecast_horizon_hours: float = 24.0
     """Actual hours of forecast available (Issue #431)."""

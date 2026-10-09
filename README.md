@@ -213,7 +213,7 @@ Devices & Services. Full canonical reference:
 | `binary_sensor.localshift_tesla_override_active` | Tesla has taken control (Storm Watch, Grid Event, VPP) |
 | `binary_sensor.localshift_amber_demand_window` | Amber Express demand-window signal active |
 
-### Switches (8)
+### Switches (9)
 
 | Entity ID | Default | Description |
 |---|---|---|
@@ -224,15 +224,17 @@ Devices & Services. Full canonical reference:
 | `switch.localshift_demand_window_block` | ON | Block grid charging during the demand window |
 | `switch.localshift_allow_dw_entry_under_target` | OFF | Allow DW entry under target when solar can reach it |
 | `switch.localshift_stale_solar_conservative` | ON | Cap solar confidence when Solcast is stale/absent |
+| `switch.localshift_price_block_target` | OFF | Prepare for the expensive block in the price forecast instead of the demand-window clock |
 | `switch.localshift_notifications_enabled` | ON | Enable all notifications (transitions, summaries, manual actions, alerts) |
 
-### Numbers (8)
+### Numbers (9)
 
 | Entity ID | Description |
 |---|---|
 | `number.localshift_cheap_price_percentile` | Forecast price percentile used for the cheap-charge baseline (%) |
 | `number.localshift_max_pre_charge_price` | Maximum pre-charge price ($/kWh) |
 | `number.localshift_min_cycle_saving` | Minimum saving over holding to justify a battery cycle ($/kWh) |
+| `number.localshift_block_min_spread` | Spread above the cheapest earlier price that marks the expensive block ($/kWh; read only while `switch.localshift_price_block_target` is on) |
 | `number.localshift_battery_target` | Battery target SOC for the demand window (%) |
 | `number.localshift_minimum_target_soc` | Minimum SOC during discharge modes (%) |
 | `number.localshift_target_shortfall_penalty` | Optimizer cost per %-point of demand-window shortfall ($) |

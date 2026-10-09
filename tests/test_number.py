@@ -258,8 +258,9 @@ class TestNumberDefinitions:
     """Tests for NUMBER_DEFINITIONS constant."""
 
     def test_number_definitions_count(self):
-        """13 pre-existing + the away reserve (docs/holiday-away/plan.md item 4)."""
-        assert len(NUMBER_DEFINITIONS) == 14
+        """13 pre-existing + the away reserve (docs/holiday-away/plan.md item 4)
+        + the price-block spread (#1106)."""
+        assert len(NUMBER_DEFINITIONS) == 15
 
     def test_number_definitions_contains_cheap_price_percentile(self):
         """Test definitions contain cheap price percentile."""
@@ -319,7 +320,7 @@ class TestAsyncSetupEntry:
 
         await async_setup_entry(MagicMock(), mock_entry, mock_async_add_entities)
 
-        assert len(added_entities) == 14
+        assert len(added_entities) == 15
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_creates_localshift_number_instances(

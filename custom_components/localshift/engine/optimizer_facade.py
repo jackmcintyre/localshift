@@ -23,8 +23,12 @@ from .optimizer_runner import (
     _normalize_initial_soc,
     _serialize_decision,
     _serialize_result,
+    apply_price_block,
+    target_block_memory_telemetry,
+    target_block_telemetry,
 )
 from .slots import SlotBuilder
+from .types import OptimizerConfig
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -264,6 +268,7 @@ class OptimizerFacade:
             if not slots:
                 _LOGGER.warning("DP optimizer: no slots available, skipping")
                 self._mark_mode_debug_fallback(data)
+                self._clear_target_block_telemetry(data)
                 # Issue #956: an empty build is the WORST case the tracker
                 # exists to catch -- the configured forecast source produced
                 # nothing covering "now" at all, so _ensure_current_slot_coverage
@@ -284,6 +289,12 @@ class OptimizerFacade:
             )
 
             optimizer_config = _build_optimizer_config(data, config_options)
+            # After the solar corrections above: the block is detected on the
+            # slots the planner solves, and the target sized to it. A no-op
+            # with the switch off (#1107, #1108).
+            target_block = apply_price_block(
+                slots, optimizer_config, config_options, data
+            )
 
             initial_soc, soc_info = _normalize_initial_soc(data.soc, optimizer_config)
             if initial_soc is None:
@@ -291,6 +302,7 @@ class OptimizerFacade:
                     "DP optimizer: invalid SOC %s, skipping", soc_info.get("error")
                 )
                 self._mark_mode_debug_fallback(data)
+                self._clear_target_block_telemetry(data)
                 return
 
             cycle_id = uuid.uuid4().hex[:12]
@@ -317,6 +329,10 @@ class OptimizerFacade:
                 cycle_id,
                 soc_info,
                 optimizer_config,
+                {
+                    **target_block_telemetry(target_block, slots, optimizer_config),
+                    **target_block_memory_telemetry(data, optimizer_config),
+                },
             )
 
             self._assign_active_mode(data, result, optimizer_config, config_options)
@@ -336,6 +352,7 @@ class OptimizerFacade:
                 "Inline DP optimizer failed (non-blocking): %s", exc, exc_info=True
             )
             self._mark_mode_debug_fallback(data)
+            self._clear_target_block_telemetry(data)
 
     def _write_optimizer_fields(
         self,
@@ -346,6 +363,7 @@ class OptimizerFacade:
         cycle_id: str,
         initial_soc_info: dict[str, Any] | None = None,
         optimizer_config: Any | None = None,
+        target_block: dict[str, Any] | None = None,
     ) -> None:
         """Write optimizer results to coordinator data fields.
 
@@ -363,6 +381,8 @@ class OptimizerFacade:
                 same reason: the runway telemetry the DP writes onto it has no other
                 route to the summary sensor. Optional so the batch/test callers that
                 only need the result-derived fields are unaffected.
+            target_block: This plan's ``target_block_telemetry`` record. Optional
+                for the same callers; without it the summary reports no block.
 
         """
         data.optimizer_result = _serialize_result(result)
@@ -417,6 +437,16 @@ class OptimizerFacade:
         )
         data.optimizer_summary["precharge_runway_margin_min"] = getattr(
             optimizer_config, "precharge_runway_margin_min", None
+        )
+
+        # Price block telemetry (#1109). Written on every plan, block or not, so
+        # the summary never carries a block from a plan made before the switch
+        # was turned off. Same route as the two groups above: ``_build_summary``
+        # has neither the slots nor the block.
+        data.optimizer_summary.update(
+            target_block
+            if target_block is not None
+            else target_block_telemetry(None, [], optimizer_config)
         )
 
         data.forecast_horizon_hours = slot_metadata.horizon_hours
@@ -1206,6 +1236,29 @@ class OptimizerFacade:
         data.debug_plan_mode_pending = None
 
     @staticmethod
+    def _clear_target_block_telemetry(data: CoordinatorData) -> None:
+        """Reset the summary's ``target_block_*`` keys on a cycle with no plan.
+
+        Called from run_inline's early exits, which leave ``optimizer_summary``
+        as the last good plan wrote it. Without this the summary sensor keeps
+        reporting that plan's price block after the switch is turned off or the
+        block has gone, for as long as cycles keep failing (#1109).
+
+        The memory keys (#1114) are blanked with them: a cycle that planned
+        nothing reports nothing, though the state itself stays on ``data`` for
+        the next plan. Only these keys are reset; the rest of the last good
+        plan's summary is left alone, as it was before. A summary no plan has written yet stays
+        empty, which the sensor already reads as inactive.
+        """
+        if not data.optimizer_summary:
+            return
+        data.optimizer_summary = {
+            **data.optimizer_summary,
+            **target_block_telemetry(None, [], OptimizerConfig()),
+            **target_block_memory_telemetry(data, OptimizerConfig()),
+        }
+
+    @staticmethod
     def _mark_mode_debug_fallback(data: CoordinatorData) -> None:
         """Mark the mode-decision debug fields as a non-optimizer fallback.
 
@@ -1284,6 +1337,11 @@ class OptimizerFacade:
                 return
 
             optimizer_config = _build_optimizer_config(data, config_options)
+            # The shadow plan gets its own block from its own prices, and must
+            # not move the boundary the live plan holds for hysteresis.
+            apply_price_block(
+                shadow_slots, optimizer_config, config_options, data, persist=False
+            )
             initial_soc, soc_info = _normalize_initial_soc(data.soc, optimizer_config)
             if initial_soc is None:
                 _LOGGER.warning("Shadow optimizer: invalid SOC")

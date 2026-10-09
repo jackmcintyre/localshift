@@ -30,7 +30,8 @@ from .optimizer_dp import (
     PlannerAction,
     SlotContext,
 )
-from .slots import SlotBuilder
+from .slots import SlotBuilder, apply_price_block_flags, slot_end_iso
+from .target_block import TargetBlock
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -162,6 +163,11 @@ def _run(
         }
         return
 
+    # 1a. Price block replaces the clock window's flags when its switch is on,
+    # and sizes the target to the block (docs/PRICE_BLOCK_TARGET.md, #1107,
+    # #1108). A no-op with the switch off.
+    target_block = apply_price_block(slots, optimizer_config, config_options, data)
+
     # 1b. Validate slot alignment (Phase B #403)
     alignment = _validate_slot_alignment(data.daily_forecast, slots)
     if not alignment["valid"]:
@@ -214,6 +220,10 @@ def _run(
         config_options,
         soc_info,
     )
+    data.optimizer_summary.update(
+        target_block_telemetry(target_block, slots, optimizer_config)
+    )
+    data.optimizer_summary.update(target_block_memory_telemetry(data, optimizer_config))
 
     _LOGGER.debug(
         "Optimizer cycle %s complete: success=%s slots=%d solve=%.3fs net_cost=%.4f",
@@ -247,6 +257,7 @@ def _build_optimizer_config(
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
         CONF_AWAY_RESERVE,
         CONF_BATTERY_TARGET,
+        CONF_BLOCK_MIN_SPREAD,
         CONF_CHARGE_TAPER_MIN_FACTOR,
         CONF_CHARGE_TAPER_START_PCT,
         CONF_EXPORT_PRICE_MARGIN,
@@ -256,6 +267,7 @@ def _build_optimizer_config(
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
         CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
+        CONF_PRICE_BLOCK_TARGET,
         CONF_STALE_SOLAR_CONFIDENCE_CEILING,
         CONF_STALE_SOLAR_CONSERVATIVE,
         CONF_SWITCHING_PENALTY,
@@ -264,6 +276,7 @@ def _build_optimizer_config(
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_AWAY_RESERVE,
         DEFAULT_BATTERY_TARGET,
+        DEFAULT_BLOCK_MIN_SPREAD,
         DEFAULT_CHARGE_TAPER_MIN_FACTOR,
         DEFAULT_CHARGE_TAPER_START_PCT,
         DEFAULT_EXPORT_PRICE_MARGIN,
@@ -273,6 +286,7 @@ def _build_optimizer_config(
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
         DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
+        DEFAULT_PRICE_BLOCK_TARGET,
         DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
         DEFAULT_STALE_SOLAR_CONSERVATIVE,
         DEFAULT_SWITCHING_PENALTY,
@@ -353,6 +367,15 @@ def _build_optimizer_config(
         config_options.get(CONF_MIN_HOLD_SAVING, DEFAULT_MIN_HOLD_SAVING)
     )
 
+    # Price block controls (docs/PRICE_BLOCK_TARGET.md slice 1). Read by
+    # apply_price_block_flags once the slots are built.
+    block_min_spread = float(
+        config_options.get(CONF_BLOCK_MIN_SPREAD, DEFAULT_BLOCK_MIN_SPREAD)
+    )
+    price_block_target = bool(
+        config_options.get(CONF_PRICE_BLOCK_TARGET, DEFAULT_PRICE_BLOCK_TARGET)
+    )
+
     # Charge taper curve (Issue #905: raised from 80% to 90% to match measured hardware).
     charge_taper_start_pct = float(
         config_options.get(CONF_CHARGE_TAPER_START_PCT, DEFAULT_CHARGE_TAPER_START_PCT)
@@ -402,6 +425,8 @@ def _build_optimizer_config(
     base_cheap_price: float | None = getattr(data, "base_cheap_price", None)
 
     # grid_charge_soc_headroom + overnight_drain_safety_margin -> demand_window_target_soc_pct
+    # This is the clock window's target. With the price block switch on,
+    # apply_price_block replaces it once the slots are built (#1108).
     grid_charge_soc_headroom = (
         adaptive.get("grid_charge_soc_headroom", 0.0) if adaptive else 0.0
     )
@@ -443,6 +468,9 @@ def _build_optimizer_config(
         target_shortfall_penalty_per_pct=target_penalty,
         min_cycle_saving=min_cycle_saving,
         min_hold_saving=min_hold_saving,
+        # --- Price block (read by apply_price_block_flags) ---
+        block_min_spread=block_min_spread,
+        price_block_target=price_block_target,
         # --- Charge curve (Issue #905: configurable to match hardware) ---
         charge_taper_start_pct=charge_taper_start_pct,
         charge_taper_min_factor=charge_taper_min_factor,
@@ -459,6 +487,238 @@ def _build_optimizer_config(
         export_price_margin=export_price_margin,
         forecast_horizon_hours=float(getattr(data, "forecast_horizon_hours", 24.0)),
     )
+
+
+def _target_headroom_pct(data: Any) -> float:
+    """Adaptive headroom added on top of a demand-window target (%-points).
+
+    ``grid_charge_soc_headroom + overnight_drain_safety_margin``, the same two
+    terms ``_build_optimizer_config`` adds to the clock window's target. Zero
+    when no adaptive parameters are present.
+    """
+    adaptive = getattr(data, "adaptive_params", None)
+    if not adaptive:
+        return 0.0
+    return adaptive.get("grid_charge_soc_headroom", 0.0) + adaptive.get(
+        "overnight_drain_safety_margin", 0.0
+    )
+
+
+def price_block_target_soc(
+    block: TargetBlock | None,
+    *,
+    minimum_target_soc: float,
+    battery_target: float,
+    headroom_pct: float = 0.0,
+) -> float:
+    """Target SOC for a price-only block (docs/PRICE_BLOCK_TARGET.md step 4).
+
+    ``clamp(minimum_target_soc + needed_pct + headroom, minimum_target_soc,
+    battery_target)``: enough to carry the block's net load on top of the floor
+    the battery may not discharge below, and never more than the operator's
+    target. A long or heavily loaded evening routinely needs more than one
+    battery (the 2026-09-07 capture needs about 220%), and an inflated load
+    forecast (the 2026-09-05 weather extrapolation) inflates the need with it;
+    the ceiling bounds both at ``battery_target``.
+
+    With no block there is nothing to prepare for and the target is
+    ``minimum_target_soc``, which the battery sits at or above already, so the
+    terminal machinery is inert.
+
+    Args:
+        block: The detected block, or None.
+        minimum_target_soc: The discharge floor (%).
+        battery_target: The operator's demand-window target (%). The ceiling,
+            deliberately without headroom on top.
+        headroom_pct: The adaptive headroom the clock window's target carries.
+
+    Returns:
+        The target in [minimum_target_soc, battery_target]. Should the floor be
+        configured above the target, the target wins.
+
+    """
+    floor = min(minimum_target_soc, battery_target)
+    if block is None:
+        return floor
+    sized = minimum_target_soc + block.needed_pct + headroom_pct
+    if math.isnan(sized):
+        # No usable sizing: prepare fully, as the clock window would.
+        return battery_target
+    return max(floor, min(battery_target, sized))
+
+
+def apply_price_block(
+    slots: list[SlotContext],
+    optimizer_config: OptimizerConfig,
+    config_options: dict[str, Any],
+    data: Any,
+    *,
+    persist: bool = True,
+) -> TargetBlock | None:
+    """Apply the price block to the slots and size the planner's target to it.
+
+    The one call a planning path makes for the price block. With
+    ``switch.localshift_price_block_target`` off it changes neither a slot nor
+    the config. With it on, ``apply_price_block_flags`` moves the demand-window
+    flags onto the block and ``demand_window_target_soc_pct`` becomes the
+    block's load-sized target, or ``minimum_target_soc`` when there is no block.
+
+    The target can only be set here and not in ``_build_optimizer_config``: the
+    block is found on the built slots, after the solar corrections.
+
+    Args:
+        slots: The planning horizon, modified in place.
+        optimizer_config: The planner's config, modified in place.
+        config_options: Runner config options (``battery_target``,
+            ``minimum_target_soc``).
+        data: Coordinator data (previous block entry, adaptive headroom).
+        persist: Passed to ``apply_price_block_flags``.
+
+    Returns:
+        The block applied, or None when the switch is off or nothing qualified.
+
+    """
+    from custom_components.localshift.const import (
+        CONF_BATTERY_TARGET,
+        CONF_MINIMUM_TARGET_SOC,
+        DEFAULT_BATTERY_TARGET,
+        DEFAULT_MINIMUM_TARGET_SOC,
+    )
+
+    block = apply_price_block_flags(slots, optimizer_config, data, persist=persist)
+    if not optimizer_config.price_block_target:
+        return None
+
+    optimizer_config.demand_window_target_soc_pct = price_block_target_soc(
+        block,
+        minimum_target_soc=float(
+            config_options.get(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
+        ),
+        battery_target=float(
+            config_options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+        ),
+        headroom_pct=_target_headroom_pct(data),
+    )
+    return block
+
+
+TARGET_BLOCK_TELEMETRY_KEYS: tuple[str, ...] = (
+    "target_block_active",
+    "target_block_entry",
+    "target_block_end",
+    "target_block_target_pct",
+    "target_block_needed_kwh",
+    "target_block_reason",
+)
+"""The price block's attributes on ``sensor.localshift_optimizer_summary`` (#1109)."""
+
+
+TARGET_BLOCK_MEMORY_KEYS: tuple[str, ...] = (
+    "target_block_trough_price",
+    "target_block_trough_at",
+    "target_block_pending_change",
+    "target_block_pending_entry",
+    "target_block_pending_since",
+)
+"""What the price block remembers between plans, on the same sensor (#1114)."""
+
+
+def target_block_telemetry(
+    block: TargetBlock | None,
+    slots: list[SlotContext],
+    optimizer_config: OptimizerConfig,
+) -> dict[str, Any]:
+    """What the price block did on this plan, for the summary sensor.
+
+    Always returns every key in ``TARGET_BLOCK_TELEMETRY_KEYS``. The summary is
+    rebuilt on each plan and this record is written into it each time, so a plan
+    made with the switch off, or one that finds no block, overwrites whatever
+    the plan before it reported: ``target_block_active`` False and the rest None.
+
+    Args:
+        block: What ``apply_price_block`` returned for this plan.
+        slots: The slots it was applied to.
+        optimizer_config: The planner's config after ``apply_price_block``, so
+            ``demand_window_target_soc_pct`` is the block's clamped target.
+
+    Returns:
+        ``target_block_active``; ``target_block_entry`` and ``target_block_end``
+        (ISO timestamps: the start of the block's first slot and the end of its
+        last); ``target_block_target_pct`` (the clamped target the planner
+        used); ``target_block_needed_kwh`` (the unclamped need, which can exceed
+        the battery); ``target_block_reason``.
+
+    """
+    if block is None or not optimizer_config.price_block_target:
+        return {
+            key: False if key == "target_block_active" else None
+            for key in TARGET_BLOCK_TELEMETRY_KEYS
+        }
+    return {
+        "target_block_active": True,
+        "target_block_entry": slots[block.entry_idx].timestamp_iso,
+        "target_block_end": slot_end_iso(slots[block.end_idx]),
+        "target_block_target_pct": round(
+            optimizer_config.demand_window_target_soc_pct, 2
+        ),
+        "target_block_needed_kwh": round(block.needed_kwh, 3),
+        "target_block_reason": block.reason,
+    }
+
+
+def _stored_stamp(data: Any, name: str) -> str | None:
+    value = getattr(data, name, None)
+    return value if isinstance(value, str) else None
+
+
+def target_block_memory_telemetry(
+    data: Any, optimizer_config: OptimizerConfig
+) -> dict[str, Any]:
+    """What the price block is carrying between plans, for the summary sensor.
+
+    ``target_block_telemetry`` reports the block the planner worked to on this
+    plan. This reports the state behind it, read off the coordinator data after
+    ``apply_price_block``: the remembered trough the detector's reference can
+    fall back on, and any changed detection that is waiting out its dwell and
+    is therefore *not* the block reported.
+
+    Always returns every key in ``TARGET_BLOCK_MEMORY_KEYS``, all None with the
+    switch off.
+
+    Returns:
+        ``target_block_trough_price`` and ``target_block_trough_at`` (the
+        cheapest buy price observed since the last block, within 24 h, and when
+        it was last seen); ``target_block_pending_change`` (``"appear"``,
+        ``"move"`` or ``"disappear"``, None when nothing is pending);
+        ``target_block_pending_entry`` (the entry the pending detection would
+        move to); ``target_block_pending_since`` (when it was first seen, so it
+        is adopted ``ENTRY_DWELL_MINUTES`` after this if it persists).
+
+    """
+    record: dict[str, Any] = dict.fromkeys(TARGET_BLOCK_MEMORY_KEYS)
+    if not optimizer_config.price_block_target:
+        return record
+
+    history = getattr(data, "target_block_trough", None)
+    if isinstance(history, list) and history:
+        seen_at, price = history[0]
+        record["target_block_trough_price"] = price
+        record["target_block_trough_at"] = seen_at
+
+    since = _stored_stamp(data, "target_block_pending_since_iso")
+    if since is None:
+        return record
+    pending_entry = _stored_stamp(data, "target_block_pending_entry_iso")
+    if pending_entry is None:
+        change = "disappear"
+    elif _stored_stamp(data, "target_block_entry_iso") is None:
+        change = "appear"
+    else:
+        change = "move"
+    record["target_block_pending_change"] = change
+    record["target_block_pending_entry"] = pending_entry
+    record["target_block_pending_since"] = since
+    return record
 
 
 def _normalize_initial_soc(
