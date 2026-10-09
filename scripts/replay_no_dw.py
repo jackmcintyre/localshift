@@ -20,6 +20,14 @@ only in whether the demand window exists and how grid charging is admitted:
                   non-DW slot offers grid charge and the DP's cost function
                   alone decides — "trust the rate all day", literally — at
                   three cycle hurdles
+  block           the slice 1 design (docs/PRICE_BLOCK_TARGET.md): no clock
+                  demand window, switch.localshift_price_block_target ON, so
+                  the detected expensive block sets the deadline and the
+                  load-sized target; block_min_spread $0.08, cycle hurdle $0.25
+
+Whenever both ``dw`` and ``block`` run, the slice 1 gate is printed: per day,
+whether the block plan is identical to, below or above ``dw``, and how much the
+block arm grid-charges overnight (21:00-06:00, the #800 sawtooth check).
 
 Why: the tariff's demand charge is seasonal, and the shoulder season has just
 started. The planner has never run without a deadline, so before a live
@@ -35,6 +43,7 @@ Usage
   uv run scripts/replay_no_dw.py
   uv run scripts/replay_no_dw.py --arms dw,no_dw,gateless_mcs10 --json out.json
   uv run scripts/replay_no_dw.py --day 2026-09-07 --detail
+  uv run scripts/replay_no_dw.py --arms dw,no_dw,block     # slice 1 gate
 """
 
 from __future__ import annotations
@@ -93,6 +102,10 @@ LIVE_SWITCHES: dict[str, bool] = {
 
 DW_START = time(15, 0)
 DW_END = time(21, 0)
+# Overnight, for the #800 sawtooth check: from the end of the evening until
+# solar could plausibly be charging the battery again.
+OVERNIGHT_START = time(21, 0)
+OVERNIGHT_END = time(6, 0)
 
 ARMS: dict[str, dict[str, Any]] = {
     "dw": {"no_dw": False, "overrides": {}},
@@ -126,6 +139,15 @@ ARMS: dict[str, dict[str, Any]] = {
         "no_dw": True,
         "gateless": True,
         "overrides": {"min_cycle_saving": 0.0},
+    },
+    # Slice 1 of docs/PRICE_BLOCK_TARGET.md: the live config with the clock
+    # window gone and the price block in its place. The switch clears the clock
+    # window's flags itself; no_dw also takes the window out of everything
+    # upstream of the slots, so nothing the block arm sees depends on 15:00.
+    "block": {
+        "no_dw": True,
+        "switches": {"price_block_target": True},
+        "overrides": {"block_min_spread": 0.08, "min_cycle_saving": 0.25},
     },
 }
 
@@ -202,6 +224,7 @@ def run_arm(scenario: dict[str, Any], arm: dict[str, Any]) -> dict[str, Any]:
     switches.update(LIVE_SWITCHES)
     if arm["no_dw"]:
         switches["demand_window_block"] = False
+    switches.update(arm.get("switches", {}))
 
     entry = create_mock_entry(overrides)
     engine = ComputationEngine(
@@ -250,6 +273,11 @@ def run_arm(scenario: dict[str, Any], arm: dict[str, Any]) -> dict[str, Any]:
     return _extract(result, summary, decisions, data)
 
 
+def _is_overnight(when: datetime) -> bool:
+    clock = when.time()
+    return clock >= OVERNIGHT_START or clock < OVERNIGHT_END
+
+
 class _Tally:
     """Accumulates plan behaviour over the decision list."""
 
@@ -263,6 +291,8 @@ class _Tally:
         self.import_post_dw_kwh = 0.0
         self.export_slots = 0
         self.export_kwh = 0.0
+        self.overnight_charge_kwh = 0.0
+        self.overnight_charge_slots = 0
         self.soc_at_dw_start: float | None = None
         self.soc_at_dw_end: float | None = None
         self.min_soc: float | None = None
@@ -285,6 +315,9 @@ class _Tally:
 
         self._add_soc(dec.get("predicted_soc_pct"), before_dw, in_dw)
         self._add_flows(dec, imp, before_dw, in_dw)
+        if dec.get("grid_charge") and _is_overnight(when):
+            self.overnight_charge_kwh += imp
+            self.overnight_charge_slots += 1
 
         letter = ACTION_LETTER.get(dec.get("action", "hold"), "?")
         self.timeline.append("_" if in_dw and letter == "." else letter)
@@ -369,6 +402,14 @@ def _extract(
         "import_post_dw_kwh": round(t.import_post_dw_kwh, 3),
         "export_slots": t.export_slots,
         "export_kwh": round(t.export_kwh, 3),
+        "overnight_charge_kwh": round(t.overnight_charge_kwh, 3),
+        "overnight_charge_slots": t.overnight_charge_slots,
+        "slot0_action": decisions[0].get("action") if decisions else None,
+        "target_block_active": bool(summary.get("target_block_active")),
+        "target_block_entry": summary.get("target_block_entry"),
+        "target_block_end": summary.get("target_block_end"),
+        "target_block_target_pct": summary.get("target_block_target_pct"),
+        "target_block_needed_kwh": summary.get("target_block_needed_kwh"),
         "effective_cheap_price": getattr(data, "effective_cheap_price", None),
         "base_cheap_price": getattr(data, "base_cheap_price", None),
         "timeline": "".join(t.timeline),
@@ -463,6 +504,106 @@ def _print_deltas(results: dict[str, dict[str, Any]], a_name: str, b_name: str) 
     print(f"  total: cost {tot['cost']:+.3f}  grid-charge kWh {tot['chg']:+.2f}")
 
 
+def _delta_pairs(arm_names: list[str]) -> list[tuple[str, str]]:
+    """(a, b) pairs to print as "b minus a": the first arm against every other,
+    plus block minus dw whenever both ran, whichever order they were given in.
+    """
+    baseline = arm_names[0]
+    pairs = [(baseline, other) for other in arm_names[1:]]
+    gate_pair = ("dw", "block")
+    if set(gate_pair) <= set(arm_names) and gate_pair not in pairs:
+        pairs.append(gate_pair)
+    return pairs
+
+
+def _plan_of(out: dict[str, Any]) -> list[tuple[Any, ...]]:
+    """What a plan does slot by slot, without the reason text."""
+    return [
+        (s.get("t"), s.get("act"), s.get("soc"), s.get("imp"), s.get("exp"))
+        for s in out.get("slots", [])
+    ]
+
+
+def _relation(dw: dict[str, Any], block: dict[str, Any], delta: float) -> str:
+    if delta > 0:
+        return "above"
+    if delta < 0:
+        return "below"
+    return (
+        "identical" if _plan_of(dw) == _plan_of(block) else "equal cost, different plan"
+    )
+
+
+def gate_row(day: str, by_arm: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """One day of the slice 1 gate: the block arm against the dw arm.
+
+    ``ok`` is the part of the acceptance that holds on every day: the block
+    costs no more than ``dw`` and grid-charges nothing overnight. Whether a day
+    that had to be ``identical`` was, is read off ``relation``.
+    """
+    dw, block = by_arm["dw"], by_arm["block"]
+    if "error" in dw or "error" in block:
+        return {"day": day, "relation": "incomparable", "ok": False}
+    dw_cost = dw.get("projected_net_cost")
+    block_cost = block.get("projected_net_cost")
+    if dw_cost is None or block_cost is None:
+        return {"day": day, "relation": "incomparable", "ok": False}
+    delta = block_cost - dw_cost
+    overnight = float(block.get("overnight_charge_kwh") or 0.0)
+    return {
+        "day": day,
+        "dw": dw_cost,
+        "block": block_cost,
+        "delta": delta,
+        "relation": _relation(dw, block, delta),
+        "overnight_charge_kwh": overnight,
+        "block_entry": block.get("target_block_entry"),
+        "block_end": block.get("target_block_end"),
+        "ok": delta <= 0 and overnight == 0,
+    }
+
+
+def gate_rows(results: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Gate rows for every day on which both the dw and block arms ran."""
+    return [
+        gate_row(day, by_arm)
+        for day, by_arm in results.items()
+        if "dw" in by_arm and "block" in by_arm
+    ]
+
+
+def _clock(stamp: Any) -> str:
+    return datetime.fromisoformat(stamp).strftime("%H:%M") if stamp else "-"
+
+
+def _print_gate(results: dict[str, dict[str, Any]]) -> bool | None:
+    """Print the slice 1 gate. None when the dw and block arms did not both run."""
+    rows = gate_rows(results)
+    if not rows:
+        return None
+    print("\nslice 1 gate: block against dw (docs/PRICE_BLOCK_TARGET.md)")
+    for row in rows:
+        if row["relation"] == "incomparable":
+            print(f"  {row['day']}: incomparable  FAIL")
+            continue
+        print(
+            f"  {row['day']}: dw {row['dw']:.3f}  block {row['block']:.3f}  "
+            f"delta {row['delta']:+.3f}  {row['relation']:<27}"
+            f"block {_clock(row['block_entry'])}-{_clock(row['block_end'])}  "
+            f"overnight grid-charge {row['overnight_charge_kwh']:.2f} kWh  "
+            f"{'ok' if row['ok'] else 'FAIL'}"
+        )
+    passed = all(row["ok"] for row in rows)
+    identical = sum(row["relation"] == "identical" for row in rows)
+    print(
+        f"slice 1 gate: {'PASS' if passed else 'FAIL'} "
+        f"({len(rows)} day(s): {identical} identical to dw, "
+        f"{sum(row['relation'] == 'below' for row in rows)} below, "
+        f"{sum(row['relation'] == 'above' for row in rows)} above)"
+    )
+    return passed
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dir", default="simulations/replay-nodw")
@@ -511,9 +652,9 @@ def main() -> int:
     if args.detail:
         _print_detail(results)
     _print_timelines(results)
-    baseline = next(iter(arms))
-    for other in list(arms)[1:]:
+    for baseline, other in _delta_pairs(list(arms)):
         _print_deltas(results, baseline, other)
+    _print_gate(results)
 
     if args.json:
         Path(args.json).write_text(json.dumps(results, indent=2, default=str) + "\n")

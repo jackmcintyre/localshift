@@ -10,6 +10,7 @@ thing that matters is the energy rate?**
 scripts/export_replay_days.py --days 10 --hour 9 --out simulations/replay-nodw
 uv run scripts/replay_no_dw.py --arms dw,no_dw,gateless_mcs25,gateless_mcs10,gateless_mcs0
 uv run scripts/replay_no_dw.py --day 2026-09-07 --arms dw,no_dw --detail
+uv run scripts/replay_no_dw.py --arms dw,no_dw,block      # slice 1 gate (below)
 ```
 
 Ten days, 2026-08-29 to 2026-09-07, captured at 09:00. Only
@@ -111,3 +112,105 @@ hysteresis means a wrong first value is only partly corrected later. This
 harness seeds the horizon from the price forecast before the first pass and
 runs two passes. The adaptive-arms harness does not, and its absolute numbers
 should be read with that in mind (all its arms were affected equally).
+
+## Slice 1 gate (2026-10-09)
+
+The acceptance gate for slice 1 of `docs/PRICE_BLOCK_TARGET.md` (#1104, #1110):
+a `block` arm, which is the live config with the clock demand window removed
+and `switch.localshift_price_block_target` on.
+
+| arm | demand window | deadline and target | block spread | cycle hurdle |
+|---|---|---|---|---|
+| `block` | none | the detected expensive block; target sized to the block's net load, clamped to 5–95% | $0.08/kWh | $0.25/kWh |
+
+```bash
+uv run scripts/replay_no_dw.py --arms dw,no_dw,block
+uv run scripts/replay_no_dw.py --dir simulations/replay --arms dw,no_dw,block
+```
+
+Whenever `dw` and `block` both run the harness prints a per-day gate: whether
+the block plan is identical to `dw` (same cost and the same action, SOC, import
+and export in every slot), below it or above it, and how much the block arm
+grid-charges between 21:00 and 06:00.
+
+### Which days it ran on
+
+All ten days of the original study, 2026-08-29 to 2026-09-07, captured at
+09:00. Only `2026-09-07.json` was on disk in this directory. The recorder
+turned out to retain about forty days, not ten, so 2026-08-31 to 2026-09-06
+were re-exported from Home Assistant history on 2026-10-09. The re-export
+of 2026-09-07 is byte-identical to the committed file, and the re-exports of
+2026-08-31 to 2026-09-03 are byte-identical to the copies already in
+`simulations/replay/`, so the exporter still reproduces the study's inputs.
+2026-08-29 and 2026-08-30 have rolled off the recorder; those two were copied
+from `simulations/replay/`, where the same exporter wrote them at the same
+hour. No day was unavailable. The `dw` and `no_dw` columns reproduce the
+2026-09-08 table above to the cent on all ten days.
+
+### Result
+
+Projected net cost per day, $. Block times are the start of the block's first
+slot and the end of its last.
+
+| day | solar kWh | `dw` | `no_dw` | `block` | `block` − `dw` | plan vs `dw` | block | target % | overnight grid charge kWh |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-08-29 | 25.0 | 0.310 | 0.310 | 0.310 | 0.000 | identical | 17:30–23:00 | 59.4 | 0 |
+| 2026-08-30 | 30.5 | -0.065 | -0.065 | -0.065 | 0.000 | identical | 17:00–04:00 | 50.9 | 0 |
+| 2026-08-31 | 30.4 | -0.167 | -0.167 | -0.167 | 0.000 | identical | 17:00–22:00 | 26.9 | 0 |
+| 2026-09-01 | 30.9 | -2.082 | -2.082 | -2.082 | 0.000 | identical | 17:00–20:30 | 38.4 | 0 |
+| 2026-09-02 | 21.2 | 0.004 | 0.004 | 0.004 | 0.000 | identical | 16:30–22:00 | 27.6 | 0 |
+| 2026-09-03 | 30.9 | 0.059 | 0.059 | 0.059 | 0.000 | identical | 17:00–04:00 | 44.8 | 0 |
+| 2026-09-04 | 31.3 | -0.076 | -0.076 | -0.076 | 0.000 | identical | 17:30–19:30 | 17.0 | 0 |
+| 2026-09-05 | 27.1 | -1.631 | -1.631 | -1.631 | 0.000 | identical | none found | – | 0 |
+| 2026-09-06 | 32.9 | -0.189 | -0.189 | -0.189 | 0.000 | identical | 17:00–04:00 | 47.3 | 0 |
+| **2026-09-07** | 25.6 | **6.054** | **6.934** | **6.030** | **-0.024** | different | 16:30–00:30 | 95.0 | 0 |
+
+Against the acceptance in #1110:
+
+- **Identical to `dw` on the nine sunny days: yes**, nine of nine, slot for slot.
+- **At or below `dw` on 2026-09-07: yes**, 6.030 against 6.054 (−$0.024), and
+  $0.90 better than `no_dw`. The block enters at 16:30, not at the clock
+  window's 15:00, and its need is 29.7 kWh, about 220% of the battery, so the
+  clamp pins the target at 95%. The plan grid-charges 16.5 kWh before 16:30 at
+  up to 13c (`dw`: 13.2 kWh before 15:00 at up to 8c) and none after.
+- **No overnight grid charging in the block arm: yes**, zero on every day.
+
+Harness verdict: `slice 1 gate: PASS (10 day(s): 9 identical to dw, 1 below, 0 above)`.
+
+### The four older captures, outside the acceptance set
+
+`simulations/replay/` also holds 2026-08-25 to 2026-08-28, captured for the
+Slice 0 study. They are not part of the #1110 acceptance (they predate the
+shoulder-season study and three of them are short-solar winter days), but the
+gate was run on them too and one of them is above `dw`:
+
+| day | solar kWh | `dw` | `no_dw` | `block` | `block` − `dw` | plan vs `dw` | block | target % | overnight grid charge kWh |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-08-25 | 6.7 | 1.633 | 1.206 | 1.206 | -0.427 | different | none found | – | 0 |
+| **2026-08-26** | 12.0 | **1.712** | **2.257** | **1.902** | **+0.190** | different | 17:30–21:00 | 39.0 | 0 |
+| 2026-08-27 | 16.9 | 0.304 | 0.000 | 0.000 | -0.304 | different | 17:00–23:30 | 29.9 | 0 |
+| 2026-08-28 | 29.8 | -0.201 | -0.201 | -0.201 | 0.000 | identical | 17:00–02:30 | 34.1 | 0 |
+
+Harness verdict on that directory: `FAIL (10 day(s): 7 identical to dw, 2
+below, 1 above)`; the ten are these four plus 08-29 to 09-03 again.
+
+- **2026-08-26 is $0.19 dearer than `dw`.** The cheapest pre-evening price is
+  10.8c, so a slot is dear from 18.8c. The evening sits at 18.8–19.2c until
+  21:00 and then eases to 17–18c for the rest of the night: still 6–7c above
+  the trough, but under the 8c spread. The block is therefore 17:30–21:00, the
+  target is sized to those slots only (4.6 kWh, 39%), the battery reaches the
+  floor at 22:30, and 6.7 kWh is imported overnight at 17–18c that `dw` had
+  bought at 11c. It is still $0.36 better than `no_dw`. This is the spread
+  doing what it says, not a detector fault, and the knob was left at $0.08;
+  it is the first measured dollar cost of that value and is for the operator
+  to weigh, not for the harness to tune away.
+- **2026-08-25 and 2026-08-27 are below `dw`** because `dw` buys 12.4 and
+  4.2 kWh to reach a 95% readiness target and the block arm does not (no block
+  on a flat 08-25; a 30% target on 08-27 that solar meets). The cost function
+  has no demand-charge term, so in season that saving is not real money. These
+  three days are an in-season question for slice 2, where the charge window
+  keeps the 95% target.
+
+### Flap test
+
+Not yet run (#1111).
