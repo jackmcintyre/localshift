@@ -1,6 +1,8 @@
 # Price-driven target blocks
 
-**Status:** design, 2026-09-08. Not built. Evidence in
+**Status:** design, 2026-09-08. Slice 1 is built behind
+`switch.localshift_price_block_target` (default off) and has not passed its
+flap test: see "Trough memory and entry dwell" below. Evidence in
 `simulations/replay-nodw/README.md`; harness `scripts/replay_no_dw.py`.
 
 ## The problem
@@ -80,8 +82,11 @@ which is the #800 protection, unchanged.
 For the planning horizon after `now`:
 
 1. `p_ref(i)` = the cheapest buy price in any slot before `i` (the cheapest
-   charge the battery could have taken). Monotone non-increasing in `i`, so it
-   cannot jitter a boundary on its own.
+   charge the battery could have taken), or the remembered trough when that is
+   cheaper (#1114, below). Within one plan it is monotone non-increasing in
+   `i`, so it cannot jitter a boundary on its own. Between plans that was not
+   true of the horizon alone: the reference rose as the cheap morning became
+   the past, and the block vanished mid-morning (#1111).
 2. A slot is *dear* when `buy_price(i) >= p_ref(i) + block_min_spread` and
    `consumption_kwh(i) > solar_kwh(i)`.
 3. The block is the first maximal run of dear slots (single-slot gaps
@@ -108,7 +113,73 @@ visible before it ships.
 
 Hysteresis: the entry index is held from the previous plan when the new
 detection lands within one slot of it. Whether that is sufficient is measured
-(see the flap test below), not assumed.
+(see the flap test below), not assumed. It was not (#1111), which is what the
+next section is for.
+
+## Trough memory and entry dwell (#1114)
+
+The flap test failed on three of five solar-deficit days for two reasons, and
+the fix decided on 2026-10-09 addresses each. Neither is an operator entity.
+`find_target_block` stays a pure function; the state lives on the coordinator
+data and is handled where the flags are written (`apply_price_block_flags`).
+
+**Trough memory.** On every live plan the current slot's buy price is noted.
+What is kept is the cheapest price observed since the previous block ended,
+within the last 24 hours, with the time it was last seen, and the detector's
+reference becomes `min(remembered trough, cheapest earlier slot in the
+horizon)`. The trough can only lower the reference, and it never makes the
+current slot dear.
+
+- *Reset.* When the adopted block's entry arrives the trough is dropped, and
+  nothing is remembered again until that block has ended. The reset is at the
+  entry and not the end on purpose: a trough kept into the block would make
+  every remaining slot dear against a price the battery can no longer buy at.
+- *First run and restart.* Nothing is remembered and nothing survives a
+  restart. The first plan detects on the horizon alone, exactly as before
+  #1114, so a block that only the forgotten trough justified is gone until the
+  horizon justifies it again. No deadline is invented from a price nobody
+  recorded.
+- *Day rollover.* Nothing is keyed on the calendar day. A cheap price at 23:30
+  funds the next evening.
+- *A day with no block.* The memory is a rolling 24-hour minimum, so
+  yesterday's trough expires on its own and the next-cheapest price still
+  inside the window takes over.
+
+**Entry dwell.** A changed detection is adopted only after it has persisted
+for `ENTRY_DWELL_MINUTES` (60). A change is the entry moving by more than the
+one-slot hysteresis, a block appearing, or a block disappearing. Until then
+the previously adopted block stands whole, its need re-sized on the current
+forecast. A revision that reverts inside the dwell never reaches the planner;
+a different candidate restarts the clock; a candidate wobbling by one slot is
+the same candidate.
+
+- *The very first plan* (and the first after a restart) has nothing to hold,
+  so its detection is adopted at once. That includes "no block": a block that
+  appears later has to wait out the dwell like any other change.
+- *A held block whose entry arrives* while a change is still pending was
+  honoured as held: the battery was prepared for it. It is retired like any
+  other block, the trough goes with it, and the fresh detection on that plan
+  is adopted at once.
+- *The shadow comparison* solves on a different price series. It gets a plain
+  detection on its own prices and neither reads the trough nor moves the
+  dwell.
+
+Both are visible on `sensor.localshift_optimizer_summary`:
+`target_block_trough_price` and `target_block_trough_at`, and for a change
+that has not yet been adopted `target_block_pending_change` (`appear`, `move`
+or `disappear`), `target_block_pending_entry` and
+`target_block_pending_since`. `target_block_entry` is always the block the
+planner actually worked to.
+
+**Result (2026-10-09): the flap test still fails.** With the state carried
+between captures the block's boundary is steady where the trough was really
+observed (2026-09-11, 2026-09-26), but three things remain, none of which a
+dwell value fixes: a revision that outlasts 60 minutes on 2026-09-21 at
+30-minute cadence, a block on 2026-09-23 that rested on a forecast trough
+which never arrived and is correctly let go, and a slot-0 action that
+alternates because the load-sized target moves from plan to plan. Holding the
+block also has a measured cost on some plans: the top-up just before entry
+buys at the top. Numbers in `simulations/replay-nodw/README.md`.
 
 ## Slices
 
@@ -149,9 +220,19 @@ block. This is the "where we sourced it and the UI" work deferred from the
   `battery_target`); wrong-low imports at the peak. The clamp bounds both,
   and the replay's 2026-09-07 day *is* the inflated case.
 - **Boundary jitter.** The block's entry moves the terminal index, and the
-  water level with it. `p_ref` cannot jitter; the threshold crossing can.
-  The flap test is the acceptance criterion, and if one-slot hysteresis is
-  not enough the next lever is a minimum dwell on the entry time.
+  water level with it. `p_ref` cannot jitter within a plan; between plans it
+  did, and the threshold crossing can at any time. The flap test is the
+  acceptance criterion. One-slot hysteresis was not enough (#1111); trough
+  memory and a 60-minute entry dwell were added (#1114) and are not enough
+  either, as measured.
+- **Target jitter.** The load-sized target follows the load forecast, which
+  follows the last hour's load. On 2026-09-11 it read between 51% and 95%
+  across thirteen half-hourly plans with the block's boundary unmoved, and the
+  slot-0 action alternated with it. Nothing damps this yet.
+- **A remembered trough is a price that is gone.** It keeps the deadline alive
+  after the cheap slots have passed, and the hard entry target then buys
+  whatever is left, including the slot just before the block at close to the
+  block's own price.
 - **Perfect-foresight replay.** Solar in the captures is measured, not
   forecast. The two-evening dry run is the real-solar check.
 - **Interaction with spike funding.** #910 excludes demand-window slots from

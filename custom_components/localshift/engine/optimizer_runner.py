@@ -30,7 +30,7 @@ from .optimizer_dp import (
     PlannerAction,
     SlotContext,
 )
-from .slots import SlotBuilder, apply_price_block_flags
+from .slots import SlotBuilder, apply_price_block_flags, slot_end_iso
 from .target_block import TargetBlock
 
 _LOGGER = logging.getLogger(__name__)
@@ -223,6 +223,7 @@ def _run(
     data.optimizer_summary.update(
         target_block_telemetry(target_block, slots, optimizer_config)
     )
+    data.optimizer_summary.update(target_block_memory_telemetry(data, optimizer_config))
 
     _LOGGER.debug(
         "Optimizer cycle %s complete: success=%s slots=%d solve=%.3fs net_cost=%.4f",
@@ -612,13 +613,14 @@ TARGET_BLOCK_TELEMETRY_KEYS: tuple[str, ...] = (
 """The price block's attributes on ``sensor.localshift_optimizer_summary`` (#1109)."""
 
 
-def _slot_end_iso(slot: SlotContext) -> str | None:
-    """When ``slot`` ends, in the same form as its ``timestamp_iso``."""
-    try:
-        start = datetime.fromisoformat(slot.timestamp_iso)
-    except (TypeError, ValueError):
-        return None
-    return (start + timedelta(minutes=slot.slot_interval_minutes)).isoformat()
+TARGET_BLOCK_MEMORY_KEYS: tuple[str, ...] = (
+    "target_block_trough_price",
+    "target_block_trough_at",
+    "target_block_pending_change",
+    "target_block_pending_entry",
+    "target_block_pending_since",
+)
+"""What the price block remembers between plans, on the same sensor (#1114)."""
 
 
 def target_block_telemetry(
@@ -655,13 +657,68 @@ def target_block_telemetry(
     return {
         "target_block_active": True,
         "target_block_entry": slots[block.entry_idx].timestamp_iso,
-        "target_block_end": _slot_end_iso(slots[block.end_idx]),
+        "target_block_end": slot_end_iso(slots[block.end_idx]),
         "target_block_target_pct": round(
             optimizer_config.demand_window_target_soc_pct, 2
         ),
         "target_block_needed_kwh": round(block.needed_kwh, 3),
         "target_block_reason": block.reason,
     }
+
+
+def _stored_stamp(data: Any, name: str) -> str | None:
+    value = getattr(data, name, None)
+    return value if isinstance(value, str) else None
+
+
+def target_block_memory_telemetry(
+    data: Any, optimizer_config: OptimizerConfig
+) -> dict[str, Any]:
+    """What the price block is carrying between plans, for the summary sensor.
+
+    ``target_block_telemetry`` reports the block the planner worked to on this
+    plan. This reports the state behind it, read off the coordinator data after
+    ``apply_price_block``: the remembered trough the detector's reference can
+    fall back on, and any changed detection that is waiting out its dwell and
+    is therefore *not* the block reported.
+
+    Always returns every key in ``TARGET_BLOCK_MEMORY_KEYS``, all None with the
+    switch off.
+
+    Returns:
+        ``target_block_trough_price`` and ``target_block_trough_at`` (the
+        cheapest buy price observed since the last block, within 24 h, and when
+        it was last seen); ``target_block_pending_change`` (``"appear"``,
+        ``"move"`` or ``"disappear"``, None when nothing is pending);
+        ``target_block_pending_entry`` (the entry the pending detection would
+        move to); ``target_block_pending_since`` (when it was first seen, so it
+        is adopted ``ENTRY_DWELL_MINUTES`` after this if it persists).
+
+    """
+    record: dict[str, Any] = dict.fromkeys(TARGET_BLOCK_MEMORY_KEYS)
+    if not optimizer_config.price_block_target:
+        return record
+
+    history = getattr(data, "target_block_trough", None)
+    if isinstance(history, list) and history:
+        seen_at, price = history[0]
+        record["target_block_trough_price"] = price
+        record["target_block_trough_at"] = seen_at
+
+    since = _stored_stamp(data, "target_block_pending_since_iso")
+    if since is None:
+        return record
+    pending_entry = _stored_stamp(data, "target_block_pending_entry_iso")
+    if pending_entry is None:
+        change = "disappear"
+    elif _stored_stamp(data, "target_block_entry_iso") is None:
+        change = "appear"
+    else:
+        change = "move"
+    record["target_block_pending_change"] = change
+    record["target_block_pending_entry"] = pending_entry
+    record["target_block_pending_since"] = since
+    return record
 
 
 def _normalize_initial_soc(

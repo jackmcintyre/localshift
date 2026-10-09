@@ -271,7 +271,12 @@ every day of the wider sweep on which the block arm grid-charged (09-11, 09-21,
 09-23, 09-26). The 09:00 capture of 2026-09-07 is byte-identical to
 `simulations/replay-nodw/2026-09-07.json`.
 
-**Verdict (2026-10-09): FAIL. Two of five solar-deficit days pass.**
+The table and analysis below are the original #1111 result, kept as history:
+every capture planned cold, each alone. The harness still prints that as its
+cold-start column. The verdict is now read from a run that carries the block's
+state between captures; that result is in the next section.
+
+**Verdict (2026-10-09, #1111, cold start): FAIL. Two of five solar-deficit days pass.**
 
 | day | 09:00 | 11:00 | 13:00 | 14:30 | slot-0 action | verdict |
 |---|---|---|---|---|---|---|
@@ -325,3 +330,165 @@ minimum dwell on the entry time. That would cover the second mechanism; the
 first needs the block's existence held as well as its entry, or a `p_ref` that
 remembers the cheapest price the day has already offered. That is a design
 decision for the follow-up, not something this gate settles.
+
+### Flap test with trough memory and entry dwell (#1114, 2026-10-09)
+
+The fix decided for #1111's two mechanisms, built behind the same switch:
+
+- **Trough memory.** The cheapest buy price actually observed in the current
+  slot since the previous block ended, within the last 24 h, is kept on the
+  coordinator data and passed to the detector, whose reference becomes
+  `min(remembered trough, cheapest earlier slot in the horizon)`. It is dropped
+  when the adopted block's entry arrives and nothing is remembered again until
+  that block has ended.
+- **Entry dwell.** A changed detection (entry moved by more than the one-slot
+  hysteresis, or the block appearing or disappearing) is adopted only after it
+  has persisted for 60 minutes (`ENTRY_DWELL_MINUTES`, an internal constant).
+  Until then the previously adopted block stands, re-sized on the current
+  forecast.
+
+`--flap` now carries that state from each capture to the next in time order,
+as live carries it from plan to plan, and the PASS / FAIL is read from that
+run. The cold-start result is printed beside it, along with the `dw` arm's
+cost and slot-0 action on the same captures.
+
+**What the replay can and cannot seed.** A capture is the price sensor at one
+instant. Its forecast list opens with the five-minute interval that had just
+ended at capture time, at the price live saw as current (one interval, a few
+when the sensor was slightly stale). That is a genuinely observed past price
+and the harness feeds it to the trough at its own timestamp, for every capture.
+Nothing earlier is in a capture, so the first capture of a day starts cold
+apart from that one interval: no overnight or early-morning price is assumed,
+where live would have had everything since the previous evening.
+
+This matters. A capture taken exactly on the half-hour builds its slot 0 from
+the *forecast* for the interval just starting, not the price of the interval
+just ended, and on 2026-09-11 those differ by 3–4c (8.2c observed at 08:55,
+11.6c forecast for 09:00). Without the past interval the trough on that day is
+11.6c and the block is still lost, at 13:00 once the dwell runs out.
+
+**Verdict (2026-10-09, state carried): FAIL. Three of five days pass on the
+committed two-hour captures and two of five on 30-minute captures. The #1114
+acceptance is not met.**
+
+Committed captures (`simulations/replay-nodw-flap/`), block entry per capture:
+
+| day | 09:00 | 11:00 | 13:00 | 14:30 | slot-0 action | verdict | cold start |
+|---|---|---|---|---|---|---|---|
+| 2026-09-07 | 16:30 | 16:30 | 16:30 | 16:30 | hold, hold, hold, hold | PASS | PASS |
+| 2026-09-11 | 17:00 | 17:00 | 17:00 | 17:00 | hold, hold, charge, hold | PASS | FAIL |
+| 2026-09-21 | 17:00 | 17:00 | 17:00 | 17:00 | charge, hold, charge, hold | **FAIL** | FAIL |
+| 2026-09-23 | 18:00 | 18:00 | none | none | hold, hold, hold, hold | **FAIL** | FAIL |
+| 2026-09-26 | 17:00 | 17:00 | 17:00 | 17:00 | boost, boost, boost, hold | PASS | PASS |
+
+Denser captures, every 30 minutes from 09:00 to 15:00 (13 per day, not
+committed; `export_replay_days.py --date <day> --time 09:00,09:30,...,15:00`
+rebuilds them while the recorder holds the day):
+
+| day | block entry through the day | verdict | failing criterion | `dw` arm slot-0 also charge / hold / charge |
+|---|---|---|---|---|
+| 2026-09-07 | 16:30 at all 13 | PASS | – | no |
+| 2026-09-11 | 17:00 at all 13 | **FAIL** | slot-0 action only | no |
+| 2026-09-21 | 17:00 ×3, 14:30 from 10:30 ×6, 16:30 from 13:30 ×4 | **FAIL** | entry −150 min and +120 min; slot-0 action | yes |
+| 2026-09-23 | 18:00 at all 13 | PASS | – | yes |
+| 2026-09-26 | 17:00 at all 13 | **FAIL** | slot-0 action only | yes |
+
+What changed against the #1111 result:
+
+- **Mechanism 1 (the trough rolls off) is fixed where the trough was real.**
+  2026-09-11 holds 17:00 at every capture on both cadences (cold: gone by
+  11:00). 2026-09-26 holds 17:00 at all 13 half-hour captures, where the cold
+  detector's block appears or disappears six times.
+- **Mechanism 2 (forecast revision) is absorbed at two-hour cadence and not at
+  30 minutes.** On 2026-09-21 the 11:00 revision to 15:00 is held pending and
+  gone by 13:00, so the entry stays at 17:00. The half-hour captures show the
+  revision actually lasted from 09:30 to about 12:00: it outlasts the dwell,
+  is adopted at 10:30, and is reversed at 13:30.
+
+What still fails, and why no dwell value fixes it:
+
+1. **2026-09-21, entry, 30-minute captures.** Measured at other dwell values,
+   as evidence and not as a setting: the entry still moves at 60, 90 and 120
+   minutes and holds at 17:00 only from 180. The constant was left at 60.
+2. **2026-09-23, two-hour captures: the block is dropped.** The 09:00 block
+   rested on a *forecast* trough of 12.3c for midday that never arrived (the
+   afternoon cleared at 17–20c) and on an evening that softened from 21.9 to
+   20.4c. Nothing observed justifies it, the detection disappears at 11:00 and
+   the dwell lets it go at 13:00. At 180 minutes it goes at 14:30 instead. Only
+   a day-long latch keeps it, which is the design that was ruled out. On the
+   half-hour captures the block survives because a 11.5c interval at 09:25 is
+   in the record, and even there the disappearance is pending from 14:30 and
+   would be adopted at 15:30, after the last capture. Whether a block that was
+   justified only by a forecast should count as a flap when it goes once and
+   stays gone is a question about the criterion, not something tuned here.
+3. **Slot-0 action goes charge / hold / charge** on 2026-09-21 (both
+   cadences), 2026-09-11 and 2026-09-26 (30-minute). The entry is steady on
+   the last two, so this is not the boundary. Two things drive it. The
+   load-sized target moves with the load forecast from capture to capture
+   (2026-09-11: 95, 71, 74, 95, 95, 95, 95, 95, 95, 76, 95, 51, 95%), and a
+   capture whose target is already met holds. And the planner re-picks the
+   cheapest slot as the price forecast is revised, which the `dw` arm does
+   too: it goes charge / hold / charge on three of the five days at 30-minute
+   cadence. On 2026-09-11 it does not, so there the alternation is the block
+   arm's own. The #1111 caveat applies with more force at this cadence: each
+   capture starts from the SOC live reached under the clock window.
+
+**Cost of persisting the block (2026-09-11 and 2026-09-23).** Projected net
+cost of the carried block arm against `dw` and against no block at all, from
+the same capture. Each row is one plan from the SOC live had reached, so the
+rows are not additive.
+
+| capture | block | target % | grid charge scheduled | block arm $ | `dw` $ | block − `dw` | no block $ |
+|---|---|---|---|---|---|---|---|
+| 09-11 11:00 | 17:00–00:30 | 95.0 | 14.0 kWh at 9.4–10.5c, then 1.9 kWh at 15.0c at 16:30 | 4.748 | 4.740 | +0.008 | 5.184 |
+| 09-11 13:00 | 17:00–00:30 | 95.0 | 8.0 kWh at 11.8–12.2c, then 1.7 kWh at 15.2c at 16:30 | 5.490 | 5.479 | +0.011 | 5.699 |
+| 09-11 14:30 | 17:00–01:00 | 39.9 | none (battery at 89%) | -0.123 | -0.123 | 0.000 | -0.123 |
+| 09-23 11:00 | 18:00–20:30, held, disappearance pending | 38.3 | 8.1 kWh at 12.8–13.6c, then 2.2 kWh at 18.3c at 16:30 | 4.150 | 4.075 | +0.075 | 4.127 |
+| 09-23 13:00 | none | – | none | 3.370 | 3.519 | -0.149 | 3.370 |
+| 09-23 14:30 | none | – | none | 2.547 | 2.702 | -0.155 | 2.547 |
+
+At those three hours the persisted block is within a cent of `dw` on
+2026-09-11 and $0.21–0.44 better than losing the block. The half-hour captures
+are less kind. Of 13 captures per day the block arm is above `dw` by more than
+ten cents on five:
+
+| capture | block arm $ | `dw` $ | block − `dw` | no block $ | block − no block |
+|---|---|---|---|---|---|
+| 09-11 12:00 | 10.704 | 10.395 | +0.309 | 9.947 | +0.757 |
+| 09-11 12:30 | 5.228 | 4.908 | +0.320 | 5.019 | +0.209 |
+| 09-23 09:30 | 3.934 | 3.409 | +0.525 | 3.595 | +0.339 |
+| 09-23 10:00 | 3.748 | 3.243 | +0.505 | 3.470 | +0.278 |
+| 09-23 11:00 | 4.391 | 4.075 | +0.316 | 4.127 | +0.264 |
+
+Two things are visible in those plans, and both are the remembered trough
+funding a deadline the remaining prices cannot fund well:
+
+- **The top-up just before entry buys at the top.** Every plan that still has
+  a shortfall takes the last slot or two before the block: 15.0–15.2c at 16:30
+  for a 16.5–17.5c evening on 2026-09-11, 18.3c at 16:30 and 19.5c at 17:30
+  for a 19–21c evening on 2026-09-23. After round-trip loss (87%) those are
+  break-even at best and a loss at worst. This is the hard entry target doing
+  what it did on 2026-09-21 in the sweep.
+- **On 2026-09-23 the block arm does not buy the day's cheapest slots.** At
+  09:30 `dw` charges at 12.4c from 13:30 to 14:30; the block arm sits at the
+  floor through those slots and charges 9.4 kWh from 15:00 to 16:30 at
+  12.9–16.8c under `TARGET_SHORTFALL_RISK`. Why the deadline machinery funds a
+  47% load-sized target from the last slots and not the cheapest was not
+  established here; nothing in `feasible_actions`, the urgency window or the
+  cycle-hurdle exemption was changed.
+
+2026-09-11 at 12:00 is partly the inflated load forecast that capture carries
+(a 55 kWh need): `dw` is itself $0.45 above no block there.
+
+**Ten-day gate and 31-day sweep, re-run.** `slice 1 gate: PASS (10 day(s): 9
+identical to dw, 1 below, 0 above)` and, on the sweep, `FAIL (31 day(s): 21
+identical to dw, 6 below, 4 above)`, worst +$0.239 on 2026-09-21, zero
+overnight grid charging on all 41 days. Both are the previous result to the
+cent, and they could not have been otherwise: each is a single cold 09:00 plan,
+where the remembered trough is the current slot (already in the horizon) and
+there is no earlier detection to dwell against. They prove the change leaves a
+cold first plan alone, and nothing about the memory or the dwell. With each
+capture's own past interval seeded into the trough the sweep reads 21
+identical, 7 below, 3 above (2026-09-26 moves from +$0.004 to −$0.021 as its
+entry goes from 17:30 to 17:00), the gate is unchanged, and no day is dearer
+than before.

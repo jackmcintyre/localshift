@@ -12,14 +12,16 @@ Design principles:
 
 ``apply_price_block_flags`` is the one place those flags are rewritten after the
 build: with ``switch.localshift_price_block_target`` on, the price block replaces
-the clock window as the thing that sets them (docs/PRICE_BLOCK_TARGET.md).
+the clock window as the thing that sets them (docs/PRICE_BLOCK_TARGET.md). It
+also owns what the block remembers from one plan to the next: the day's trough
+and a changed detection waiting out its dwell (#1114).
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -27,10 +29,17 @@ from ..coordinator.data import AdaptiveParameters
 from ..forecast.solar import get_solar_for_slot_by_interval
 from ..forecast.solar_accuracy import SolarAccuracyTracker
 from ..utils.export_availability import export_available_at
+from . import target_block as _target_block
 from .optimizer_dp import SlotContext
 from .price_calculator import get_price_for_slot_or_none
 from .slot_schedule import compute_hybrid_slot_schedule
-from .target_block import TargetBlock, find_target_block
+from .target_block import (
+    TargetBlock,
+    TroughHistory,
+    find_target_block,
+    hold_target_block,
+    remember_trough,
+)
 from .types import OptimizerConfig
 
 _LOGGER = logging.getLogger(__name__)
@@ -550,6 +559,252 @@ def _slot_index_at(slots: list[SlotContext], stamp: Any) -> int | None:
     return None
 
 
+PRICE_BLOCK_STATE_FIELDS: tuple[str, ...] = (
+    "target_block_entry_idx",
+    "target_block_entry_iso",
+    "target_block_end_iso",
+    "target_block_settled",
+    "target_block_pending_entry_iso",
+    "target_block_pending_since_iso",
+    "target_block_trough",
+    "target_block_trough_resume_iso",
+)
+"""Everything the price block carries from one plan to the next, as fields on
+the coordinator data. Documented there. A replay that wants to plan a later
+capture "as live would" copies exactly these across."""
+
+
+def reset_price_block_state(data: Any) -> None:
+    """Forget the block, any pending change and the trough."""
+    data.target_block_entry_idx = None
+    data.target_block_entry_iso = None
+    data.target_block_end_iso = None
+    data.target_block_settled = False
+    data.target_block_pending_entry_iso = None
+    data.target_block_pending_since_iso = None
+    data.target_block_trough = []
+    data.target_block_trough_resume_iso = None
+
+
+def slot_end_iso(slot: SlotContext) -> str | None:
+    """When ``slot`` ends, in the same form as its ``timestamp_iso``."""
+    try:
+        start = datetime.fromisoformat(slot.timestamp_iso)
+    except (TypeError, ValueError):
+        return None
+    return (start + timedelta(minutes=slot.slot_interval_minutes)).isoformat()
+
+
+def _stamp(data: Any, name: str) -> str | None:
+    """A stored ISO timestamp, or None when the field is absent or not a string."""
+    value = getattr(data, name, None)
+    return value if isinstance(value, str) else None
+
+
+def _when(stamp: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat(stamp) if stamp is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _reached(now: datetime, stamp: str | None) -> bool:
+    """True when ``stamp`` is not after ``now``. Unusable stamps count as reached."""
+    when = _when(stamp)
+    try:
+        return when is None or when <= now
+    except TypeError:
+        # Aware against naive.
+        return True
+
+
+def _minutes_since(now: datetime, stamp: str | None) -> float:
+    when = _when(stamp)
+    try:
+        return (now - when).total_seconds() / 60.0 if when is not None else 0.0
+    except TypeError:
+        return 0.0
+
+
+def _last_slot_before(slots: list[SlotContext], end_iso: str | None) -> int | None:
+    """Index of the last slot that starts before ``end_iso``."""
+    end = _when(end_iso)
+    if end is None:
+        return None
+    last = None
+    try:
+        for slot in slots:
+            if datetime.fromisoformat(slot.timestamp_iso) >= end:
+                break
+            last = slot.slot_index
+    except (TypeError, ValueError):
+        return None
+    return last
+
+
+def _trough_history(data: Any) -> TroughHistory:
+    history = getattr(data, "target_block_trough", None)
+    return list(history) if isinstance(history, list) else []
+
+
+def _adopt(data: Any, slots: list[SlotContext], block: TargetBlock | None) -> None:
+    """Make ``block`` the one the planner works to, and drop any pending change."""
+    data.target_block_entry_idx = block.entry_idx if block else None
+    data.target_block_entry_iso = (
+        slots[block.entry_idx].timestamp_iso if block else None
+    )
+    data.target_block_end_iso = slot_end_iso(slots[block.end_idx]) if block else None
+    data.target_block_settled = True
+    data.target_block_pending_entry_iso = None
+    data.target_block_pending_since_iso = None
+
+
+def _retire_arrived_block(data: Any, now: datetime, slot_end: datetime) -> None:
+    """Let go of an adopted block whose entry is no longer ahead of now.
+
+    The block was the thing to prepare for; once its entry is the current slot
+    the preparing is over. The trough that funded it is spent with it, and no
+    price is remembered again until the block has ended: the memory is the
+    cheapest price since the previous block *ended*, and a trough kept past the
+    entry would make every remaining slot dear against a price the battery can
+    no longer buy at.
+    """
+    entry_iso = _stamp(data, "target_block_entry_iso")
+    if entry_iso is None:
+        return
+    entry = _when(entry_iso)
+    try:
+        still_ahead = entry is not None and entry >= slot_end
+    except TypeError:
+        still_ahead = False
+    if still_ahead:
+        return
+    resume_iso = _stamp(data, "target_block_end_iso")
+    reset_price_block_state(data)
+    if not _reached(now, resume_iso):
+        data.target_block_trough_resume_iso = resume_iso
+
+
+def _observe_trough(data: Any, now: datetime, slot: SlotContext) -> float | None:
+    """Note the current slot's price and return the trough to detect against."""
+    suspended = not _reached(now, _stamp(data, "target_block_trough_resume_iso"))
+    if not suspended:
+        data.target_block_trough_resume_iso = None
+    history = remember_trough(
+        _trough_history(data),
+        slot.timestamp_iso,
+        None if suspended else slot.buy_price,
+    )
+    data.target_block_trough = history
+    return history[0][1] if history else None
+
+
+def _same_candidate(
+    slots: list[SlotContext],
+    config: OptimizerConfig,
+    detected: TargetBlock | None,
+    pending_entry_iso: str | None,
+    trough: float | None,
+) -> tuple[bool, TargetBlock | None]:
+    """Whether the detection is still the pending change, and that change now.
+
+    A pending entry is the same candidate while the detection stays within the
+    one-slot hysteresis of it; it keeps the entry it was first seen at. A
+    pending disappearance is the same candidate while nothing is detected.
+    """
+    if detected is None or pending_entry_iso is None:
+        return detected is None and pending_entry_iso is None, None
+    pending_idx = _slot_index_at(slots, pending_entry_iso)
+    if pending_idx is None or pending_idx == 0:
+        return False, None
+    candidate = find_target_block(slots, config, pending_idx, trough_price=trough)
+    if candidate is None or candidate.entry_idx != pending_idx:
+        return False, None
+    return True, candidate
+
+
+def _settle_price_block(
+    slots: list[SlotContext], config: OptimizerConfig, data: Any
+) -> TargetBlock | None:
+    """Detect the block, remember the trough, and apply the entry dwell.
+
+    Returns the block the planner should work to on this plan: the fresh
+    detection when it agrees with the adopted block or has outlasted the dwell,
+    otherwise the adopted block, held.
+
+    Three rules worth stating, because each is a decision and not a
+    consequence:
+
+    * **First plan.** With nothing settled (a fresh start, a restart, the plan
+      on which an adopted block arrives) there is nothing to hold, so the
+      detection is adopted at once.
+    * **Restart.** None of this survives one. The first plan afterwards detects
+      on the horizon alone, exactly as before #1114: a block that only the
+      forgotten trough justified is gone, and no deadline is invented.
+    * **Held entry passed.** A held block whose entry arrives while a change is
+      still pending was honoured as held; it is retired like any other.
+    """
+    now = _when(slots[0].timestamp_iso)
+    if now is None:
+        # No clock: nothing can age or dwell. Plain detection, as before #1114.
+        block = find_target_block(
+            slots, config, _slot_index_at(slots, _stamp(data, "target_block_entry_iso"))
+        )
+        _adopt(data, slots, block)
+        return block
+
+    slot_end = now + timedelta(minutes=slots[0].slot_interval_minutes)
+    _retire_arrived_block(data, now, slot_end)
+    trough = _observe_trough(data, now, slots[0])
+
+    adopted_iso = _stamp(data, "target_block_entry_iso")
+    adopted_idx = _slot_index_at(slots, adopted_iso)
+    detected = find_target_block(slots, config, adopted_idx, trough_price=trough)
+
+    unchanged = (
+        adopted_iso is None
+        if detected is None
+        else adopted_idx is not None and detected.entry_idx == adopted_idx
+    )
+    if unchanged or getattr(data, "target_block_settled", False) is not True:
+        _adopt(data, slots, detected)
+        return detected
+
+    since_iso = _stamp(data, "target_block_pending_since_iso")
+    still_pending, candidate = False, detected
+    if since_iso is not None:
+        still_pending, candidate = _same_candidate(
+            slots,
+            config,
+            detected,
+            _stamp(data, "target_block_pending_entry_iso"),
+            trough,
+        )
+    if not still_pending:
+        candidate = detected
+        since_iso = slots[0].timestamp_iso
+    if _minutes_since(now, since_iso) >= _target_block.ENTRY_DWELL_MINUTES:
+        _adopt(data, slots, candidate)
+        return candidate
+
+    data.target_block_pending_since_iso = since_iso
+    data.target_block_pending_entry_iso = (
+        slots[candidate.entry_idx].timestamp_iso if candidate else None
+    )
+    data.target_block_entry_idx = adopted_idx
+    if adopted_idx is None:
+        return None
+    end_idx = _last_slot_before(slots, _stamp(data, "target_block_end_iso"))
+    return hold_target_block(
+        slots,
+        config,
+        adopted_idx,
+        adopted_idx if end_idx is None else end_idx,
+        f"a changed detection since {since_iso} has not yet persisted "
+        f"{_target_block.ENTRY_DWELL_MINUTES} min",
+    )
+
+
 def apply_price_block_flags(
     slots: list[SlotContext],
     config: OptimizerConfig,
@@ -560,9 +815,9 @@ def apply_price_block_flags(
     """Let the price block, not the clock window, set the demand-window flags.
 
     With ``config.price_block_target`` off this changes no slot. With it on, the
-    clock window's flags are cleared from every slot and the detected block
-    takes their place: ``is_demand_window_slot`` across the block and
-    ``is_demand_window_entry`` on its first slot. When no block is found every
+    clock window's flags are cleared from every slot and the block takes their
+    place: ``is_demand_window_slot`` across the block and
+    ``is_demand_window_entry`` on its first slot. When there is no block every
     flag stays clear, so the planner has no deadline.
 
     Nothing downstream is told about the block. The terminal penalty, hard
@@ -576,26 +831,30 @@ def apply_price_block_flags(
     Args:
         slots: The planning horizon, modified in place.
         config: Optimizer configuration (the switch, spread and duration).
-        data: Coordinator data. ``target_block_entry_iso`` from the previous
-            plan feeds the detector's hysteresis.
-        persist: Record this plan's entry for the next one. False for a plan
-            that must not move the live boundary (the shadow comparison, which
-            solves on a different price series).
+        data: Coordinator data. Holds what one plan leaves for the next
+            (``PRICE_BLOCK_STATE_FIELDS``): the adopted block, a changed
+            detection waiting out its dwell, and the remembered trough.
+        persist: This is the live plan: read and update all of that. False for
+            a plan that must not move the live boundary (the shadow comparison,
+            which solves on a different price series): it gets a plain
+            detection on its own prices, held only by the one-slot hysteresis
+            against the live entry, and writes nothing.
 
     Returns:
-        The block applied, or None when the switch is off or nothing qualified.
+        The block applied, or None when the switch is off or there is none.
 
     """
     if not config.price_block_target:
         if persist:
-            data.target_block_entry_idx = None
-            data.target_block_entry_iso = None
+            reset_price_block_state(data)
         return None
 
-    previous_entry_idx = _slot_index_at(
-        slots, getattr(data, "target_block_entry_iso", None)
-    )
-    block = find_target_block(slots, config, previous_entry_idx)
+    if persist and slots:
+        block = _settle_price_block(slots, config, data)
+    else:
+        block = find_target_block(
+            slots, config, _slot_index_at(slots, _stamp(data, "target_block_entry_iso"))
+        )
 
     for slot in slots:
         slot.is_demand_window_slot = False
@@ -605,10 +864,4 @@ def apply_price_block_flags(
             slot.is_demand_window_slot = True
         slots[block.entry_idx].is_demand_window_entry = True
         _LOGGER.debug("Price block target: %s", block.reason)
-
-    if persist:
-        data.target_block_entry_idx = block.entry_idx if block else None
-        data.target_block_entry_iso = (
-            slots[block.entry_idx].timestamp_iso if block else None
-        )
     return block

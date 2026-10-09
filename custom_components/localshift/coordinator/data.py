@@ -682,15 +682,45 @@ class CoordinatorData:
     # ---------------------------------------------------------------------------
     # --- Price-driven target block (docs/PRICE_BLOCK_TARGET.md, #1107) ---
     # ---------------------------------------------------------------------------
-    # Where the last plan put the block's entry, kept so the next plan can hold it
-    # against one slot of forecast jitter. Both are None while
-    # switch.localshift_price_block_target is off or no block is found, and neither
-    # survives a restart: the first plan after one simply detects afresh.
+    # What one plan leaves for the next (engine/slots.py PRICE_BLOCK_STATE_FIELDS):
+    # the block the planner is working to, a changed detection waiting out its
+    # dwell, and the cheapest price the day has already offered (#1114). All of it
+    # is cleared while switch.localshift_price_block_target is off, and none of it
+    # survives a restart: the first plan after one detects afresh on the horizon
+    # alone and adopts what it finds at once.
 
     target_block_entry_idx: int | None = None
-    """Slot index of the block entry in the horizon of the plan that set it."""
+    """Slot index of the adopted block's entry in the horizon of the last plan."""
 
     target_block_entry_iso: str | None = None
     """Start time of that entry slot. This, not the index, is what the next plan
     reads: the horizon slides between plans, so the same boundary sits at a
-    different index every time."""
+    different index every time. None when the planner has no block."""
+
+    target_block_end_iso: str | None = None
+    """When the adopted block ends (the end of its last slot). Needed to keep the
+    whole block standing while a changed detection is pending, and to know when
+    the trough may be remembered again after the block has begun."""
+
+    target_block_settled: bool = False
+    """True once a plan has decided what the block is, including "there is none".
+    False before the first plan and after a restart, when there is nothing to
+    hold and the detection is adopted at once; a block *appearing* later has to
+    wait out the dwell like any other change."""
+
+    target_block_pending_entry_iso: str | None = None
+    """Entry of a detection that differs from the adopted block and has not yet
+    persisted for the dwell. None with ``target_block_pending_since_iso`` set
+    means the pending change is the block disappearing."""
+
+    target_block_pending_since_iso: str | None = None
+    """When that pending detection was first seen. None when nothing is pending."""
+
+    target_block_trough: list[tuple[str, float]] = field(default_factory=list)
+    """Buy prices observed in the current slot as time passed, since the previous
+    block ended and within the last 24 hours (``target_block.TroughHistory``).
+    The first entry is the remembered trough and when it was last seen."""
+
+    target_block_trough_resume_iso: str | None = None
+    """Set when an adopted block's entry arrives, to that block's end: no price is
+    remembered until then."""

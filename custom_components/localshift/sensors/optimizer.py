@@ -200,6 +200,14 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "target_block_target_pct": summary.get("target_block_target_pct"),
             "target_block_needed_kwh": summary.get("target_block_needed_kwh"),
             "target_block_reason": summary.get("target_block_reason"),
+            # What the block remembers between plans (#1114): the trough its
+            # reference can fall back on, and a changed detection that has not
+            # yet outlasted the entry dwell and is therefore not the block above.
+            "target_block_trough_price": summary.get("target_block_trough_price"),
+            "target_block_trough_at": summary.get("target_block_trough_at"),
+            "target_block_pending_change": summary.get("target_block_pending_change"),
+            "target_block_pending_entry": summary.get("target_block_pending_entry"),
+            "target_block_pending_since": summary.get("target_block_pending_since"),
             "forecast_accuracy": summary.get("forecast_accuracy"),
             "accuracy_discount_factor": summary.get("accuracy_discount_factor"),
             "solar_confidence_avg": avg_confidence,

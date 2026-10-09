@@ -29,6 +29,12 @@ Whenever both ``dw`` and ``block`` run, the slice 1 gate is printed: per day,
 whether the block plan is identical to, below or above ``dw``, and how much the
 block arm grid-charges overnight (21:00-06:00, the #800 sawtooth check).
 
+``--flap`` runs the block arm over several captures of one day in time order
+and carries the block's state (adopted block, pending change, remembered
+trough) from each capture to the next, as live carries it from plan to plan.
+The verdict is read from that carried run; the same captures planned cold, each
+alone, are printed beside it.
+
 ``--flap DIR`` runs the block arm over captures of the SAME day taken at
 different hours (scripts/export_replay_days.py --date D --time 09:00,11:00,...)
 in time order and reports, per consecutive pair, whether the block's entry time
@@ -75,7 +81,13 @@ from custom_components.localshift.computation_engine import (  # noqa: E402
 from custom_components.localshift.engine import (
     constraints as _constraints,  # noqa: E402
 )
-from custom_components.localshift.engine.slots import SlotBuilder  # noqa: E402
+from custom_components.localshift.engine.slots import (  # noqa: E402
+    PRICE_BLOCK_STATE_FIELDS,
+    SlotBuilder,
+)
+from custom_components.localshift.engine.target_block import (  # noqa: E402
+    remember_trough,
+)
 from tests.test_scenarios import (  # noqa: E402
     create_mock_entry,
     create_mock_get_entity_id,
@@ -219,11 +231,15 @@ def run_arm(
     scenario: dict[str, Any],
     arm: dict[str, Any],
     previous_entry_iso: str | None = None,
+    block_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one scenario under one arm and extract the plan's behaviour.
 
     ``previous_entry_iso`` seeds the price block's hysteresis, as if the plan
-    before this one had entered the block at that time.
+    before this one had entered the block at that time. ``block_state`` seeds
+    everything the price block carries between plans
+    (``PRICE_BLOCK_STATE_FIELDS``), as an earlier run returned it under
+    ``price_block_state``.
     """
     payload = dict(scenario["input"])
     payload["adaptive_params"] = {}  # learning layer retired 2026-09-04
@@ -234,6 +250,8 @@ def run_arm(
     _seed_horizon(data, payload)
     if previous_entry_iso is not None:
         data.target_block_entry_iso = previous_entry_iso
+    for name, value in (block_state or {}).items():
+        setattr(data, name, list(value) if isinstance(value, list) else value)
 
     overrides = dict(scenario.get("config_overrides", {}))
     overrides.update(LIVE_OVERRIDES)
@@ -428,6 +446,14 @@ def _extract(
         "target_block_end": summary.get("target_block_end"),
         "target_block_target_pct": summary.get("target_block_target_pct"),
         "target_block_needed_kwh": summary.get("target_block_needed_kwh"),
+        "target_block_trough_price": summary.get("target_block_trough_price"),
+        "target_block_trough_at": summary.get("target_block_trough_at"),
+        "target_block_pending_change": summary.get("target_block_pending_change"),
+        "target_block_pending_entry": summary.get("target_block_pending_entry"),
+        "target_block_pending_since": summary.get("target_block_pending_since"),
+        "price_block_state": {
+            name: getattr(data, name, None) for name in PRICE_BLOCK_STATE_FIELDS
+        },
         "effective_cheap_price": getattr(data, "effective_cheap_price", None),
         "base_cheap_price": getattr(data, "base_cheap_price", None),
         "timeline": "".join(t.timeline),
@@ -647,26 +673,71 @@ def load_flap_days(directory: Path) -> dict[str, list[tuple[str, dict[str, Any]]
     return days
 
 
+def past_prices(scenario: dict[str, Any]) -> list[tuple[str, float]]:
+    """Prices the capture itself records for intervals before its capture time.
+
+    A capture is the price sensor's state at one instant. Its forecast list
+    starts at the interval the sensor was last updated in, so it opens with the
+    five-minute interval(s) that had ended by the capture time, at the price
+    live saw as current. That is the only past price a capture holds: usually
+    one interval, a few when the sensor was a little stale, and nothing from
+    earlier in the day.
+    """
+    captured_at = datetime.fromisoformat(scenario["input"]["test_time"])
+    past = []
+    for row in scenario["input"].get("general_forecast") or []:
+        if datetime.fromisoformat(row["start_time"]) < captured_at:
+            past.append((row["start_time"], float(row["per_kwh"])))
+    return past
+
+
+def _with_past_prices(
+    state: dict[str, Any], scenario: dict[str, Any]
+) -> dict[str, Any]:
+    """``state`` with the capture's own past prices added to the trough memory.
+
+    Live plans every minute and would have observed these as its current slot.
+    Skipped while the memory is suspended inside a block, as live skips them.
+    """
+    if state.get("target_block_trough_resume_iso"):
+        return state
+    history = list(state.get("target_block_trough") or [])
+    for stamp, price in past_prices(scenario):
+        history = remember_trough(history, stamp, price)
+    return {**state, "target_block_trough": history}
+
+
 def flap_points(captures: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
     """Run the block arm on each capture of one day, in the order given.
 
-    Each capture is planned twice. ``entry`` / ``slot0_action`` are a cold
-    start: the detector sees only that capture, which is what the verdict is
-    read from. ``entry_carried`` / ``slot0_action_carried`` seed the detector's
-    hysteresis with the entry the capture before it settled on, the way live
-    carries it from one plan to the next.
+    Each capture is planned twice, and the ``dw`` arm once for the cost beside
+    it (``dw_cost``, and ``slot0_action_dw`` as the control for the slot-0
+    criterion: the captures start from the SOC live reached under the clock
+    window, so an alternation the ``dw`` arm shows too is not the block's).
+
+    ``entry`` / ``slot0_action`` are a cold start: the detector sees only that
+    capture and remembers nothing, which is how #1111 measured it.
+
+    The ``*_carried`` fields are the run the verdict is read from. The block's
+    state (``PRICE_BLOCK_STATE_FIELDS``: the adopted block, a pending change
+    and its clock, the remembered trough) is handed from each capture to the
+    next, as live hands it from plan to plan. There is no price history before
+    the first capture, so the first one starts cold apart from the past price
+    it records itself (``past_prices``); nothing earlier is assumed.
     """
     arm = ARMS["block"]
     points: list[dict[str, Any]] = []
-    carried: str | None = None
+    state: dict[str, Any] = {}
     for name, scenario in captures:
         cold = run_arm(scenario, arm)
-        held = cold if carried is None else run_arm(scenario, arm, carried)
-        carried = held["target_block_entry"]
+        held = run_arm(scenario, arm, block_state=_with_past_prices(state, scenario))
+        dw = run_arm(scenario, ARMS["dw"])
+        state = held["price_block_state"]
         points.append({
             "capture": name,
             "at": scenario["input"]["test_time"],
             "soc": scenario["input"].get("soc"),
+            "slot0_price": held["slots"][0]["buy"] if held["slots"] else None,
             "slot0_action": cold["slot0_action"],
             "entry": cold["target_block_entry"],
             "end": cold["target_block_end"],
@@ -674,7 +745,20 @@ def flap_points(captures: list[tuple[str, dict[str, Any]]]) -> list[dict[str, An
             "cost": cold["projected_net_cost"],
             "charge_kwh": cold["charge_kwh"],
             "entry_carried": held["target_block_entry"],
+            "end_carried": held["target_block_end"],
             "slot0_action_carried": held["slot0_action"],
+            "target_pct_carried": held["target_block_target_pct"],
+            "cost_carried": held["projected_net_cost"],
+            "charge_kwh_carried": held["charge_kwh"],
+            "charge_price_max_carried": held["charge_price_max"],
+            "trough_price": held["target_block_trough_price"],
+            "trough_at": held["target_block_trough_at"],
+            "pending_change": held["target_block_pending_change"],
+            "pending_entry": held["target_block_pending_entry"],
+            "pending_since": held["target_block_pending_since"],
+            "dw_cost": dw["projected_net_cost"],
+            "dw_charge_kwh": dw["charge_kwh"],
+            "slot0_action_dw": dw["slot0_action"],
         })
     return points
 
@@ -764,23 +848,55 @@ def flap_verdict(points: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def flap_carried_verdict(points: list[dict[str, Any]]) -> dict[str, Any]:
+    """``flap_verdict`` on the run that carried the block's state between captures."""
+    return flap_verdict([
+        {**p, "entry": p["entry_carried"], "slot0_action": p["slot0_action_carried"]}
+        for p in points
+    ])
+
+
+def _block_span(entry: Any, end: Any) -> str:
+    return f"{_clock(entry)}-{_clock(end)}"
+
+
+def _pending_text(point: dict[str, Any]) -> str:
+    change = point["pending_change"]
+    if not change:
+        return "-"
+    target = "" if change == "disappear" else f" {_clock(point['pending_entry'])}"
+    return f"{change}{target} since {_clock(point['pending_since'])}"
+
+
 def _print_flap_day(day: str, points: list[dict[str, Any]]) -> str:
-    result = flap_verdict(points)
+    """Print one day and return its verdict, which is the carried run's."""
+    cold = flap_verdict(points)
+    carried = flap_carried_verdict(points)
     print(f"\nflap test {day} (block arm, {len(points)} capture(s))")
     print(
-        f"  {'capture':<8}{'SOC':>6}  {'slot-0 action':<20}{'block':<14}"
-        f"{'target':>7}{'cost':>8}{'chg kWh':>9}  carried: entry, slot-0"
+        f"  {'capture':<8}{'SOC':>6}  {'cold: block':<13}{'slot-0':<20}"
+        f"{'carried: block':<16}{'slot-0':<20}{'target':>7}{'cost':>8}"
+        f"{'chg kWh':>9}{'dw cost':>9}  trough, pending"
     )
     for p in points:
+        trough = (
+            f"{p['trough_price'] * 100:.1f}c at {_clock(p['trough_at'])}"
+            if isinstance(p["trough_price"], (int, float))
+            else "none"
+        )
         print(
             f"  {_clock(p['at']):<8}{fmt(p['soc'], '6.1f')}  "
+            f"{_block_span(p['entry'], p['end']):<13}"
             f"{str(p['slot0_action']):<20}"
-            f"{_clock(p['entry']) + '-' + _clock(p['end']):<14}"
-            f"{fmt(p['target_pct'], '7.1f')}{fmt(p['cost'], '8.3f')}"
-            f"{fmt(p['charge_kwh'], '9.2f')}  "
-            f"{_clock(p['entry_carried'])}, {p['slot0_action_carried']}"
+            f"{_block_span(p['entry_carried'], p['end_carried']):<16}"
+            f"{str(p['slot0_action_carried']):<20}"
+            f"{fmt(p['target_pct_carried'], '7.1f')}"
+            f"{fmt(p['cost_carried'], '8.3f')}"
+            f"{fmt(p['charge_kwh_carried'], '9.2f')}"
+            f"{fmt(p['dw_cost'], '9.3f')}  "
+            f"{trough}, {_pending_text(p)}"
         )
-    for pair in result["pairs"]:
+    for pair in carried["pairs"]:
         moved = pair["entry_moved_min"]
         print(
             f"  {_pair_label(pair)}: entry {_clock(pair['from_entry'])} -> "
@@ -790,19 +906,26 @@ def _print_flap_day(day: str, points: list[dict[str, Any]]) -> str:
             f"slot-0 {pair['from_action']} -> {pair['to_action']} "
             f"({'changed' if pair['action_changed'] else 'same'})"
         )
-    for reason in result["reasons"]:
+    for reason in carried["reasons"]:
         print(f"  reason: {reason}")
-    carried = flap_verdict([
-        {**p, "entry": p["entry_carried"], "slot0_action": p["slot0_action_carried"]}
-        for p in points
-    ])
-    print(f"  with the previous capture's entry carried: {carried['verdict']}")
-    print(f"flap test {day}: {result['verdict']}")
-    return result["verdict"]
+    dw_actions = [p["slot0_action_dw"] for p in points]
+    print(
+        "  control, dw arm slot-0 goes charge / hold / charge: "
+        f"{'yes' if _charge_resumes(dw_actions) else 'no'} "
+        f"({' / '.join(ACTION_LETTER.get(a, '?') for a in dw_actions)})"
+    )
+    print(f"  cold start, each capture alone: {cold['verdict']}")
+    for reason in cold["reasons"]:
+        print(f"    cold: {reason}")
+    print(f"flap test {day}: {carried['verdict']}")
+    return carried["verdict"]
 
 
 def run_flap(directory: Path) -> bool:
-    """Run the flap test on every day captured in ``directory``. True if all PASS."""
+    """Run the flap test on every day captured in ``directory``. True if all PASS.
+
+    The verdict is the one with the block's state carried between captures.
+    """
     days = load_flap_days(directory)
     if not days:
         print(f"flap captures not present in {directory}")

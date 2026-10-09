@@ -24,6 +24,7 @@ from .optimizer_runner import (
     _serialize_decision,
     _serialize_result,
     apply_price_block,
+    target_block_memory_telemetry,
     target_block_telemetry,
 )
 from .slots import SlotBuilder
@@ -328,7 +329,10 @@ class OptimizerFacade:
                 cycle_id,
                 soc_info,
                 optimizer_config,
-                target_block_telemetry(target_block, slots, optimizer_config),
+                {
+                    **target_block_telemetry(target_block, slots, optimizer_config),
+                    **target_block_memory_telemetry(data, optimizer_config),
+                },
             )
 
             self._assign_active_mode(data, result, optimizer_config, config_options)
@@ -1240,8 +1244,10 @@ class OptimizerFacade:
         reporting that plan's price block after the switch is turned off or the
         block has gone, for as long as cycles keep failing (#1109).
 
-        Only these keys are reset; the rest of the last good plan's summary is
-        left alone, as it was before. A summary no plan has written yet stays
+        The memory keys (#1114) are blanked with them: a cycle that planned
+        nothing reports nothing, though the state itself stays on ``data`` for
+        the next plan. Only these keys are reset; the rest of the last good
+        plan's summary is left alone, as it was before. A summary no plan has written yet stays
         empty, which the sensor already reads as inactive.
         """
         if not data.optimizer_summary:
@@ -1249,6 +1255,7 @@ class OptimizerFacade:
         data.optimizer_summary = {
             **data.optimizer_summary,
             **target_block_telemetry(None, [], OptimizerConfig()),
+            **target_block_memory_telemetry(data, OptimizerConfig()),
         }
 
     @staticmethod

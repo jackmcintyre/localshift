@@ -621,3 +621,187 @@ def test_committed_0907_0900_flap_capture_is_the_gate_capture() -> None:
     flap = REPO / "simulations" / "replay-nodw-flap" / "2026-09-07T0900.json"
 
     assert flap.read_bytes() == CAPTURE_0907.read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# Flap test with the block's state carried between captures (#1114)
+# ---------------------------------------------------------------------------
+
+
+# With the block's state carried between captures, as measured on 2026-10-09.
+# Two of the five still fail: 2026-09-21 on the slot-0 action (the entry itself
+# holds at 17:00), 2026-09-23 because the block is dropped once its disappearance
+# has outlasted the dwell. See simulations/replay-nodw/README.md.
+COMMITTED_FLAP_VERDICTS = {
+    "2026-09-07": "PASS",
+    "2026-09-11": "PASS",
+    "2026-09-21": "FAIL",
+    "2026-09-23": "FAIL",
+    "2026-09-26": "PASS",
+}
+
+
+def _morning_gone(scenario: dict[str, Any], clock: str) -> dict[str, Any]:
+    """A later capture of 2026-09-07 on which the cheap morning never came back.
+
+    Every price before the evening is 12c, so against the horizon alone the
+    17-19c evening is under the 8c spread and a cold detector finds no block.
+    That is the #1111 failure: the trough has rolled off the horizon.
+    """
+    later = _capture_at(scenario, clock)
+    evening = datetime.fromisoformat(f"{DAY}T16:30:00+10:00")
+    for row in later["input"]["general_forecast"]:
+        if datetime.fromisoformat(row["start_time"]) < evening:
+            row["per_kwh"] = 0.12
+    later["input"]["general_price"] = 0.12
+    return later
+
+
+@pytest.fixture(scope="module")
+def rolled_off_points() -> list[dict[str, Any]]:
+    scenario = json.loads(CAPTURE_0907.read_text())
+    return harness.flap_points([
+        ("0900.json", scenario),
+        ("1300.json", _morning_gone(scenario, "13:00")),
+    ])
+
+
+def test_past_prices_are_the_entries_that_start_before_the_capture() -> None:
+    scenario = json.loads(CAPTURE_0907.read_text())
+    captured_at = datetime.fromisoformat(scenario["input"]["test_time"])
+
+    past = harness.past_prices(scenario)
+
+    # The capture records the interval that had just ended, and nothing earlier.
+    assert [stamp for stamp, _ in past] == ["2026-09-07T08:55:00+10:00"]
+    assert all(datetime.fromisoformat(stamp) < captured_at for stamp, _ in past)
+    assert past[0][1] == scenario["input"]["general_forecast"][0]["per_kwh"]
+
+
+def test_past_prices_of_a_capture_with_none() -> None:
+    scenario = _capture_at(json.loads(CAPTURE_0907.read_text()), "13:00")
+
+    assert harness.past_prices(scenario) == []
+
+
+def test_past_prices_are_not_remembered_while_the_memory_is_suspended() -> None:
+    """Inside a block live remembers nothing, so the replay must not either."""
+    scenario = json.loads(CAPTURE_0907.read_text())
+    suspended = {"target_block_trough_resume_iso": "2026-09-07T21:00:00+10:00"}
+
+    assert harness._with_past_prices(suspended, scenario) == suspended
+    assert harness._with_past_prices({}, scenario)["target_block_trough"] == [
+        tuple(harness.past_prices(scenario)[0])
+    ]
+
+
+def test_run_arm_reports_the_state_it_leaves_behind() -> None:
+    scenario = json.loads(CAPTURE_0907.read_text())
+
+    out = harness.run_arm(scenario, harness.ARMS["block"])
+
+    state = out["price_block_state"]
+    assert set(state) == set(harness.PRICE_BLOCK_STATE_FIELDS)
+    assert state["target_block_entry_iso"] == out["target_block_entry"]
+    assert state["target_block_settled"] is True
+    assert out["target_block_trough_price"] == out["slots"][0]["buy"]
+    assert out["target_block_pending_change"] is None
+
+
+def test_cold_start_loses_the_block_and_carried_state_keeps_it(
+    rolled_off_points: list[dict[str, Any]],
+) -> None:
+    first, later = rolled_off_points
+
+    assert _local(first["entry"]) == "16:30"
+    # Cold: each capture alone, as #1111 measured it.
+    assert later["entry"] is None
+    # Carried: the 09:00 trough is remembered, as live would remember it.
+    assert _local(later["entry_carried"]) == "16:30"
+    assert later["trough_price"] == pytest.approx(first["trough_price"])
+    assert later["trough_price"] < 0.08
+
+
+def test_first_capture_trough_is_seeded_from_its_own_past_price() -> None:
+    """The one past price a capture holds is the interval that had just ended."""
+    scenario = json.loads(CAPTURE_0907.read_text())
+    cheap = copy.deepcopy(scenario)
+    cheap["input"]["general_forecast"][0]["per_kwh"] = 0.01
+
+    plain = harness.flap_points([("a.json", scenario)])[0]
+    seeded = harness.flap_points([("a.json", cheap)])[0]
+
+    assert plain["trough_price"] == pytest.approx(
+        min(harness.past_prices(scenario)[0][1], plain["slot0_price"])
+    )
+    assert seeded["trough_price"] == pytest.approx(0.01)
+    assert seeded["trough_at"] == "2026-09-07T08:55:00+10:00"
+
+
+def test_carried_verdict_is_read_from_the_carried_columns(
+    rolled_off_points: list[dict[str, Any]],
+) -> None:
+    assert harness.flap_verdict(rolled_off_points)["verdict"] == "FAIL"
+    assert harness.flap_carried_verdict(rolled_off_points)["verdict"] == "PASS"
+
+
+def test_flap_points_report_the_dw_arm_alongside(
+    rolled_off_points: list[dict[str, Any]],
+) -> None:
+    for point in rolled_off_points:
+        assert point["dw_cost"] is not None
+        assert point["cost_carried"] is not None
+        assert point["charge_kwh_carried"] is not None
+
+
+def test_run_flap_verdict_is_the_carried_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    scenario = json.loads(CAPTURE_0907.read_text())
+    (tmp_path / "2026-09-07T0900.json").write_text(json.dumps(scenario))
+    (tmp_path / "2026-09-07T1300.json").write_text(
+        json.dumps(_morning_gone(scenario, "13:00"))
+    )
+
+    passed = harness.run_flap(tmp_path)
+
+    out = capsys.readouterr().out
+    assert passed is True
+    assert "flap test 2026-09-07: PASS" in out
+    assert "cold start, each capture alone: FAIL" in out
+    assert "block appeared or disappeared" in out
+
+
+def test_committed_flap_captures_verdicts_with_state_carried() -> None:
+    """The five solar-deficit days of #1111, re-run for #1114.
+
+    Pinned as measured, FAIL included: this is the record the README quotes.
+    """
+    days = harness.load_flap_days(REPO / "simulations" / "replay-nodw-flap")
+
+    verdicts = {
+        day: harness.flap_carried_verdict(harness.flap_points(captures))["verdict"]
+        for day, captures in days.items()
+    }
+
+    assert verdicts == COMMITTED_FLAP_VERDICTS
+
+
+def test_flap_day_prints_the_dw_arm_slot0_as_a_control(
+    rolled_off_points: list[dict[str, Any]], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Whether the clock-window arm also goes charge / hold / charge on these
+    captures says whether an alternation is the block's doing at all."""
+    for point in rolled_off_points:
+        assert point["slot0_action_dw"] in harness.ACTION_LETTER
+
+    harness._print_flap_day(DAY, rolled_off_points)
+
+    out = capsys.readouterr().out
+    expected = harness._charge_resumes([
+        p["slot0_action_dw"] for p in rolled_off_points
+    ])
+    assert (
+        f"control, dw arm slot-0 goes charge / hold / charge: "
+        f"{'yes' if expected else 'no'}" in out
+    )
