@@ -247,6 +247,7 @@ def _build_optimizer_config(
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
         CONF_AWAY_RESERVE,
         CONF_BATTERY_TARGET,
+        CONF_BLOCK_MIN_SPREAD,
         CONF_CHARGE_TAPER_MIN_FACTOR,
         CONF_CHARGE_TAPER_START_PCT,
         CONF_EXPORT_PRICE_MARGIN,
@@ -256,6 +257,7 @@ def _build_optimizer_config(
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
         CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
+        CONF_PRICE_BLOCK_TARGET,
         CONF_STALE_SOLAR_CONFIDENCE_CEILING,
         CONF_STALE_SOLAR_CONSERVATIVE,
         CONF_SWITCHING_PENALTY,
@@ -264,6 +266,7 @@ def _build_optimizer_config(
         DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
         DEFAULT_AWAY_RESERVE,
         DEFAULT_BATTERY_TARGET,
+        DEFAULT_BLOCK_MIN_SPREAD,
         DEFAULT_CHARGE_TAPER_MIN_FACTOR,
         DEFAULT_CHARGE_TAPER_START_PCT,
         DEFAULT_EXPORT_PRICE_MARGIN,
@@ -273,6 +276,7 @@ def _build_optimizer_config(
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
         DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
+        DEFAULT_PRICE_BLOCK_TARGET,
         DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
         DEFAULT_STALE_SOLAR_CONSERVATIVE,
         DEFAULT_SWITCHING_PENALTY,
@@ -351,6 +355,15 @@ def _build_optimizer_config(
 
     min_hold_saving = float(
         config_options.get(CONF_MIN_HOLD_SAVING, DEFAULT_MIN_HOLD_SAVING)
+    )
+
+    # Price block controls (docs/PRICE_BLOCK_TARGET.md slice 1). Carried on the
+    # config only: nothing in the planner reads them yet.
+    block_min_spread = float(
+        config_options.get(CONF_BLOCK_MIN_SPREAD, DEFAULT_BLOCK_MIN_SPREAD)
+    )
+    price_block_target = bool(
+        config_options.get(CONF_PRICE_BLOCK_TARGET, DEFAULT_PRICE_BLOCK_TARGET)
     )
 
     # Charge taper curve (Issue #905: raised from 80% to 90% to match measured hardware).
@@ -443,6 +456,9 @@ def _build_optimizer_config(
         target_shortfall_penalty_per_pct=target_penalty,
         min_cycle_saving=min_cycle_saving,
         min_hold_saving=min_hold_saving,
+        # --- Price block (slice 1: carried, not yet consumed) ---
+        block_min_spread=block_min_spread,
+        price_block_target=price_block_target,
         # --- Charge curve (Issue #905: configurable to match hardware) ---
         charge_taper_start_pct=charge_taper_start_pct,
         charge_taper_min_factor=charge_taper_min_factor,

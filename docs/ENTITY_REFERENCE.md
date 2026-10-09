@@ -69,6 +69,7 @@ user-facing entities with no category and appear on the main device card.
 | `button.localshift_update_forecast` | `localshift_update_forecast` | `button` | — |
 | `number.localshift_away_reserve` | `localshift_away_reserve` | `number` | config |
 | `number.localshift_battery_target` | `localshift_battery_target` | `number` | config |
+| `number.localshift_block_min_spread` | `localshift_block_min_spread` | `number` | config |
 | `number.localshift_charge_taper_min_factor` | `localshift_charge_taper_min_factor` | `number` | config |
 | `number.localshift_charge_taper_start` | `localshift_charge_taper_start_pct` | `number` | config |
 | `number.localshift_cheap_price_percentile` | `localshift_cheap_price_percentile` | `number` | config |
@@ -119,6 +120,7 @@ user-facing entities with no category and appear on the main device card.
 | `switch.localshift_demand_window_block` | `localshift_demand_window_block` | `switch` | — |
 | `switch.localshift_dry_run` | `localshift_dry_run` | `switch` | config |
 | `switch.localshift_notifications_enabled` | `localshift_notifications_enabled` | `switch` | config |
+| `switch.localshift_price_block_target` | `localshift_price_block_target` | `switch` | config |
 | `switch.localshift_spike_discharge_conservative` | `localshift_spike_discharge_conservative` | `switch` | config |
 | `switch.localshift_spike_discharge_enabled` | `localshift_spike_discharge_enabled` | `switch` | config |
 | `switch.localshift_stale_solar_conservative` | `localshift_stale_solar_conservative` | `switch` | config |
@@ -1261,6 +1263,22 @@ State: on
 
 ---
 
+### 8. switch.localshift_price_block_target
+
+**Purpose:** Prepare for the expensive evening block found in the price forecast, instead of the fixed demand-window clock. Design: [PRICE_BLOCK_TARGET.md](PRICE_BLOCK_TARGET.md).
+
+**Default:** OFF
+
+**Example Data:**
+```
+State: off
+```
+
+**Behavior:**
+- ON / OFF: **no effect yet.** The switch state reaches the planner as `OptimizerConfig.price_block_target` and is published on `sensor.localshift_optimizer_summary` under `config_options.price_block_target`, but nothing reads it until the price block is wired into the planner (slice 1 of the design).
+
+---
+
 
 ## Numbers (Configuration Thresholds)
 
@@ -1402,6 +1420,30 @@ State: 0.25
 **Example Data:**
 ```
 State: 30.0
+```
+
+---
+
+### 8. number.localshift_block_min_spread
+
+**Purpose:** How far above the cheapest earlier buy price a slot must sit to count as part of the expensive block worth pre-charging for. Design: [PRICE_BLOCK_TARGET.md](PRICE_BLOCK_TARGET.md).
+
+| Property | Value |
+|----------|-------|
+| Range | $0.00-$0.50/kWh |
+| Step | $0.01/kWh |
+| Default | $0.08/kWh |
+| Unit | $/kWh |
+
+**How it works:** Read by the block detector (`engine/target_block.py`). A slot is *dear* when its buy price is at least this much above the cheapest price in any earlier slot of the horizon and its forecast consumption exceeds its forecast solar. The block is the first run of dear slots lasting at least 2 hours.
+
+**This is not `min_cycle_saving`.** The cycle hurdle governs speculative arbitrage and sits at $0.25/kWh. The block spread answers a different question: is this evening expensive enough to prepare for. The $0.08 default is about the round-trip loss on a typical Amber evening.
+
+**Status:** the value reaches the planner as `OptimizerConfig.block_min_spread` and is published on `sensor.localshift_optimizer_summary` under `config_options.block_min_spread`. It has **no effect yet**: nothing reads it until the price block is wired into the planner behind [`switch.localshift_price_block_target`](#8-switchlocalshift_price_block_target).
+
+**Example Data:**
+```
+State: 0.08
 ```
 
 ---

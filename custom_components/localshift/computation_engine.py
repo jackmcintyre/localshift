@@ -16,6 +16,7 @@ from .const import (
     CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
     CONF_AWAY_RESERVE,
     CONF_BATTERY_TARGET,
+    CONF_BLOCK_MIN_SPREAD,
     CONF_CHARGE_TAPER_MIN_FACTOR,
     CONF_CHARGE_TAPER_START_PCT,
     CONF_COMPARISON_MODE,
@@ -28,6 +29,7 @@ from .const import (
     CONF_MINIMUM_TARGET_SOC,
     CONF_OPTIMIZATION_MODE,
     CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
+    CONF_PRICE_BLOCK_TARGET,
     CONF_PRICING_DATA_SOURCE,
     CONF_STALE_SOLAR_CONFIDENCE_CEILING,
     CONF_STALE_SOLAR_CONSERVATIVE,
@@ -38,6 +40,7 @@ from .const import (
     DEFAULT_ABSENT_SOLAR_CONFIDENCE,
     DEFAULT_AWAY_RESERVE,
     DEFAULT_BATTERY_TARGET,
+    DEFAULT_BLOCK_MIN_SPREAD,
     DEFAULT_CHARGE_TAPER_MIN_FACTOR,
     DEFAULT_CHARGE_TAPER_START_PCT,
     DEFAULT_CHEAP_PRICE_DEADBAND,
@@ -59,6 +62,7 @@ from .const import (
     DEFAULT_TARGET_PENALTY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
+    SWITCH_PRICE_BLOCK_TARGET,
     SWITCH_STALE_SOLAR_CONSERVATIVE,
 )
 from .const import (
@@ -986,6 +990,14 @@ class ComputationEngine:
             CONF_AWAY_RESERVE: self.entry.options.get(
                 CONF_AWAY_RESERVE, DEFAULT_AWAY_RESERVE
             ),
+            # Price block controls (docs/PRICE_BLOCK_TARGET.md slice 1, #1106).
+            # Forwarded before anything consumes them, so the wiring that follows
+            # cannot ship with a decorative slider or switch. The switch is read
+            # from switch state, like allow_dw_entry_under_target above.
+            CONF_BLOCK_MIN_SPREAD: self.entry.options.get(
+                CONF_BLOCK_MIN_SPREAD, DEFAULT_BLOCK_MIN_SPREAD
+            ),
+            CONF_PRICE_BLOCK_TARGET: self._get_switch_state(SWITCH_PRICE_BLOCK_TARGET),
             "pricing_source": self.entry.options.get(
                 CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
             ),

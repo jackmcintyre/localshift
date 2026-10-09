@@ -43,12 +43,6 @@ from dataclasses import dataclass
 
 from custom_components.localshift.engine.types import OptimizerConfig, SlotContext
 
-DEFAULT_BLOCK_MIN_SPREAD = 0.08
-"""$/kWh a slot must sit above the cheapest earlier price to count as dear."""
-
-DEFAULT_BLOCK_MIN_DURATION_HOURS = 2.0
-"""Shortest dear run that counts as a block worth preparing for."""
-
 # Prices arrive as binary floats, so a slot priced exactly one spread above the
 # reference (0.07 + 0.08 against 0.15) would otherwise fail ">=" on
 # representation error alone.
@@ -177,13 +171,9 @@ def find_target_block(
     if capacity_kwh <= 0 or discharge_efficiency <= 0:
         return None
 
-    min_spread = getattr(config, "block_min_spread", DEFAULT_BLOCK_MIN_SPREAD)
-    min_duration_hours = getattr(
-        config, "block_min_duration_hours", DEFAULT_BLOCK_MIN_DURATION_HOURS
-    )
-
+    min_spread = config.block_min_spread
     run = _first_qualifying_run(
-        slots, _dear_slots(slots, min_spread), min_duration_hours
+        slots, _dear_slots(slots, min_spread), config.block_min_duration_hours
     )
     if run is None:
         return None

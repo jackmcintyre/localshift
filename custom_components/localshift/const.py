@@ -228,6 +228,8 @@ CONF_DEMAND_WINDOW_END = "demand_window_end"
 CONF_EXPORT_MIN_SPREAD = "export_min_spread"
 CONF_MIN_CYCLE_SAVING = "min_cycle_saving"
 CONF_MIN_HOLD_SAVING = "min_hold_saving"
+CONF_BLOCK_MIN_SPREAD = "block_min_spread"
+CONF_PRICE_BLOCK_TARGET = "price_block_target"
 CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 CONF_STALE_SOLAR_CONSERVATIVE = "stale_solar_conservative"
 CONF_STALE_SOLAR_CONFIDENCE_CEILING = "stale_solar_confidence_ceiling"
@@ -298,6 +300,14 @@ DEFAULT_MIN_CYCLE_SAVING = (
 DEFAULT_MIN_HOLD_SAVING = (
     0.0  # $/kWh minimum saving to justify HOLD_STRICT; 0 disables (kill switch)
 )
+# Price-driven target block (docs/PRICE_BLOCK_TARGET.md). The spread is NOT
+# min_cycle_saving: the cycle hurdle governs speculative arbitrage, the block
+# spread answers "is this evening expensive enough to prepare for".
+DEFAULT_BLOCK_MIN_SPREAD = (
+    0.08  # $/kWh a slot must sit above the cheapest earlier price to be dear
+)
+DEFAULT_BLOCK_MIN_DURATION_HOURS = 2.0  # shortest dear run that counts as a block
+DEFAULT_PRICE_BLOCK_TARGET = False  # Key the planner's deadline on the price block
 DEFAULT_CHARGE_TAPER_START_PCT = (
     90.0  # Issue #905: hardware holds 5 kW flat through 88% SOC
 )
@@ -355,6 +365,13 @@ THRESHOLD_RANGES = {
         "step": 0.05,
         "unit": "$/kWh",
         "icon": "mdi:battery-sync-outline",
+    },
+    CONF_BLOCK_MIN_SPREAD: {
+        "min": 0.00,
+        "max": 0.50,
+        "step": 0.01,
+        "unit": "$/kWh",
+        "icon": "mdi:chart-bell-curve",
     },
     CONF_MIN_HOLD_SAVING: {
         "min": 0.00,
@@ -467,6 +484,7 @@ SWITCH_DRY_RUN = "dry_run"
 SWITCH_DEMAND_WINDOW_BLOCK = "demand_window_block"
 SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 SWITCH_STALE_SOLAR_CONSERVATIVE = "stale_solar_conservative"
+SWITCH_PRICE_BLOCK_TARGET = "price_block_target"
 
 # Consolidated notification switch (Issue #214)
 SWITCH_NOTIFICATIONS_ENABLED = "notifications_enabled"
@@ -479,6 +497,7 @@ SWITCH_DEFAULTS = {
     SWITCH_DEMAND_WINDOW_BLOCK: True,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: False,
     SWITCH_STALE_SOLAR_CONSERVATIVE: True,
+    SWITCH_PRICE_BLOCK_TARGET: DEFAULT_PRICE_BLOCK_TARGET,
     SWITCH_NOTIFICATIONS_ENABLED: True,  # Consolidated notification toggle
 }
 
@@ -490,6 +509,7 @@ SWITCH_ICONS = {
     SWITCH_DEMAND_WINDOW_BLOCK: "mdi:clock-alert-outline",
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "mdi:transfer-down",
     SWITCH_STALE_SOLAR_CONSERVATIVE: "mdi:weather-sunny-off",
+    SWITCH_PRICE_BLOCK_TARGET: "mdi:cash-clock",
     SWITCH_NOTIFICATIONS_ENABLED: "mdi:bell",
 }
 
@@ -501,6 +521,7 @@ SWITCH_NAMES = {
     SWITCH_DEMAND_WINDOW_BLOCK: "Demand Window Block",
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "Allow DW Entry Under Target",
     SWITCH_STALE_SOLAR_CONSERVATIVE: "Stale Solar Conservative",
+    SWITCH_PRICE_BLOCK_TARGET: "Price Block Target",
     SWITCH_NOTIFICATIONS_ENABLED: "Notifications Enabled",
 }
 

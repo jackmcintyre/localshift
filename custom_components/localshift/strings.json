@@ -283,6 +283,10 @@
         "name": "Stale Solar Conservative",
         "description": "When Solcast data is stale or absent, cap solar confidence to force pre-charging. Prevents missed pre-charge on low-accuracy forecast days."
       },
+      "price_block_target": {
+        "name": "Price Block Target",
+        "description": "Prepare for the expensive evening block found in the price forecast instead of the fixed demand window clock. Off by default."
+      },
       "notifications_enabled": {
         "name": "Notifications Enabled",
         "description": "Enable all notifications (mode transitions, daily summaries, manual actions, alerts). Turn off to silence all notifications."
@@ -320,6 +324,10 @@
       "export_price_margin": {
         "name": "Export Price Margin",
         "description": "Minimum profit margin ($/kWh) for battery export when grid import needed to replace"
+      },
+      "block_min_spread": {
+        "name": "Block Min Spread",
+        "description": "How far above the cheapest earlier price ($/kWh) a slot must be to count as part of the expensive block worth pre-charging for"
       }
     },
     "button": {
