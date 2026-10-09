@@ -32,11 +32,13 @@ from tests.helpers.price_block_driver import (
     CAPTURE_0903,
     CAPTURE_0907,
     GOLDEN,
+    REPO,
     Run,
     drive,
     is_live,
     load,
     scenario_paths,
+    tracked_scenario_paths,
 )
 
 
@@ -66,9 +68,22 @@ def _flat(scenario: dict[str, Any], price: float = 0.15) -> dict[str, Any]:
 _GOLDEN_RECORD: dict[str, Any] = json.loads(GOLDEN.read_text())
 
 
-def test_golden_covers_every_scenario_fixture() -> None:
-    """A fixture added later must be added to the golden, not silently skipped."""
-    assert sorted(_GOLDEN_RECORD["scenarios"]) == sorted(scenario_paths())
+def test_golden_fixtures_are_all_present() -> None:
+    """Every fixture the golden names must exist, in a clean checkout too."""
+    missing = [path for path in scenario_paths() if not (REPO / path).is_file()]
+    assert not missing
+
+
+def test_golden_covers_every_tracked_scenario_fixture() -> None:
+    """A fixture committed later must be added to the golden, not silently skipped.
+
+    Compared against what git tracks, not what is on disk: the replay days that
+    ``.gitignore`` excludes exist on some machines only and are not in the golden.
+    """
+    tracked = tracked_scenario_paths()
+    if tracked is None:
+        pytest.skip("not a git checkout: cannot list tracked fixtures")
+    assert scenario_paths() == tracked
 
 
 @pytest.mark.parametrize("path", scenario_paths())

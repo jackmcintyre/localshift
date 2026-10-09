@@ -18,6 +18,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import subprocess
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime
@@ -54,12 +55,29 @@ _VOLATILE = ("solve_time_seconds",)
 
 
 def scenario_paths() -> list[str]:
-    """Every committed scenario fixture, as repo-relative posix paths."""
-    return [
-        path.relative_to(REPO).as_posix()
-        for directory in _SCENARIO_DIRS
-        for path in sorted((REPO / directory).glob("*.json"))
-    ]
+    """Every fixture the golden record holds, as repo-relative posix paths.
+
+    Keyed off the golden and not off a directory listing: ``.gitignore`` keeps
+    most captured replay days out of the repository, so what is on disk differs
+    between a working machine and a clean checkout. The golden lists exactly the
+    git-tracked fixtures (``tracked_scenario_paths``).
+    """
+    return sorted(json.loads(GOLDEN.read_text())["scenarios"])
+
+
+def tracked_scenario_paths() -> list[str] | None:
+    """Git-tracked scenario fixtures, or None where there is no git checkout."""
+    try:
+        listed = subprocess.run(
+            ["git", "ls-files", "--", *_SCENARIO_DIRS],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return sorted(path for path in listed.stdout.splitlines() if path.endswith(".json"))
 
 
 @dataclass
@@ -218,7 +236,10 @@ def is_live(path: str) -> bool:
 
 def capture_all() -> dict[str, Any]:
     """Build the golden record. Run only against the pre-change code."""
+    paths = tracked_scenario_paths()
+    if paths is None:
+        raise RuntimeError("capture_all needs a git checkout to list tracked fixtures")
     return {
         path: drive(load(path), price_block_target=None, live=is_live(path)).snapshot()
-        for path in scenario_paths()
+        for path in paths
     }
