@@ -19,6 +19,7 @@ from custom_components.localshift.const import (
     SWITCH_SPIKE_DISCHARGE_ENABLED,
 )
 from custom_components.localshift.switch import (
+    SWITCH_CATEGORIES,
     SWITCH_KEYS,
     SWITCH_STATE_PREFIX,
     LocalShiftSwitch,
@@ -52,6 +53,26 @@ def mock_entry():
     entry.data = {}
     entry.options = {}
     return entry
+
+
+class TestSwitchCategories:
+    """Issue #1002: every switch must have an explicit category decision."""
+
+    def test_every_switch_key_has_a_category_entry(self):
+        assert set(SWITCH_CATEGORIES) == set(SWITCH_KEYS)
+
+    def test_switch_without_a_category_entry_fails_to_build(
+        self, mock_coordinator, mock_entry
+    ):
+        """A missing entry is an error, not a silent "no category"."""
+        without_dry_run = {
+            k: v for k, v in SWITCH_CATEGORIES.items() if k != SWITCH_DRY_RUN
+        }
+        with (
+            patch.dict(SWITCH_CATEGORIES, without_dry_run, clear=True),
+            pytest.raises(KeyError),
+        ):
+            LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_DRY_RUN)
 
 
 class TestLocalShiftSwitch:
