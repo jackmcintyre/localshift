@@ -579,7 +579,7 @@ Attributes:
   last_check: 2026-02-26T09:08:34+11:00
   synthetic_slot_rate: 0.0
   synthetic_slot_degraded: false
-  synthetic_slot_health: {rate: 0.0, degraded: false, sample_count: 12, consecutive_above: 0, consecutive_below: 12}
+  synthetic_slot_health: {rate: 0.0, degraded: false, sample_count: 12, consecutive_above: 0, consecutive_below: 12, last_sample_at: 2026-02-26T09:08:10+11:00}
 ```
 
 **Synthetic slot-0 rate (Issue #956):** `engine/slot_schedule.py` prices slot 0
@@ -599,12 +599,19 @@ optimizer evaluation records whether slot 0 was synthetic onto a rolling
   once the rate drops back below 0.5 for 3 consecutive evaluations. Streaks
   count evaluations, not wall-clock time.
 - `synthetic_slot_health` — the tracker's full state (`rate`, `degraded`,
-  `sample_count`, `consecutive_above`, `consecutive_below`), for diagnostics.
-  Not recorded to history (`_unrecorded_attributes`).
+  `sample_count`, `consecutive_above`, `consecutive_below`, `last_sample_at`),
+  for diagnostics. Not recorded to history (`_unrecorded_attributes`).
+  The window is only aged when a new evaluation is recorded, so if
+  evaluations stop the rate, count and `degraded` flag freeze at their last
+  values; `last_sample_at` (#996) is the time of the newest sample, and a
+  value more than a few minutes old means the rest is stale.
 
 While `synthetic_slot_degraded` is `true`, `state` escalates from `ok` to
-`degraded` (never downgrading an existing `error`) and `message` names the
-rate and the configured forecast entity to check. If the configured forecast
+`degraded` (never downgrading an existing `error`) and `message` reads
+"no price forecast entry covered the current interval in N% of the last
+hour's evaluations", naming the configured forecast entity to check. It
+describes missing coverage rather than synthetic pricing because the count
+also includes evaluations where no slots were built at all (#998). If the configured forecast
 source has *never* produced an entry covering "now" since startup, a single
 loud `WARNING` fires once, naming that entity, independently of the rolling
 rate. This also covers the total-outage case where the configured source
@@ -686,12 +693,15 @@ Attributes:
   decision_timestamp: "2026-02-26T09:05:00"
   implementation_timestamp: "2026-02-26T09:05:45"
   boundary_lag_seconds: 23.4
+  boundary_lag_grant_source: price
   boundary_lag_history: [...last 20 boundary-lag measurements, tagged by grant_source...]
   anticipated_transitions_today: 0
   anticipation_corrections_today: 0
 ```
 
 Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_lag_history`: how far into its 5-minute price interval each transition landed, tagged by `grant_source` (`price`, `spike`, `demand_window`, `soc_floor`, `plan_charge`, `price_confirmed`, `debounce`, `retry`, `backstop`, `unknown`). `debounce` and `retry` (#941) mark a transition that did not land on a fresh price grant — a debounce timer completing, or a retry of a command the controller rejected or the entity validator blocked — and should be excluded from the Amber-latency baseline the same way `backstop` is. Each boundary-lag history entry's `from_mode` (#940) is the previously *commanded* mode, not the transition's own target (`data.active_mode`, which always equals the target); the `from_mode` field of the `history` entries above means the same thing (#967), so both rings agree on its meaning. Internally the boundary-lag ring is partitioned per `grant_source` (200 entries each, #942/#990 — enough per-source samples for #510 slice 3's Amber-latency tail estimate) so a backstop correction burst can never evict the price-tagged samples; the attribute is still the last 20 entries overall, flattened from that per-source ring into one chronologically ordered list. `anticipated_transitions_today` / `anticipation_corrections_today` are declared here and daily-reset but stay at 0 until a later slice implements the anticipatory logic they count. No new entity — these are attributes on this existing sensor.
+
+`history` and `boundary_lag_history` are excluded from the recorder (#945): they are on the live state but not in the entity's stored history. The scalar attributes are still recorded, including `boundary_lag_seconds` and `boundary_lag_grant_source` (the `grant_source` of the latest boundary-lag measurement). Recorded together, those two let the per-source lag distribution be rebuilt from recorder history after a restart, which the in-memory ring does not survive.
 
 ---
 

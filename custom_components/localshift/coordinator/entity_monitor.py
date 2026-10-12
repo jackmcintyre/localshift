@@ -24,7 +24,6 @@ from ..const import (
     TESLA_TARIFF_LOOKAHEAD_HOURS,
 )
 from ..utils.export_availability import export_blocked_periods
-from .synthetic_slot_health import SyntheticSlotHealth
 
 if TYPE_CHECKING:  # pragma: no cover
     from .coordinator import LocalShiftCoordinator
@@ -47,6 +46,9 @@ class EntityMonitor:
         self._coordinator = coordinator
         # Issue #1097: warn once per failure streak, not on every 5-minute tick.
         self._tesla_tariff_read_failing = False
+        # Issue #995: the synthetic-slot warning this monitor last appended, so
+        # it can be withdrawn before the next one is added.
+        self._synthetic_slot_warning: str | None = None
 
     def read_all_external_state(self) -> None:
         """Read current state of all monitored external entities."""
@@ -133,12 +135,19 @@ class EntityMonitor:
         this cycle.
         """
         data = self._coordinator.data
-        health = getattr(data, "synthetic_slot_health", None)
-        # Guard against a bare MagicMock (unit tests that build coordinator
-        # data from a generic mock, not a real CoordinatorData) leaking a
-        # truthy Mock into integration_status.
-        if not isinstance(health, SyntheticSlotHealth):
-            return
+        # Issue #997: read the tracker directly. CoordinatorData always carries
+        # one; a type check here could only ever skip the escalation silently.
+        health = data.synthetic_slot_health
+
+        # Issue #995: withdraw last cycle's warning before deciding on this
+        # cycle's. With a validator the list was rebuilt above and this is a
+        # no-op; without one nothing else clears it, and the warning would
+        # otherwise be appended again on every check.
+        if self._synthetic_slot_warning is not None:
+            data.entity_warnings = [
+                w for w in data.entity_warnings if w != self._synthetic_slot_warning
+            ]
+            self._synthetic_slot_warning = None
 
         # Issue #956 review fix: the pricing entity mappings live in
         # entry.data, never entry.options (get_option reads entry.options
@@ -152,8 +161,8 @@ class EntityMonitor:
             _LOGGER.warning(
                 "SYNTHETIC_SLOT_STARTUP: no entry from the configured price "
                 "forecast source %s has covered 'now' in %d evaluations "
-                "since startup -- every slot 0 has been priced synthetically "
-                "(Issue #956)",
+                "since startup -- every slot 0 was either priced synthetically "
+                "or not built at all (Issue #956)",
                 forecast_entity,
                 health.evaluations_since_start,
             )
@@ -162,12 +171,17 @@ class EntityMonitor:
         if not health.degraded:
             return
 
+        # Issue #998: a sample is also counted when no slots were built at all
+        # (empty forecast), so the wording names what is true of every counted
+        # sample -- no forecast entry covered "now" -- not the synthetic
+        # pricing step, which does not run on an empty build.
         warning = (
-            f"slot 0 priced synthetically in {round(health.rate * 100)}% of "
-            f"the last hour's evaluations ({health.sample_count} samples) -- "
-            f"check {forecast_entity}"
+            f"no price forecast entry covered the current interval in "
+            f"{round(health.rate * 100)}% of the last hour's evaluations "
+            f"({health.sample_count} samples) -- check {forecast_entity}"
         )
         data.entity_warnings = list(data.entity_warnings) + [warning]
+        self._synthetic_slot_warning = warning
         if data.integration_status == "ok":
             data.integration_status = "degraded"
             data.integration_status_message = warning

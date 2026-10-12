@@ -6,36 +6,20 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.components.sensor import SensorStateClass
 from homeassistant.helpers.entity import EntityCategory
 
-from ..coordinator.synthetic_slot_health import SyntheticSlotHealth
 from .base import LocalShiftSensorBase
 
 if TYPE_CHECKING:
     pass
 
-_SYNTHETIC_SLOT_HEALTH_FALLBACK: dict[str, Any] = {
-    "rate": 0.0,
-    "degraded": False,
-    "sample_count": 0,
-    "consecutive_above": 0,
-    "consecutive_below": 0,
-}
-
 
 def _synthetic_slot_attrs(data: Any) -> dict[str, Any]:
     """Build the synthetic-slot-0 attribute trio (Issue #956).
 
-    Falls back to safe defaults when ``data.synthetic_slot_health`` is
-    missing or not a real :class:`SyntheticSlotHealth` -- e.g. a bare
-    ``MagicMock`` coordinator in tests, which would otherwise auto-vivify a
-    truthy Mock attribute and leak it into the sensor's attributes.
+    Issue #997: reads the tracker directly. ``CoordinatorData`` always carries
+    one, so there is no fallback branch that could report a healthy rate from
+    a tracker this code failed to recognise.
     """
-    health = getattr(data, "synthetic_slot_health", None)
-    if not isinstance(health, SyntheticSlotHealth):
-        return {
-            "synthetic_slot_rate": 0.0,
-            "synthetic_slot_degraded": False,
-            "synthetic_slot_health": dict(_SYNTHETIC_SLOT_HEALTH_FALLBACK),
-        }
+    health = data.synthetic_slot_health
     return {
         "synthetic_slot_rate": round(health.rate, 3),
         "synthetic_slot_degraded": health.degraded,
@@ -274,6 +258,13 @@ class DecisionLagSensor(LocalShiftSensorBase):
     _attr_native_unit_of_measurement = "s"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    # Issue #945: the two 20-entry rings are several KB together and
+    # boundary_lag_history changes on corrections, re-probes and retries, so
+    # recording them writes a new state_attributes row each time. They stay on
+    # the live state; only the recorder skips them (as Entity Health does).
+    # boundary_lag_seconds and boundary_lag_grant_source stay recorded, so the
+    # per-source lag distribution survives a restart in recorder history.
+    _unrecorded_attributes = frozenset({"history", "boundary_lag_history"})
 
     def _update_from_coordinator(self) -> None:
         d = self.coordinator.data
@@ -303,6 +294,10 @@ class DecisionLagSensor(LocalShiftSensorBase):
 
         def _round_or_none(values: list[float]) -> float | None:
             return round(sum(values) / len(values), 2) if values else None
+
+        boundary_lag_history = _flatten_boundary_lag_history(
+            d.boundary_lag_history or {}
+        )
 
         return {
             "command_lag_seconds": round(d.decision_lag_seconds, 2)
@@ -338,9 +333,14 @@ class DecisionLagSensor(LocalShiftSensorBase):
             "boundary_lag_seconds": round(d.boundary_lag_seconds, 2)
             if d.boundary_lag_seconds is not None
             else None,
-            "boundary_lag_history": _flatten_boundary_lag_history(
-                d.boundary_lag_history or {}
-            ),
+            # #945: the ring below is unrecorded, so the grant source of the
+            # latest measurement is also a recorded scalar. Without it the
+            # recorder holds only untagged boundary_lag_seconds values and the
+            # per-source distribution cannot be rebuilt after a restart.
+            "boundary_lag_grant_source": boundary_lag_history[-1].get("grant_source")
+            if boundary_lag_history
+            else None,
+            "boundary_lag_history": boundary_lag_history,
             "anticipated_transitions_today": d.anticipated_transitions_today,
             "anticipation_corrections_today": d.anticipation_corrections_today,
         }

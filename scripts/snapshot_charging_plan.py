@@ -61,6 +61,14 @@ from datetime import datetime
 from typing import Any
 
 
+class HAFetchError(Exception):
+    """Home Assistant could not be asked about an entity (Issue #1023).
+
+    Distinct from the entity not existing: auth failure, network failure, a
+    timeout, or a reply that could not be parsed.
+    """
+
+
 class HomeAssistantClient:
     """Simple Home Assistant REST API client using urllib."""
 
@@ -72,7 +80,13 @@ class HomeAssistantClient:
         }
 
     def get_state(self, entity_id: str) -> dict | None:
-        """Get state for a single entity."""
+        """Get state for a single entity.
+
+        Returns None only when Home Assistant answered that the entity does
+        not exist (HTTP 404). Every other failure -- auth, DNS, timeout, a
+        malformed reply -- raises HAFetchError, so a caller can tell a stale
+        entity reference from Home Assistant being unreachable (Issue #1023).
+        """
         try:
             req = urllib.request.Request(
                 f"{self.url}/api/states/{entity_id}",
@@ -82,22 +96,24 @@ class HomeAssistantClient:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            print(
-                f"Warning: HTTP {e.code} for {entity_id}: {e.reason}", file=sys.stderr
-            )
-            return None
+            if e.code == 404:
+                print(f"Warning: HTTP 404 for {entity_id}: {e.reason}", file=sys.stderr)
+                return None
+            raise HAFetchError(f"HTTP {e.code} {e.reason}") from e
         except urllib.error.URLError as e:
-            print(f"Warning: Failed to get {entity_id}: {e.reason}", file=sys.stderr)
-            return None
+            raise HAFetchError(str(e.reason)) from e
         except Exception as e:
-            print(f"Warning: Failed to get {entity_id}: {e}", file=sys.stderr)
-            return None
+            raise HAFetchError(str(e)) from e
 
     def get_states(self, entity_ids: list[str]) -> dict[str, dict]:
         """Get states for multiple entities."""
         results = {}
         for entity_id in entity_ids:
-            state = self.get_state(entity_id)
+            try:
+                state = self.get_state(entity_id)
+            except HAFetchError as e:
+                print(f"Warning: Failed to get {entity_id}: {e}", file=sys.stderr)
+                continue
             if state:
                 results[entity_id] = state
         return results
@@ -136,13 +152,23 @@ class SnapshotGenerator:
         # Issue #977: entities that returned no state, so a stale/renamed
         # reference is reported loudly instead of silently printing "unknown".
         self._missing: set[str] = set()
+        # Issue #1023: entities whose state could not be fetched at all (auth,
+        # network, timeout), keyed to the reason. Kept apart from _missing so
+        # an unreachable Home Assistant is not reported as a stale reference.
+        self._fetch_failed: dict[str, str] = {}
 
     def get_entity(self, entity_id: str) -> dict | None:
         """Get entity with caching."""
         if entity_id not in self._cache:
-            self._cache[entity_id] = self.ha.get_state(entity_id)
-            if self._cache[entity_id] is None:
-                self._missing.add(entity_id)
+            try:
+                self._cache[entity_id] = self.ha.get_state(entity_id)
+            except HAFetchError as e:
+                self._cache[entity_id] = None
+                self._fetch_failed[entity_id] = str(e)
+                print(f"Warning: Failed to get {entity_id}: {e}", file=sys.stderr)
+            else:
+                if self._cache[entity_id] is None:
+                    self._missing.add(entity_id)
         return self._cache[entity_id]
 
     def state(self, entity_id: str, default: str = "unknown") -> str:
@@ -695,6 +721,39 @@ class SnapshotGenerator:
 """
 
 
+def report_fetch_problems(generator: SnapshotGenerator) -> int:
+    """Report entities that produced no state; return the process exit code.
+
+    Issue #977: a missing entity usually means a stale or renamed reference
+    in this script, not a transient HA hiccup -- fail loudly (exit 1) rather
+    than let the snapshot silently read "unknown" everywhere.
+
+    Issue #1023: that only holds when Home Assistant actually answered "no
+    such entity". A fetch that failed outright (auth, network, timeout) says
+    nothing about the script, so it is reported separately and exits 2.
+    """
+    exit_code = 0
+    if generator._fetch_failed:
+        reasons = sorted(set(generator._fetch_failed.values()))
+        print(
+            f"Warning: {len(generator._fetch_failed)} entity id(s) could not be "
+            f"fetched from Home Assistant ({'; '.join(reasons)}). This is a "
+            "connection or auth problem, not a missing entity: "
+            f"{', '.join(sorted(generator._fetch_failed))}",
+            file=sys.stderr,
+        )
+        exit_code = 2
+    if generator._missing:
+        missing_list = ", ".join(sorted(generator._missing))
+        print(
+            f"Warning: {len(generator._missing)} entity id(s) returned no state: "
+            f"{missing_list}",
+            file=sys.stderr,
+        )
+        exit_code = 1
+    return exit_code
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate LocalShift charging plan snapshot"
@@ -740,17 +799,9 @@ def main():
     print(f"Snapshot saved to: {output_path}", file=sys.stderr)
     print(markdown)
 
-    # Issue #977: a missing entity usually means a stale or renamed reference
-    # in this script, not a transient HA hiccup — fail loudly rather than
-    # let the snapshot silently read "unknown" everywhere.
-    if generator._missing:
-        missing_list = ", ".join(sorted(generator._missing))
-        print(
-            f"Warning: {len(generator._missing)} entity id(s) returned no state: "
-            f"{missing_list}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    exit_code = report_fetch_problems(generator)
+    if exit_code:
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":

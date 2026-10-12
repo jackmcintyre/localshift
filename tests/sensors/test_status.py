@@ -78,7 +78,7 @@ class TestIntegrationStatusSensorSyntheticSlotHealth:
             integration_status="degraded",
             integration_status_message="degraded",
             entity_errors=[],
-            entity_warnings=["slot 0 priced synthetically"],
+            entity_warnings=["no price forecast entry covered the current interval"],
             required_entities_healthy=True,
             last_entity_check="2026-09-06T12:00:00",
             synthetic_slot_health=health,
@@ -89,23 +89,34 @@ class TestIntegrationStatusSensorSyntheticSlotHealth:
         assert attrs["synthetic_slot_degraded"] is True
         assert attrs["synthetic_slot_health"] == health.to_dict()
 
-    def test_missing_tracker_falls_back_to_safe_defaults(self):
-        """A coordinator built from a bare MagicMock (no synthetic_slot_health
-        explicitly set) must not leak a Mock object into the attribute dict."""
+    def test_tracker_is_read_by_shape_not_by_class(self):
+        """Issue #997: a degraded tracker must be reported as degraded even
+        when it is not an instance of this module's SyntheticSlotHealth (e.g.
+        the module was loaded twice). A type check here fell back to a
+        healthy-looking 0.0 / False with no log line."""
+
+        class _ReloadedTracker:
+            rate = 1.0
+            degraded = True
+
+            def to_dict(self):
+                return {"rate": 1.0, "degraded": True}
+
         sensor = _sensor(
             IntegrationStatusSensor,
-            integration_status="ok",
-            integration_status_message="All good",
+            integration_status="degraded",
+            integration_status_message="degraded",
             entity_errors=[],
             entity_warnings=[],
             required_entities_healthy=True,
             last_entity_check="2026-03-12T12:00:00",
+            synthetic_slot_health=_ReloadedTracker(),
         )
         attrs = sensor.extra_state_attributes
 
-        assert attrs["synthetic_slot_rate"] == 0.0
-        assert attrs["synthetic_slot_degraded"] is False
-        assert isinstance(attrs["synthetic_slot_health"], dict)
+        assert attrs["synthetic_slot_rate"] == 1.0
+        assert attrs["synthetic_slot_degraded"] is True
+        assert attrs["synthetic_slot_health"] == {"rate": 1.0, "degraded": True}
 
     def test_synthetic_slot_health_is_unrecorded(self):
         assert "synthetic_slot_health" in IntegrationStatusSensor._unrecorded_attributes
@@ -332,6 +343,33 @@ class TestAutomationReadySensor:
 
 
 class TestDecisionLagSensor:
+    def test_history_rings_are_unrecorded(self):
+        # Issue #945: both rings are exposed live but kept out of the recorder.
+        assert DecisionLagSensor._unrecorded_attributes == frozenset({
+            "history",
+            "boundary_lag_history",
+        })
+
+    def test_unrecorded_names_are_real_attributes(self):
+        # A renamed attribute would silently start being recorded again.
+        sensor = _sensor(
+            DecisionLagSensor,
+            decision_lag_seconds=1.0,
+            physical_response_lag_seconds=None,
+            physical_response_watch=None,
+            physical_response_timed_out=False,
+            decision_lag_history=[],
+            decision_timestamp=None,
+            command_completion_timestamp=None,
+            boundary_lag_seconds=None,
+            boundary_lag_history={},
+            anticipated_transitions_today=0,
+            anticipation_corrections_today=0,
+        )
+        assert DecisionLagSensor._unrecorded_attributes <= set(
+            sensor.extra_state_attributes
+        )
+
     def test_update_with_value(self):
         sensor = _sensor(
             DecisionLagSensor,
@@ -393,6 +431,7 @@ class TestDecisionLagSensor:
         assert attrs["physical_response_timed_out"] is False
         assert attrs["boundary_lag_seconds"] is None
         assert attrs["boundary_lag_history"] == []
+        assert attrs["boundary_lag_grant_source"] is None
         assert attrs["anticipated_transitions_today"] == 0
         assert attrs["anticipation_corrections_today"] == 0
 
@@ -461,6 +500,48 @@ class TestDecisionLagSensor:
         ]
         assert attrs["anticipated_transitions_today"] == 3
         assert attrs["anticipation_corrections_today"] == 1
+
+    def test_boundary_lag_grant_source_is_a_recorded_scalar(self):
+        # #945: boundary_lag_history is unrecorded, so the source of the
+        # latest measurement must reach the recorder as a scalar next to
+        # boundary_lag_seconds, or recorded history cannot separate price
+        # grants from backstop corrections after a restart. "Latest" is
+        # chronological across buckets, not dict order: backstop is the last
+        # bucket here but price is the most recent transition.
+        boundary_history = {
+            "price": [
+                {
+                    "boundary_lag": 23.4,
+                    "grant_source": "price",
+                    "interval_start_utc": "2026-10-12T02:05:00+00:00",
+                }
+            ],
+            "backstop": [
+                {
+                    "boundary_lag": 200.0,
+                    "grant_source": "backstop",
+                    "interval_start_utc": "2026-10-12T02:00:00+00:00",
+                }
+            ],
+        }
+        sensor = _sensor(
+            DecisionLagSensor,
+            decision_lag_seconds=None,
+            physical_response_lag_seconds=None,
+            physical_response_timed_out=False,
+            physical_response_watch=None,
+            decision_lag_history=[],
+            decision_timestamp=None,
+            command_completion_timestamp=None,
+            boundary_lag_seconds=23.4,
+            boundary_lag_history=boundary_history,
+            anticipated_transitions_today=0,
+            anticipation_corrections_today=0,
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs["boundary_lag_grant_source"] == "price"
+        assert "boundary_lag_grant_source" not in sensor._unrecorded_attributes
+        assert "boundary_lag_seconds" not in sensor._unrecorded_attributes
 
     def test_extra_state_attributes_boundary_lag_history_windowed(self):
         # The attribute exposes the last 20 entries overall, flattened across

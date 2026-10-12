@@ -49,6 +49,16 @@ def _make_mock_entry():
     return entry
 
 
+def _category_of(entity):
+    """Read a category the way Home Assistant does (Issue #1000).
+
+    The public property covers both ways of declaring one -- the
+    ``_attr_entity_category`` attribute and an ``entity_description`` --
+    where reading the private attribute sees only the first.
+    """
+    return entity.entity_category
+
+
 async def _collect_entities_from_code() -> tuple[dict[str, str | None], dict[str, str]]:
     """Run every platform's async_setup_entry and collect two maps.
 
@@ -75,7 +85,7 @@ async def _collect_entities_from_code() -> tuple[dict[str, str | None], dict[str
 
         for entity in entities:
             unique_id = entity._attr_unique_id
-            category = getattr(entity, "_attr_entity_category", None)
+            category = _category_of(entity)
             category_str = category.value if category is not None else None
             categories[unique_id] = category_str
             seen_platforms[unique_id] = platform
@@ -202,3 +212,33 @@ class TestEntityCategoryDocSync:
         doc_categories = _parse_doc_table()
 
         assert len(code_categories) == len(doc_categories)
+
+
+class TestCategoryReader:
+    """Issue #1000: the gate and the doc generator must see a category
+    declared through an EntityDescription, not only ``_attr_entity_category``."""
+
+    @staticmethod
+    def _described_entity():
+        from homeassistant.components.sensor import (
+            SensorEntity,
+            SensorEntityDescription,
+        )
+        from homeassistant.helpers.entity import EntityCategory
+
+        class _Described(SensorEntity):
+            entity_description = SensorEntityDescription(
+                key="described", entity_category=EntityCategory.DIAGNOSTIC
+            )
+
+        return _Described(), EntityCategory.DIAGNOSTIC
+
+    def test_gate_reads_category_from_entity_description(self):
+        entity, expected = self._described_entity()
+        assert _category_of(entity) is expected
+
+    def test_doc_generator_reads_category_from_entity_description(self):
+        from scripts.dump_entity_categories import _category_of as script_reader
+
+        entity, expected = self._described_entity()
+        assert script_reader(entity) is expected
