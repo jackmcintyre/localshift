@@ -12,9 +12,11 @@ This document describes the DP (Dynamic Programming) optimizer rollout phases an
 
 ## Overview
 
-The DP optimizer is a deterministic planning subsystem that computes optimal battery control decisions using dynamic programming. It runs alongside the legacy planner in **shadow mode** to enable A/B comparison before any control changes.
+The DP optimizer is a deterministic planning subsystem that computes optimal battery control decisions using dynamic programming. During the rollout it ran alongside the legacy planner in **shadow mode** to enable A/B comparison before any control changes. Today it is the only planner and always controls the battery.
 
-## Modes
+## Modes (historical)
+
+Everything from here down describes the rollout as it was. The modes, the **Enable Optimizer** option and the legacy planner no longer exist; for current behaviour see [TROUBLESHOOTING.md](TROUBLESHOOTING.md) § DP Optimizer Issues.
 
 | Mode | Description | Control Behavior |
 |------|-------------|------------------|
@@ -22,7 +24,7 @@ The DP optimizer is a deterministic planning subsystem that computes optimal bat
 | `assist` | Optimizer provides recommendations | Legacy decisions applied |
 | `active` | Optimizer controls battery (with safety gate) | Optimizer decisions applied |
 
-**Current Status**: All modes supported. In shadow/assist mode, the optimizer does NOT control the battery. In active mode, optimizer controls the battery with safety gates.
+**Status during the rollout**: all three modes were supported. In shadow/assist mode the optimizer did NOT control the battery; in active mode it controlled the battery behind the safety gate. **Status now**: shadow and assist were removed in #448, and what was "active" is simply how LocalShift runs.
 
 ## Enabling the Optimizer
 

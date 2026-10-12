@@ -244,13 +244,13 @@ The DP optimizer is the active planner — there is no separate legacy planner o
 - No plan data available
 
 **Causes:**
-- Optimizer not enabled in configuration
-- Integration option `optimizer_enabled` is `False`
+- No optimizer cycle has completed yet, so there is no summary to show (normal for the first moments after a restart or reload)
+
+There is no option that enables or disables the optimizer; the `optimizer_enabled` setting was removed (Issue #448).
 
 **Solutions:**
-1. Go to **Settings → Devices & Services → LocalShift → Configure**
-2. Enable the optimizer option
-3. Reload the integration
+1. Wait for one coordinator cycle
+2. If it stays "disabled", check the Home Assistant log for LocalShift errors and whether the price and solar forecast inputs are available (`sensor.localshift_automation_ready`)
 
 ### Optimizer Shows "error"
 
@@ -276,17 +276,17 @@ The DP optimizer is the active planner — there is no separate legacy planner o
 - Optimizer plan looks reasonable but the battery isn't following it
 
 **Explanation:**
-The optimizer is gated behind safety checks (see Active Mode Issues below). If those checks are failing, the coordinator falls back to holding the last-known-safe state rather than applying the plan.
+The optimizer's plan is applied only after a safety gate passes (see Safety Gate below). If a check fails, that cycle's plan is not applied and the battery is put in self-consumption instead.
 
 **Solutions:**
 1. Ensure the optimizer has been producing valid plans (no `error` state)
 2. Check the safety gate block reasons below
-3. See Active Mode Fallback below for what to check when a gate is blocking control
+3. Check that automation is on (`switch.localshift_automation_enabled`) and that no manual mode is selected
 
 **Safety First:**
-The safety gates:
-- Fall back to a safe hold immediately if any check fails
-- Track fallback count and apply cooldown after repeated failures
+The safety gate:
+- Defaults to self-consumption immediately if any check fails
+- Is re-evaluated every cycle; there is no fallback counter or cooldown, so control returns on the first cycle that passes
 
 ### Parity Completeness Low
 
@@ -310,7 +310,7 @@ The safety gates:
 - `alignment_issues` list contains warnings
 
 **Causes:**
-- Slot count mismatch between legacy and optimizer
+- Slot count mismatch between the forecast slots and the optimizer's slot contexts
 - Timestamp/interval inconsistencies
 
 **Solutions:**
@@ -330,60 +330,42 @@ The safety gates:
 
 **Solutions:**
 1. Verify integration is loaded
-2. Check that optimizer is enabled in configuration
-3. Wait for at least one coordinator cycle after enabling
+2. Wait for at least one coordinator cycle after a restart or reload
 
-### Active Mode Issues
+### Safety Gate
 
-When using active mode (optimizer controls battery), additional monitoring is available.
+The optimizer always controls the battery; the shadow and assist control modes and the "Enable Optimizer" option were removed (Issue #448). What remains from that rollout is the safety gate, which checks each cycle's plan before it is applied.
 
-#### Active Mode Fallback
+#### Safety Gate Fallback
 
 **Symptoms:**
-- `sensor.localshift_optimizer_summary` shows `block_reason` in attributes
-- Battery is being controlled by legacy planner even though active mode is enabled
+- The Home Assistant log shows `DP optimizer safety gate blocked: <reason> — defaulting to SELF_CONSUMPTION`
+- `sensor.localshift_forecast_status` attribute `debug_mode_source` reads `fallback` instead of `optimizer`
+- The battery is in self-consumption although the plan wanted something else
 
 **Causes:**
-- Safety gate check failed
-- One or more admission criteria not met
+- A safety gate check failed this cycle
 
 **Solutions:**
-1. Check `block_reason` in `sensor.localshift_optimizer_summary` attributes
-2. Review the safety gate checks below
+1. Find the block reason in the log line above (it is not published as a sensor attribute)
+2. Look the reason up in the table below
 
 #### Safety Gate Block Reasons
 
 | Block Reason | Meaning | Action |
 |--------------|---------|--------|
-| `optimizer_not_enabled` | Optimizer disabled in config | Enable optimizer in configuration |
-| `control_mode_not_active` | Control mode not set to "active" | Set control mode to "active" |
-| `solve_not_successful` | Last DP solve failed | Check optimizer error messages |
-| `slot_alignment_invalid` | Slot mismatch between legacy and optimizer | Check forecast generation |
-| `no_decisions` | No optimizer decisions available | Check optimizer is producing results |
-| `cooldown_active` | In fallback cooldown after repeated failures | Wait for cooldown to complete |
+| `optimizer_result_none` | The planner returned no result | Check the log for the optimizer error that preceded it |
+| `optimizer_solve_failed` | The DP solve failed | Check `error_message` on `sensor.localshift_optimizer_summary` |
+| `slot_alignment_invalid` | Forecast slots and optimizer slot contexts do not line up | Check forecast generation |
+| `forecast_stale` | The plan is more than 30 minutes old | Check that the price and solar forecast inputs are updating |
+| `no_decisions_available` | The solve succeeded but produced no decisions | Check that forecast slots are available |
 
-#### Active Mode Apply Status
+#### Stopping LocalShift from Controlling the Battery
 
-**Symptoms:**
-- Want to verify optimizer decisions are being applied
+There is no shadow or assist mode to roll back to. To stop LocalShift driving the battery:
 
-**Solutions:**
-1. Check `sensor.localshift_optimizer_summary` attributes:
-   - `last_apply_status`: "success" or "failed"
-   - `last_apply_timestamp`: ISO timestamp of last successful apply
-   - `fallback_count`: Number of consecutive fallback cycles
-2. Check diagnostics for detailed apply path information
-
-#### Rolling Back from Active Mode
-
-**Symptoms:**
-- Want to revert to shadow/assist mode or disable optimizer entirely
-
-**Solutions:**
-1. Go to **Settings → Devices & Services → LocalShift → Configure**
-2. Change **Optimizer Control Mode** from "active" to "shadow" or "assist"
-3. Or disable the optimizer entirely by toggling off **Enable Optimizer**
-4. Changes take effect on next coordinator cycle
+1. Turn off `switch.localshift_automation_enabled`, or
+2. Pick a mode on `select.localshift_battery_mode`, which turns automation off and applies that mode; select "automatic" to hand control back
 
 ---
 
