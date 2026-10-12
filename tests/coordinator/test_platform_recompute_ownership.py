@@ -226,12 +226,18 @@ class TestSwitchToggleRecomputeOwnership:
     ):
         """The real safety argument for deferring the recompute: the switch
         sets `automation_enabled` False in the coordinator's switch-state
-        bridge (synchronously, before persisting), so even though the
-        recompute now lands one event-loop turn later via the listener, the
-        state the listener's evaluation sees is already correct — a stale
-        interleave can't re-decide a mode using the old switch state."""
+        bridge synchronously, before persisting, so the listener's evaluation
+        sees the new switch state even when it interleaves with the rest of
+        the turn-off.
+
+        Issue #1030: HA runs update listeners as tasks, so the listener
+        starts at the first await inside `async_turn_off` -- while the
+        self-consumption command is still in flight -- not after the method
+        returns. The flush therefore happens inside that command here. A
+        flush after the method returned could not tell 'set before
+        persisting' from 'set at the end'.
+        """
         entry.options = {f"switch_state_{SWITCH_AUTOMATION_ENABLED}": True}
-        real_coordinator.async_set_self_consumption = AsyncMock()
         real_coordinator._notification_service = None
 
         switch = LocalShiftSwitch(real_coordinator, entry, SWITCH_AUTOMATION_ENABLED)
@@ -249,13 +255,29 @@ class TestSwitchToggleRecomputeOwnership:
         entry.update_listeners.clear()
         entry.add_update_listener(spy_listener)
 
+        async def hardware_call_with_listener_interleaved():
+            # The deferred listener runs while this command is in flight.
+            await fake_hass.config_entries.async_flush(entry)
+            seen["recomputes_before_command_returned"] = (
+                real_coordinator._compute_derived_values.call_count
+            )
+
+        real_coordinator.async_set_self_consumption = AsyncMock(
+            side_effect=hardware_call_with_listener_interleaved
+        )
+
         with patch.object(switch, "async_write_ha_state"):
             await switch.async_turn_off()
         await fake_hass.config_entries.async_flush(entry)
 
-        assert real_coordinator._compute_derived_values.call_count == 1
         real_coordinator.async_set_self_consumption.assert_awaited_once()
+        # The listener really did interleave with the in-flight command...
+        assert seen["recomputes_before_command_returned"] == 1
+        # ...and still saw the switch already off.
         assert seen["automation_enabled_during_listener"] is False
+        # Nothing was left to run afterwards: one recompute in total.
+        assert real_coordinator._compute_derived_values.call_count == 1
+        assert fake_hass.config_entries.dispatched == 1
 
 
 class TestOptimizationModeSelectRecomputeOwnership:
