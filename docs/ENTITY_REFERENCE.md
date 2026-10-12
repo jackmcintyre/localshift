@@ -42,10 +42,15 @@ All of the above release automatically, within one cycle, when the away entity t
 ## Entity Categories
 
 Issue #787: every entity's Home Assistant `entity_category`, kept in sync with
-the integration's code by `tests/test_entity_category.py` — that test fails
-if an entity is added, removed, or recategorised here without a matching code
-change, or vice versa. Regenerate this table with
+the integration's code by `tests/test_entity_category.py`. That test fails
+when this table and the code disagree: an entity added, removed, recategorised
+or moved to another platform on one side only. Regenerate this table with
 `uv run python scripts/dump_entity_categories.py` after any entity change.
+
+The test checks that the table matches the code, not that a category is the
+right one. Changing a category in code and regenerating the table passes, so a
+green suite does not mean anyone reviewed the choice. The review happens on the
+diff to this table in the pull request.
 
 `config` entities appear under the device's Configuration section (and are
 excluded from auto-generated dashboards and default Assist exposure);

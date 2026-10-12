@@ -37,8 +37,8 @@ PLATFORM_MODULES = [
 def derive_entity_id(platform: str, unique_id: str, name: str | None) -> str:
     """Derive the entity_id the way Home Assistant would.
 
-    Mirrors scripts/dump_entity_categories.py's derivation exactly -- do not
-    let this drift from that script.
+    This is the only copy of the derivation: scripts/dump_entity_categories.py
+    imports it rather than keeping its own (issue #1022).
     """
     if name:
         return f"{platform}.{slugify(f'{DEVICE_NAME} {name}')}"

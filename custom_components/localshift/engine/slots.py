@@ -199,6 +199,11 @@ class SlotBuilder:
             now_local=now_local,
             general_forecast=general_forecast,
             ha_timezone=self._ha_timezone,
+            # Issue #1036: a shadow build must not overwrite the primary
+            # build's remembered horizon signature (log level only).
+            log_scope=(
+                "shadow" if override_general_forecast is not None else "primary"
+            ),
         )
 
         dw_start_time = self._parse_time_option("demand_window_start")

@@ -16,6 +16,11 @@ or ``_LOGGER.warning(`` call's format string contains an ``ISSUE_<digits>``
 tag. DEBUG-level ``ISSUE_*`` tags remain allowed — the point is to keep
 issue-scoped diagnostics off levels a user actually sees in normal
 operation.
+
+``_LOGGER.log(<level>, "...")`` is gated too (issue #1035): the format string
+is its second argument, and the call is treated as INFO/WARNING-capable unless
+the level is the literal ``logging.DEBUG``. A level held in a variable can be
+INFO at runtime, which is exactly how the integration uses ``.log()``.
 """
 
 from __future__ import annotations
@@ -33,25 +38,45 @@ _ISSUE_TAG_RE = re.compile(r"ISSUE_\d+")
 
 _GATED_METHODS = {"info", "warning"}
 
+# ``_LOGGER.log(level, fmt, ...)`` takes the level as its first argument.
+_LEVEL_ARG_METHOD = "log"
+
 
 def _iter_python_files(root: Path):
     yield from sorted(root.rglob("*.py"))
 
 
-def _logger_call_attr(node: ast.Call) -> str | None:
-    """Return the attribute name (e.g. 'info') if this call is `<name ending in
-    LOGGER/logger>.<attr>(...)`, else None."""
+def _is_literal_debug_level(node: ast.expr) -> bool:
+    """True for ``logging.DEBUG`` / a bare ``DEBUG`` name."""
+    if isinstance(node, ast.Attribute):
+        return node.attr == "DEBUG"
+    return isinstance(node, ast.Name) and node.id == "DEBUG"
+
+
+def _gated_format_arg(node: ast.Call) -> tuple[str, ast.expr | None] | None:
+    """Return ``(method, format-string argument)`` for a gated logger call.
+
+    Gated calls are ``<name ending in LOGGER/logger>.info(...)``,
+    ``.warning(...)`` and ``.log(<level>, ...)`` where the level is not the
+    literal DEBUG. Returns None for anything else. The format argument is the
+    first positional for ``.info``/``.warning`` and the second for ``.log``;
+    it is None when the call does not have one.
+    """
     func = node.func
     if not isinstance(func, ast.Attribute):
         return None
-    if func.attr not in _GATED_METHODS:
+    if func.attr not in _GATED_METHODS and func.attr != _LEVEL_ARG_METHOD:
         return None
     target = func.value
     if not isinstance(target, ast.Name):
         return None
     if not (target.id.endswith("LOGGER") or target.id.endswith("logger")):
         return None
-    return func.attr
+    if func.attr == _LEVEL_ARG_METHOD:
+        if node.args and _is_literal_debug_level(node.args[0]):
+            return None
+        return func.attr, node.args[1] if len(node.args) > 1 else None
+    return func.attr, node.args[0] if node.args else None
 
 
 def _string_parts(node: ast.expr) -> list[str]:
@@ -68,24 +93,28 @@ def _string_parts(node: ast.expr) -> list[str]:
     return parts
 
 
-def _violations_in_file(path: Path) -> list[tuple[int, str, str]]:
-    """Return (lineno, level, text) for every offending log call in `path`."""
-    tree = ast.parse(path.read_text(), filename=str(path))
+def _violations_in_source(source: str, filename: str) -> list[tuple[int, str, str]]:
+    """Return (lineno, method, text) for every offending log call in `source`."""
+    tree = ast.parse(source, filename=filename)
     violations: list[tuple[int, str, str]] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        level = _logger_call_attr(node)
-        if level is None:
+        gated = _gated_format_arg(node)
+        if gated is None:
             continue
-        if not node.args:
+        method, format_arg = gated
+        if format_arg is None:
             continue
-        # The format-string argument is always the first positional arg.
-        text_parts = _string_parts(node.args[0])
-        combined = " ".join(text_parts)
+        combined = " ".join(_string_parts(format_arg))
         if _ISSUE_TAG_RE.search(combined):
-            violations.append((node.lineno, level, combined))
+            violations.append((node.lineno, method, combined))
     return violations
+
+
+def _violations_in_file(path: Path) -> list[tuple[int, str, str]]:
+    """Return (lineno, method, text) for every offending log call in `path`."""
+    return _violations_in_source(path.read_text(), str(path))
 
 
 def test_no_issue_tagged_diagnostics_at_info_or_warning():
@@ -101,7 +130,7 @@ def test_no_issue_tagged_diagnostics_at_info_or_warning():
     for path in files:
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and _logger_call_attr(node) is not None:
+            if isinstance(node, ast.Call) and _gated_format_arg(node) is not None:
                 scanned_logger_calls += 1
         for lineno, level, text in _violations_in_file(path):
             rel = path.relative_to(_REPO_ROOT)
@@ -120,6 +149,26 @@ def test_no_issue_tagged_diagnostics_at_info_or_warning():
         "(demote to DEBUG or delete once the issue closes):\n"
         + "\n".join(all_violations)
     )
+
+
+def test_gate_sees_logger_log_with_a_non_debug_level():
+    """`_LOGGER.log(level, "ISSUE_n ...")` must not bypass the gate (#1035)."""
+    source = (
+        "import logging\n"
+        "_LOGGER = logging.getLogger(__name__)\n"
+        "def f(x, level):\n"
+        '    _LOGGER.log(logging.INFO, "ISSUE_888 fixed level %s", x)\n'
+        '    _LOGGER.log(level, "ISSUE_889 variable level %s", x)\n'
+        '    _LOGGER.log(logging.DEBUG, "ISSUE_890 debug is allowed %s", x)\n'
+        '    _LOGGER.log(level, "tag later in the format ISSUE_891 %s", x)\n'
+        '    _LOGGER.log(level, "untagged %s", "ISSUE_892 is a value, not the format")\n'
+    )
+    found = _violations_in_source(source, "probe.py")
+    assert [(line, method) for line, method, _ in found] == [
+        (4, "log"),
+        (5, "log"),
+        (7, "log"),
+    ]
 
 
 if __name__ == "__main__":

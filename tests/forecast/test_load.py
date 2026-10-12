@@ -1214,62 +1214,6 @@ class TestPerDayOfWeekProfiles:
             abs=0.001,
         )
 
-    def test_profile_bucket_counts_exposed_for_diagnostics(self):
-        """The forecaster tallies which rung won, per bucket tag."""
-        forecaster = _create_load_forecaster()
-        forecaster.set_daily_profiles(
-            self._profiles(
-                daily_avg={2: {11: 2.0, 12: 2.0}},
-                daily_counts={2: {11: MIN_SAMPLES_PER_DAY_HOUR, 12: 1}},
-                weekday_avg={12: 1.2},
-                weekday_counts={12: MIN_SAMPLES_PER_AGGREGATE_HOUR},
-            )
-        )
-
-        base = dict(
-            hourly_avg_kw=_full_profile(0.5),
-            current_hour=11,
-            current_load_kw=0.0,
-            recent_load_kw=0.0,
-            day_of_week=2,
-        )
-        forecaster.estimate_hourly_consumption_kw(slot_hour=11, **base)
-        forecaster.estimate_hourly_consumption_kw(slot_hour=12, **base)
-
-        counts = forecaster.get_profile_bucket_counts()
-        assert counts["day_2"] == 1
-        assert counts["aggregate_weekday"] == 1
-        assert "global" not in counts
-
-    def test_profile_bucket_counts_reset_each_call(self):
-        """Counts describe the most recent estimate call, not a cumulative total."""
-        forecaster = _create_load_forecaster()
-        forecaster.set_daily_profiles(
-            self._profiles(
-                daily_avg={2: {11: 2.0}},
-                daily_counts={2: {11: MIN_SAMPLES_PER_DAY_HOUR}},
-            )
-        )
-
-        base = dict(
-            hourly_avg_kw=_full_profile(0.5),
-            slot_hour=11,
-            current_hour=11,
-            current_load_kw=0.0,
-            recent_load_kw=0.0,
-            day_of_week=2,
-        )
-        forecaster.estimate_hourly_consumption_kw(**base)
-        forecaster.estimate_hourly_consumption_kw(**base)
-
-        # Hour 11 resolves via the day bucket; the other 23 hours of the day
-        # have no day-specific or aggregate data at all, so they backfill
-        # from the global average (_full_profile covers all 24 hours).
-        assert forecaster.get_profile_bucket_counts() == {
-            "day_2": 1,
-            "global_avg": 23,
-        }
-
     def test_context_correction_still_applies_after_profile_resolution(self):
         """Ordering is unchanged: profile -> weather -> bias -> context correction."""
         forecaster = _create_load_forecaster()

@@ -102,23 +102,24 @@ Encodes preferences, costs, and behavioral biases into a scalar cost.
 | `export_revenue` | `grid_export × sell_price` | Revenue from selling (negative cost) | L1755 |
 | `switching_penalty` | `max(flat_knob, per_kWh_floor × rate_kw × slot_hours)` when action ≠ current | Stability, hysteresis against flip-flopping | `cost.py:52-64` |
 | `uncertainty_penalty` | Scales with horizon gap | Risk aversion when forecast is short | L1765-1774 |
-| `self_consumption_value` | `battery_for_load × $0.15/kWh` | Opportunity cost of exporting | L1779-1814 |
+| `self_consumption_value` | `battery_for_load × slot.buy_price` (`self_consumption` mode only) | **Diagnostic only, not part of `net_cost`.** The retail import the battery avoided by covering load. That saving is already in a lower `import_cost`, so it is reported but never subtracted | `engine/cost.py` (`stage_cost`) |
 | `solar_opportunity_penalty` | `grid_import × $0.03/kWh` when future solar available | Discourage grid charging when solar can charge for free | L1071-1160 |
 
 ### The Net Cost Formula
 
 ```python
 net_cost = (
-    import_cost 
-    - export_revenue 
-    + switching_penalty 
-    + uncertainty_penalty 
-    - self_consumption_value
+    import_cost
+    - export_revenue
+    + shortfall_penalty
+    + uncertainty_penalty
+    + switching_penalty
     + solar_opportunity_penalty
+    + futile_cycling_penalty
 )
 ```
 
-Note: `self_consumption_value` is subtracted because it's a credit (value provided).
+This is `ObjectiveTerms.net_cost` in `engine/types.py`. Note: `self_consumption_value` is **not** subtracted. The import the battery avoids is already captured by a lower `import_cost`; subtracting the credit as well double-counted it and drove the #406 / #800 overnight sawtooth. The term is still computed and serialized for diagnostics.
 
 **Anti-cycling:** Protection against wasteful cycling is handled by the `futile_cycling_penalty` term, which penalises grid charging when forward simulation shows the charged energy will drain through household load before reaching a useful period (solar surplus or demand window). The `switching_penalty` provides additional stability by discouraging frequent mode changes. Per Issue #919, the effective switching penalty is now the max of the flat knob `config.switching_penalty` and a slot-energy-scaled floor `config.switching_penalty_per_kwh × max(charge_rate_kw, discharge_rate_kw) × slot_hours`. The floor makes the hurdle price-scale-aware: a flat $0.08 knob is trivially paid through by Amber's 5-min price jitter (which produced 105 mode changes / 7 days in live data, median dwell 10 min), but a $0.40/kWh floor equals $0.50 per 15-min slot at 5 kW and suppresses the marginal SC↔X flips while preserving genuine spike capture and demand-window pre-charge (which carry dollar-scale value). There is no per-kWh cycle penalty; the former `cycle_penalty` term was removed in issue #804 because it indiscriminately penalised all charge/discharge energy regardless of whether cycling was economically beneficial.
 

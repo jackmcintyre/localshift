@@ -535,9 +535,12 @@ class TestSolveDiagnosticIntegration:
     Before the fix, ``_solve`` only computed ``dw_entry_soc_pct`` /
     ``peak_soc_pct`` when ``not solar_capable`` — so on any day sunny enough
     for solar alone to reach the demand-window target, both fields were
-    always ``None``. That is exactly the condition the runway backstop
-    (``engine/optimizer_facade.py``) reads those fields to guard against, so
-    the backstop was silently blind on every sunny day.
+    always ``None``. The cost was observability, not control (issue #1025):
+    the precharge decision log line and ``sensor.localshift_optimizer_summary``
+    showed no projected entry SOC on exactly those days. No backstop depended
+    on it: the runway backstop reads neither field, and the #901 backstop
+    returns before reading them whenever ``hard_target_floor`` is None, which
+    is the case on a solar-capable day.
     """
 
     def _make_solar_capable_inputs(self) -> OptimizerInputs:

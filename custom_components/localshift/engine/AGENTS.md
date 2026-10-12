@@ -12,11 +12,17 @@ terminal_cost()    → What MUST I achieve? (deadline)
 
 | File | Purpose |
 |------|---------|
-| `optimizer_dp.py` | Core DP solver (~865 lines) |
-| `optimizer_runner.py` | Slot-by-slot execution |
-| `slots.py` | Slot data structures |
-| `price_calculator.py` | Price threshold logic |
-| `parameters.py` | Parameter definitions |
+| `optimizer_facade.py` | **Live entry point.** `OptimizerFacade.run_inline` is what `computation_engine.py` calls every cycle: builds slots, runs the planner, writes the `optimizer_*` fields, runs the shadow comparison. Change execution behaviour here |
+| `optimizer_runner.py` | Helpers the facade imports: `_build_optimizer_config`, `_build_summary`, `OptimizerSafetyGate`, result serialization. Its own `run_optimizer` entry point is not called by the integration |
+| `core.py` | `DPPlanner`, the DP solver |
+| `constraints.py` | `feasible_actions()` and the solar gates |
+| `cost.py` | `stage_cost()` and `terminal_cost()` |
+| `transitions.py` | `transition()`, the SOC and grid-flow model for one slot |
+| `types.py` | `OptimizerConfig`, `SlotContext`, `ObjectiveTerms` and the other planner types |
+| `optimizer_dp.py` | Backward-compatibility shim that re-exports the modules above. Import from them directly in new code |
+| `slots.py` | `SlotBuilder`: turns raw coordinator data into `SlotContext` objects |
+| `slot_schedule.py` | Hybrid 5-minute / 30-minute slot schedule built from the price forecast |
+| `price_calculator.py` | Price and feed-in calculation helpers for the computation engine |
 
 ## Decision Guide
 

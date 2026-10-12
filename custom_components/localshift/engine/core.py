@@ -739,11 +739,19 @@ class DPPlanner:
         # Compute terminal diagnostics (PR #789 wiring fix). Issue #973: this
         # used to also require ``not solar_capable``, so dw_entry_soc_pct /
         # peak_soc_pct were always None on any day solar alone could reach the
-        # demand-window target — exactly the days the pre-charge runway
-        # backstop (optimizer_facade.py) relies on those fields. The compute
-        # is cheap (one accuracy-tracker read plus a max() over decisions), so
-        # publish it whenever there is a terminal penalty slot at all; "no
-        # demand window" is still the one case with nothing to report.
+        # demand-window target. That is an observability gap, not a decision
+        # one (issue #1025): the fields feed the precharge decision log line
+        # (OptimizerFacade._log_precharge_decision) and the attributes on
+        # sensor.localshift_optimizer_summary, which were blank on those days.
+        # No backstop was blind. The runway backstop reads neither field (it
+        # gates on the live SOC gap and runway slack), and the only
+        # decision-path reader, _projected_shortfall_pct in the #901 backstop,
+        # runs after that arm has already returned for a None
+        # hard_target_floor, which is what a solar-capable day produces. The
+        # compute is cheap (one accuracy-tracker read plus a max() over
+        # decisions), so publish it whenever there is a terminal penalty slot
+        # at all; "no demand window" is still the one case with nothing to
+        # report.
         terminal_diags: dict[str, Any] = {}
         forecast_accuracy_val: float | None = None
 
