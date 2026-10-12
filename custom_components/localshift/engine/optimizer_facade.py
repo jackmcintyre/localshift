@@ -424,6 +424,14 @@ class OptimizerFacade:
             optimizer_config, "precharge_runway_margin_min", None
         )
 
+        # Issue #1119: what slot 0 was priced on -- the price, where it came
+        # from, and whether Amber had confirmed it -- so a plan that commits on
+        # a wrong or unconfirmed price is visible on the sensor, not inferred.
+        slot0_price = getattr(slot_metadata, "slot0_price", None)
+        data.optimizer_summary["slot0_price"] = (
+            dict(slot0_price) if isinstance(slot0_price, dict) else {}
+        )
+
         data.forecast_horizon_hours = slot_metadata.horizon_hours
 
         data.solar_can_reach_target = result.can_solar_reach_target

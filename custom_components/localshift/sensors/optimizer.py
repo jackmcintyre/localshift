@@ -187,6 +187,9 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
                 summary, d, "precharge_runway_slack_min", None
             ),
             "export_floor_pct": _resolve_optional(summary, d, "export_floor_pct", None),
+            # Issue #1119: the price slot 0 was committed on, its source and
+            # Amber's estimate flag, beside the live sensor readings.
+            "slot0_price": summary.get("slot0_price") or {},
             "hard_floor_suppressed_by_solar": _resolve_optional(
                 summary, d, "hard_floor_suppressed_by_solar", False
             ),

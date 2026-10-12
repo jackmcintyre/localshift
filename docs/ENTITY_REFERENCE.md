@@ -920,6 +920,12 @@ Attributes:
 - `dw_entry_soc_pct` - SOC at demand window entry (null if no DW)
 - `forecast_accuracy` - Current forecast accuracy (0-1)
 - `accuracy_discount_factor` - Applied discount (0.5-1.0)
+- `slot0_price` - What the current slot was priced on (Issue #1119):
+  - `buy`, `sell` - the prices the planner used ($/kWh)
+  - `buy_source`, `sell_source` - `forecast_current` (the forecast entry covering now) or, for sell, `forecast_window` (no feed-in entry covers now; 15-minute lookup used)
+  - `buy_estimate`, `sell_estimate` - Amber's `estimate` flag for that entry: true until the interval's price is confirmed, null when the source carries none
+  - `export_start_deferred` - true when an unconfirmed sell price kept the current slot from starting an export (first 90 s of the interval; an export already running is not interrupted)
+  - `live_buy`, `live_sell` - the price sensors' own states, for comparison
 
 **Icon:** Dynamic (mdi:check-circle-outline for success, mdi:alert-circle-outline for failed, mdi:minus-circle-outline for disabled)
 
