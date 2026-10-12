@@ -756,7 +756,9 @@ class DPPlanner:
             _log_tail_failure(inputs.slots, exc)
             status, result = TAIL_FAILED, main
         result.next_window_tail_status = status
-        result.next_window_gap_min = float(gap_min) if _usable_gap(gap_min) else None
+        result.next_window_gap_min = (
+            float(gap_min) if gap_min is not None and _usable_gap(gap_min) else None
+        )
         return result
 
     def _solve_next_window_tail(
@@ -877,7 +879,7 @@ class DPPlanner:
             return TAIL_UNDER_TARGET_MODE, 0, 0.0
         if not main.success or len(main.decisions) != len(slots):
             return TAIL_MAIN_UNSUCCESSFUL, 0, 0.0
-        if not _usable_gap(gap_min):
+        if gap_min is None or not _usable_gap(gap_min):
             return TAIL_NO_GAP, 0, 0.0
 
         split = self._next_window_tail_start(slots)
