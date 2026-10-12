@@ -11,6 +11,7 @@ from .base import LocalShiftSensorBase
 if TYPE_CHECKING:
     pass
 
+
 def _synthetic_slot_attrs(data: Any) -> dict[str, Any]:
     """Build the synthetic-slot-0 attribute trio (Issue #956).
 
