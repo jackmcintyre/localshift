@@ -47,6 +47,16 @@ class NegativeFitAssessment:
     only because the window was already open and the forecast is still
     material."""
 
+    recovery_solar_factor: float | None = None
+    """Share of forecast net solar counted as recoverable when the floor was
+    built: ``min(NEGATIVE_FIT_RECOVERY_SOLAR_FACTOR, measured accuracy)``. None
+    when the derivation stopped before a floor was computed."""
+
+    floor_now_pct: float | None = None
+    """The recoverability floor (%) at slot 0: how low the plan may sell the
+    battery right now and still expect solar to return it to target. None when
+    the derivation stopped before a floor was computed."""
+
 
 def find_risk_window(
     slots: list, limit_idx: int | None = None
@@ -206,10 +216,56 @@ def _materiality(
     return True, False
 
 
+def recovery_solar_factor(
+    config: OptimizerConfig, solar_accuracy_tracker: object | None = None
+) -> float:
+    """Share of forecast net solar the recoverability floor counts on (#1103).
+
+    The smaller of the fixed ``NEGATIVE_FIT_RECOVERY_SOLAR_FACTOR`` haircut and
+    the measured forecast accuracy. The accuracy is
+    ``config.solar_forecast_accuracy``, which the planner sets each cycle from
+    the tracker before deriving the avoidance context and which the #816
+    target-reach checks (``check_global_solar_sufficiency``) already discount
+    by — so the floor that licenses exporting the battery cannot believe more
+    solar than the check that decides whether the target is reachable.
+
+    It is a ceiling on the haircut, not a replacement for it: accuracy at or
+    above 80%, and the 1.0 the config carries when nothing has been measured,
+    leave the floor exactly where it has always been.
+
+    One case the config figure cannot carry: a tracker whose samples measure
+    accuracy at zero (MAPE at or over 100, which a few dawn periods with tiny
+    actuals are enough to produce). ``get_forecast_accuracy`` reports that as
+    1.0, the same as "unmeasured", which would hand the worst measurement the
+    full 0.8 and make the factor jump 0.05 -> 0.8 -> 0.05 as successive
+    backfills carried MAPE across 100. Here it is what it measures: no forecast
+    solar is counted on and the floor is the target. So the factor never rises
+    as measured accuracy falls.
+    """
+    from custom_components.localshift.const import (
+        NEGATIVE_FIT_RECOVERY_SOLAR_FACTOR,
+    )
+    from custom_components.localshift.engine.solar import (
+        forecast_accuracy_measured_as_zero,
+    )
+
+    if forecast_accuracy_measured_as_zero(solar_accuracy_tracker):
+        return 0.0
+    accuracy = max(0.0, min(1.0, config.solar_forecast_accuracy))
+    return min(NEGATIVE_FIT_RECOVERY_SOLAR_FACTOR, accuracy)
+
+
 def compute_recovery_by_slot(
-    slots: list, recovery_deadline_idx: int, charge_efficiency: float
+    slots: list,
+    recovery_deadline_idx: int,
+    charge_efficiency: float,
+    solar_factor: float,
 ) -> list[float]:
-    """Precompute conservative recovery potential from each slot to deadline."""
+    """Precompute conservative recovery potential from each slot to deadline.
+
+    ``solar_factor`` is the share of forecast net solar assumed to arrive
+    (``recovery_solar_factor``).
+    """
     recovery_by_slot = []
     for slot_idx in range(len(slots)):
         recoverable_kwh = 0.0
@@ -217,7 +273,7 @@ def compute_recovery_by_slot(
             future_slot = slots[future_idx]
             net_kwh = future_slot.solar_kwh - future_slot.consumption_kwh
             if net_kwh > 0:
-                recoverable_kwh += net_kwh * charge_efficiency * 0.8
+                recoverable_kwh += net_kwh * charge_efficiency * solar_factor
         recovery_by_slot.append(recoverable_kwh)
     return recovery_by_slot
 
@@ -386,8 +442,10 @@ def assess_negative_fit_avoidance(inputs: OptimizerInputs) -> NegativeFitAssessm
     if _existing_headroom_kwh(inputs, risk_start_idx) >= required_headroom_kwh:
         return none
 
+    # Issue #1103: believe forecast solar no further than it has measured up.
+    solar_factor = recovery_solar_factor(config, inputs.solar_accuracy_tracker)
     recovery_by_slot = compute_recovery_by_slot(
-        slots, recovery_deadline_idx, config.charge_efficiency
+        slots, recovery_deadline_idx, config.charge_efficiency, solar_factor
     )
 
     floor_by_slot = compute_floor_by_slot(
@@ -414,6 +472,8 @@ def assess_negative_fit_avoidance(inputs: OptimizerInputs) -> NegativeFitAssessm
             spill_exposure=spill_exposure,
             spill_threshold=spill_threshold,
             suppressed=True,
+            recovery_solar_factor=solar_factor,
+            floor_now_pct=floor_by_slot[0],
         )
 
     return NegativeFitAssessment(
@@ -429,6 +489,8 @@ def assess_negative_fit_avoidance(inputs: OptimizerInputs) -> NegativeFitAssessm
         spill_exposure=spill_exposure,
         spill_threshold=spill_threshold,
         held_open=held_open,
+        recovery_solar_factor=solar_factor,
+        floor_now_pct=floor_by_slot[0],
     )
 
 

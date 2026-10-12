@@ -722,6 +722,16 @@ def _build_summary(
     summary["negative_fit_suppressed"] = result.negative_fit_suppressed
     summary["negative_fit_window_open"] = result.negative_fit_window_open
     summary["negative_fit_held_open"] = result.negative_fit_held_open
+    # The floor avoidance may sell down to, and how much of the forecast solar
+    # it believed in getting there (0.8, or measured accuracy when lower).
+    solar_factor = result.negative_fit_recovery_solar_factor
+    summary["negative_fit_recovery_solar_factor"] = (
+        round(solar_factor, 3) if solar_factor is not None else None
+    )
+    floor_now = result.negative_fit_floor_now_pct
+    summary["negative_fit_floor_now_pct"] = (
+        round(floor_now, 1) if floor_now is not None else None
+    )
 
     return summary
 
