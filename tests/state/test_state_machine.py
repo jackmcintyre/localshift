@@ -2673,7 +2673,7 @@ class TestDecisionFingerprint:
         # decision context: buy|sell|spike|dw_active|soc_floor_breached, plus the
         # plan-charge epoch (2026-07-27 pre-charge incident — the plan is itself a
         # decision input; the epoch is 0 until a wanted charge is starved).
-        assert fp1 == "0.2500|0.0800|False|False|False|0"
+        assert fp1 == "0.2500|0.0800|False|False|False|0|0"
 
 
 class TestModeTransitionGating:

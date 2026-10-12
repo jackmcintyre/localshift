@@ -615,21 +615,18 @@ class OptimizerFacade:
             data.optimizer_last_apply_status = "ready_to_apply"
             data.optimizer_safety_block_reason = ""
 
-            # A token granted purely by the plan-charge trigger is one-directional in
-            # what committed it, so it must be one-directional in what it commits.
-            # Otherwise a grant raised because the plan wanted to START charging is
-            # spent on whatever slot-0 has drifted to by the time the facade re-plans
-            # — including a discharge. Fall back to frozen: the wanted charge stays
-            # visible on debug_plan_mode_pending and the execution backstop (below)
-            # remains the deterministic path.
-            if (
-                decision_allowed
-                and getattr(data, "mode_decision_plan_charge_only", False)
-                and new_mode not in _CHARGE_MODES
-            ):
+            # A token granted purely by an epoch is one-directional in what
+            # raised it, so it must be one-directional in what it commits.
+            # Otherwise a grant raised because the plan wanted to START charging
+            # (plan-charge), or because a deferred export start was released
+            # (Issue #1119), is spent on whatever slot-0 has drifted to by the
+            # time the facade re-plans — including a discharge. Fall back to
+            # frozen: the wanted mode stays visible on debug_plan_mode_pending
+            # and the execution backstop (below) remains the deterministic path.
+            if decision_allowed and not self._epoch_grant_permits(data, new_mode):
                 _LOGGER.debug(
-                    "Plan-charge grant not spent: fresh plan selected %s, "
-                    "not a charge mode — holding",
+                    "Epoch grant not spent: fresh plan selected %s, which this "
+                    "grant may not commit — holding",
                     battery_mode_str,
                 )
                 decision_allowed = False
@@ -695,6 +692,23 @@ class OptimizerFacade:
                 decision_allowed,
                 mode_source="fallback",
             )
+
+    @staticmethod
+    def _epoch_grant_permits(data: CoordinatorData, new_mode: _BatteryMode) -> bool:
+        """Whether this evaluation's decision token may commit ``new_mode``.
+
+        An ordinary token (price/spike/DW/floor moved) may commit anything. A
+        token granted solely by an epoch may commit only what that epoch exists
+        to start: a charge mode for the plan-charge epoch, PROACTIVE_EXPORT for
+        the export-start epoch (Issue #1119).
+        """
+        plan_charge = getattr(data, "mode_decision_plan_charge_only", False)
+        export_start = getattr(data, "mode_decision_export_start_only", False)
+        if not (plan_charge or export_start):
+            return True
+        if plan_charge and new_mode in _CHARGE_MODES:
+            return True
+        return bool(export_start and new_mode == _BatteryMode.PROACTIVE_EXPORT)
 
     def _release_backstop_hold(self, data: CoordinatorData) -> bool:
         """Return True when a forced BOOST must be released this cycle.
