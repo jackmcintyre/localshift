@@ -605,7 +605,8 @@ class CoordinatorData:
     construction; that is a correction, not a mode change.
 
     grant_source (#941) is `price` | `spike` | `demand_window` | `soc_floor`
-    | `plan_charge` | `debounce` | `retry` | `backstop` | `unknown`.
+    | `plan_charge` | `price_confirmed` | `debounce` | `retry` | `backstop`
+    | `unknown`.
     `debounce` and `retry` mark a transition that did NOT land on a fresh
     decision token — a debounce completing after its wait, or a retry of a
     command the controller rejected or the entity validator blocked — and
@@ -644,6 +645,16 @@ class CoordinatorData:
     epoch would hand the facade a generic re-decision, and a plan whose slot-0 had
     wandered to spike_discharge would force-discharge the battery on a token
     granted because the plan wanted to charge. Transient; not persisted."""
+
+    mode_decision_export_start_only: bool = False
+    """True when this evaluation's decision token was granted *solely* because an
+    export start that had been held back on an unconfirmed price (Issue #1119) is
+    no longer held back: the price/spike/DW/floor context did not move, Amber
+    just confirmed the interval at the price it was already carrying, or the
+    confirmation grace ran out.
+
+    Such a grant may only commit PROACTIVE_EXPORT, for the same reason a
+    plan-charge grant may only commit a charge mode. Transient; not persisted."""
 
     mode_backstop_allowed: bool = False
     """Transient in-lock permission for the pre-charge execution backstop. Opened by

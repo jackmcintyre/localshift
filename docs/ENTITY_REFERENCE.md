@@ -677,7 +677,7 @@ Attributes:
   anticipation_corrections_today: 0
 ```
 
-Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_lag_history`: how far into its 5-minute price interval each transition landed, tagged by `grant_source` (`price`, `spike`, `demand_window`, `soc_floor`, `plan_charge`, `debounce`, `retry`, `backstop`, `unknown`). `debounce` and `retry` (#941) mark a transition that did not land on a fresh price grant — a debounce timer completing, or a retry of a command the controller rejected or the entity validator blocked — and should be excluded from the Amber-latency baseline the same way `backstop` is. Each boundary-lag history entry's `from_mode` (#940) is the previously *commanded* mode, not the transition's own target (`data.active_mode`, which always equals the target); the `from_mode` field of the `history` entries above means the same thing (#967), so both rings agree on its meaning. Internally the boundary-lag ring is partitioned per `grant_source` (200 entries each, #942/#990 — enough per-source samples for #510 slice 3's Amber-latency tail estimate) so a backstop correction burst can never evict the price-tagged samples; the attribute is still the last 20 entries overall, flattened from that per-source ring into one chronologically ordered list. `anticipated_transitions_today` / `anticipation_corrections_today` are declared here and daily-reset but stay at 0 until a later slice implements the anticipatory logic they count. No new entity — these are attributes on this existing sensor.
+Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_lag_history`: how far into its 5-minute price interval each transition landed, tagged by `grant_source` (`price`, `spike`, `demand_window`, `soc_floor`, `plan_charge`, `price_confirmed`, `debounce`, `retry`, `backstop`, `unknown`). `debounce` and `retry` (#941) mark a transition that did not land on a fresh price grant — a debounce timer completing, or a retry of a command the controller rejected or the entity validator blocked — and should be excluded from the Amber-latency baseline the same way `backstop` is. Each boundary-lag history entry's `from_mode` (#940) is the previously *commanded* mode, not the transition's own target (`data.active_mode`, which always equals the target); the `from_mode` field of the `history` entries above means the same thing (#967), so both rings agree on its meaning. Internally the boundary-lag ring is partitioned per `grant_source` (200 entries each, #942/#990 — enough per-source samples for #510 slice 3's Amber-latency tail estimate) so a backstop correction burst can never evict the price-tagged samples; the attribute is still the last 20 entries overall, flattened from that per-source ring into one chronologically ordered list. `anticipated_transitions_today` / `anticipation_corrections_today` are declared here and daily-reset but stay at 0 until a later slice implements the anticipatory logic they count. No new entity — these are attributes on this existing sensor.
 
 ---
 
@@ -920,6 +920,12 @@ Attributes:
 - `dw_entry_soc_pct` - SOC at demand window entry (null if no DW)
 - `forecast_accuracy` - Current forecast accuracy (0-1)
 - `accuracy_discount_factor` - Applied discount (0.5-1.0)
+- `slot0_price` - What the current slot was priced on (Issue #1119):
+  - `buy`, `sell` - the prices the planner used ($/kWh)
+  - `buy_source`, `sell_source` - `forecast_current` (the forecast entry covering now) or, for sell, `forecast_window` (no feed-in entry covers now; 15-minute lookup used)
+  - `buy_estimate`, `sell_estimate` - Amber's `estimate` flag for that entry: true until the interval's price is confirmed, null when the source carries none
+  - `export_start_deferred` - true when an unconfirmed sell price kept the current slot from starting an export (first 90 s of the interval; an export already running is not interrupted). If a mode decision was taken while this was true, one further decision, able only to start the export, is granted once it clears
+  - `live_buy`, `live_sell` - the price sensors' own states, for comparison
 
 **Icon:** Dynamic (mdi:check-circle-outline for success, mdi:alert-circle-outline for failed, mdi:minus-circle-outline for disabled)
 

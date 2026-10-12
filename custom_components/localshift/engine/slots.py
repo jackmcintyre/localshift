@@ -19,15 +19,24 @@ from datetime import datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from ..const import BatteryMode
 from ..coordinator.data import AdaptiveParameters
 from ..forecast.solar import get_solar_for_slot_by_interval
 from ..forecast.solar_accuracy import SolarAccuracyTracker
 from ..utils.export_availability import export_available_at
 from .optimizer_dp import SlotContext
 from .price_calculator import get_price_for_slot_or_none
-from .slot_schedule import compute_hybrid_slot_schedule
+from .slot_schedule import compute_hybrid_slot_schedule, find_current_entry
 
 _LOGGER = logging.getLogger(__name__)
+
+# Issue #1119: Amber rolls each interval over carrying the PREVIOUS interval's
+# price flagged `estimate: true`, and confirms the real one some seconds later
+# (15-41 s across the 2026-10-12 spike). While slot 0's sell price is such an
+# unconfirmed reading, an export may continue but not start. The grace is
+# bounded so a feed that never confirms cannot block export for the interval:
+# past it, the estimate is the best price there is and is acted on.
+ESTIMATE_CONFIRMATION_GRACE_S = 90.0
 
 
 @dataclass
@@ -70,6 +79,16 @@ class SlotBuildMetadata:
     from the just-built hybrid schedule, or "unknown" when no slots were built.
     Read by OptimizerFacade.run_inline to feed the synthetic-slot-0 rolling
     rate tracker (Issue #956)."""
+
+    slot0_price: dict[str, Any] = field(default_factory=dict)
+    """What slot 0 was priced on (Issue #1119), published on the optimizer
+    summary: ``buy``/``sell`` ($/kWh), ``buy_source``/``sell_source``
+    ("forecast_current" = the entry covering now; "forecast_window" = no
+    feed-in entry covers now, 15-minute lookup used), ``buy_estimate``/
+    ``sell_estimate`` (Amber's flag: True until the interval's price is
+    confirmed; None when the source carries none), ``export_start_deferred``
+    (an unconfirmed sell price kept slot 0 from starting an export) and
+    ``live_buy``/``live_sell`` (the price sensors' own states)."""
 
     def to_parity_dict(self) -> dict[str, Any]:
         """Convert to legacy parity_info dict format for backward compatibility.
@@ -214,6 +233,13 @@ class SlotBuilder:
             resolver=resolver,
         )
 
+        slot0_price = (
+            self._price_slot0_from_current_interval(
+                contexts, hybrid_slots, data, feed_in_forecast, now_local
+            )
+            or {}
+        )
+
         metadata = SlotBuildMetadata(
             total_slots=len(contexts),
             five_min_slots=counts["five_min"],
@@ -225,6 +251,7 @@ class SlotBuilder:
             slots_with_defaulted_consumption=counts["defaulted_consumption"],
             all_solcast=all_solcast,
             slot0_price_source=(contexts[0].price_source if contexts else "unknown"),
+            slot0_price=slot0_price,
         )
 
         _LOGGER.debug(
@@ -240,6 +267,79 @@ class SlotBuilder:
         )
 
         return contexts, metadata
+
+    def _price_slot0_from_current_interval(
+        self,
+        contexts: list[SlotContext],
+        hybrid_slots: list[dict[str, Any]],
+        data: Any,
+        feed_in_forecast: list[dict[str, Any]],
+        now_local: datetime,
+    ) -> dict[str, Any] | None:
+        """Price slot 0's sell side from the feed-in entry covering now (#1119).
+
+        Slot 0 is the only slot that is acted on. Its buy price is already the
+        general-forecast entry covering now; its sell price came from a
+        15-minute lookup, i.e. the MEAN of the current interval and the next
+        two 5-minute forecasts. On 2026-10-12 that turned a confirmed $24.23
+        into $9.49 and a confirmed $0.36 into $2.69, and the plan exported
+        into the 36c interval. Later slots keep the existing lookup.
+
+        An unconfirmed reading is used as the price — it is the best there is —
+        but may not START an export during the confirmation grace (see
+        ``ESTIMATE_CONFIRMATION_GRACE_S``). An export already running is left
+        alone: stopping it for the seconds until confirmation would add a
+        drop-out per interval.
+
+        Returns:
+            The ``SlotBuildMetadata.slot0_price`` payload, or None with no slots.
+
+        """
+        if not contexts:
+            return None
+
+        ctx = contexts[0]
+        sell_source = "forecast_window"
+        sell_estimate: bool | None = None
+        deferred = False
+
+        current = find_current_entry(feed_in_forecast, now_local, self._ha_timezone)
+        if current is not None:
+            entry, origin = current
+            ctx.sell_price = float(entry.get("per_kwh", 0.0))
+            sell_source = "forecast_current"
+            flag = entry.get("estimate")
+            sell_estimate = flag if isinstance(flag, bool) else None
+
+            elapsed_s = (now_local - origin).total_seconds()
+            exporting = (
+                getattr(data, "active_mode", None) == BatteryMode.PROACTIVE_EXPORT
+            )
+            if (
+                sell_estimate is True
+                and elapsed_s < ESTIMATE_CONFIRMATION_GRACE_S
+                and not exporting
+            ):
+                deferred = ctx.export_available
+                ctx.export_available = False
+
+        buy_estimate = hybrid_slots[0].get("estimate") if hybrid_slots else None
+
+        def _live(name: str) -> float | None:
+            value = getattr(data, name, None)
+            return round(value, 4) if isinstance(value, (int, float)) else None
+
+        return {
+            "buy": round(ctx.buy_price, 4),
+            "sell": round(ctx.sell_price, 4),
+            "buy_source": ctx.price_source,
+            "sell_source": sell_source,
+            "buy_estimate": buy_estimate if isinstance(buy_estimate, bool) else None,
+            "sell_estimate": sell_estimate,
+            "export_start_deferred": deferred,
+            "live_buy": _live("general_price"),
+            "live_sell": _live("feed_in_price"),
+        }
 
     def _get_solar_confidence_factor(
         self, adaptive_params: AdaptiveParameters | None

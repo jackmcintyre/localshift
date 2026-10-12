@@ -74,6 +74,7 @@ def _convert_forecast_to_slot(forecast_dict: dict) -> ForecastSlot:
         per_kwh=forecast_dict["per_kwh"],
         is_spike=is_spike,
         source_type="test",
+        estimate=forecast_dict.get("estimate"),
     )
 
 
@@ -924,6 +925,7 @@ def test_manual_override_bypasses_optimizer():
 # ---------------------------------------------------------------------------
 # Issue #906: HOLD_STRICT scenario tests
 # ---------------------------------------------------------------------------
+
 
 def test_inverted_night_no_dw_no_hold_strict():
     """Inverted-night without DW: HOLD_STRICT correctly absent (drain+recharge cheaper).
