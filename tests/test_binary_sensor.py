@@ -100,8 +100,13 @@ class TestBinarySensorBase:
     ):
         """Test base _update_from_coordinator is a no-op."""
         sensor = LocalShiftBinarySensorBase(mock_coordinator, mock_entry)
-        # Should not raise and should not modify anything
+        sensor._attr_is_on = None
+
         sensor._update_from_coordinator()
+
+        # The base class has no value of its own: is_on stays unset until a
+        # subclass overrides the hook.
+        assert sensor.is_on is None
 
 
 class TestForecastSpikeWithinWindowSensor:

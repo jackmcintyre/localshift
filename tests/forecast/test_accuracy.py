@@ -194,7 +194,7 @@ class TestForecastAccuracyEngineEdgeCases:
     """Coverage tests for edge cases in ForecastAccuracyEngine."""
 
     @pytest.mark.asyncio
-    async def test_compute_exception_in_process_history(self):
+    async def test_compute_exception_in_process_history(self, caplog):
         """Exception in _process_history_for_comparisons is caught and logged."""
         from unittest.mock import patch
 
@@ -213,6 +213,10 @@ class TestForecastAccuracyEngineEdgeCases:
             side_effect=Exception("test error"),
         ):
             await engine.compute_forecast_accuracy(data)
+        # The failure is swallowed and reported, and the attempt is still stamped.
+        assert "Failed to compute forecast accuracy: test error" in caplog.text
+        assert data.forecast_last_comparison_time
+        assert data.forecast_comparisons_made == 0
 
     def test_ensure_accuracy_fields_creates_missing(self):
         """_ensure_accuracy_fields uses setattr when field is missing (line 102)."""
@@ -269,7 +273,13 @@ class TestForecastAccuracyEngineEdgeCases:
             "target_time": naive_target.isoformat(),
             "predicted_soc": 80.0,
         }
-        engine._process_single_entry(entry, now_dt, 80.0, 0.25, 0.08)
+        result = engine._process_single_entry(entry, now_dt, 75.0, 0.25, 0.08)
+
+        # The naive string is read as local time, so the entry is 5 minutes
+        # past due and is compared rather than dropped.
+        assert result is not None
+        assert result["offset"] == 60
+        assert result["soc_error"] == pytest.approx(5.0)
 
     def test_process_single_entry_predicted_soc_none(self):
         """Return None when predicted_soc is None (line 184)."""

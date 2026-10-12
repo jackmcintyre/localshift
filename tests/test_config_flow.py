@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock
 
 import pytest
+import voluptuous as vol
 from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.localshift.config_flow import (
@@ -1064,13 +1065,25 @@ class TestInvalidInputFormats:
         # The actual validation happens in the options flow
 
     @pytest.mark.asyncio
-    async def test_invalid_time_format_demand_window_end(self, mock_hass):
-        """Test handling of invalid time format for demand window end."""
-        flow = LocalShiftConfigFlow()
+    async def test_invalid_time_format_demand_window_end(
+        self, mock_hass, mock_config_entry
+    ):
+        """A malformed demand window end is rejected by the settings form schema."""
+        flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
         flow.hass = mock_hass
+        schema = flow._build_settings_schema({}, ["notify.mobile_app_test"], [])
+        valid = {
+            CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
+            CONF_DEMAND_WINDOW_START: "18:00:00",
+            CONF_DEMAND_WINDOW_END: "22:00:00",
+            CONF_MANUAL_OVERRIDE_TIMEOUT: 24,
+        }
 
-        # Malformed time "not-a-time" would be handled by form validation
-        # Implementation should validate this
+        # The same input with a well-formed end time is accepted...
+        assert schema(valid)[CONF_DEMAND_WINDOW_END] == "22:00:00"
+        # ...so it is the malformed time alone that is refused.
+        with pytest.raises(vol.Invalid):
+            schema({**valid, CONF_DEMAND_WINDOW_END: "not-a-time"})
 
     @pytest.mark.asyncio
     async def test_entity_id_with_special_characters(self, mock_hass):
@@ -1122,7 +1135,7 @@ class TestOptionsFlowValidation:
     async def test_options_flow_empty_notify_service(
         self, mock_hass, mock_config_entry
     ):
-        """Test options flow with empty notify service."""
+        """An empty notify service re-shows the settings form with an error."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
         flow.handler = mock_config_entry.entry_id
 
@@ -1140,14 +1153,18 @@ class TestOptionsFlowValidation:
             CONF_MANUAL_OVERRIDE_TIMEOUT: 24,
         }
 
-        _ = await flow.async_step_init(user_input)
+        result = await flow.async_step_settings(user_input)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "settings"
+        assert result["errors"] == {CONF_NOTIFY_SERVICE: "Notify service is required"}
 
         # Should either show error or use default
         # Implementation dependent
 
     @pytest.mark.asyncio
     async def test_options_flow_negative_timeout(self, mock_hass, mock_config_entry):
-        """Test options flow with negative manual override timeout."""
+        """A negative manual override timeout is rejected by the settings form schema."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
         flow.handler = mock_config_entry.entry_id
 
@@ -1164,14 +1181,19 @@ class TestOptionsFlowValidation:
             CONF_DEMAND_WINDOW_END: "22:00:00",
             CONF_MANUAL_OVERRIDE_TIMEOUT: -1,  # Invalid negative
         }
+        schema = flow._build_settings_schema({}, ["notify.mobile_app_test"], [])
 
-        _ = await flow.async_step_init(user_input)
+        # The same input with an in-range timeout is accepted...
+        assert schema({**user_input, CONF_MANUAL_OVERRIDE_TIMEOUT: 24})
+        # ...so it is the out-of-range timeout alone that is refused.
+        with pytest.raises(vol.Invalid):
+            schema(user_input)
 
         # Should handle gracefully
 
     @pytest.mark.asyncio
     async def test_options_flow_very_large_timeout(self, mock_hass, mock_config_entry):
-        """Test options flow with very large timeout value."""
+        """A timeout above the 24 hour maximum is rejected by the settings form schema."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
         flow.handler = mock_config_entry.entry_id
 
@@ -1188,8 +1210,13 @@ class TestOptionsFlowValidation:
             CONF_DEMAND_WINDOW_END: "22:00:00",
             CONF_MANUAL_OVERRIDE_TIMEOUT: 1000000,  # Very large
         }
+        schema = flow._build_settings_schema({}, ["notify.mobile_app_test"], [])
 
-        _ = await flow.async_step_init(user_input)
+        # The same input with an in-range timeout is accepted...
+        assert schema({**user_input, CONF_MANUAL_OVERRIDE_TIMEOUT: 24})
+        # ...so it is the out-of-range timeout alone that is refused.
+        with pytest.raises(vol.Invalid):
+            schema(user_input)
 
         # Should handle gracefully (might clamp or accept)
 
@@ -1197,7 +1224,7 @@ class TestOptionsFlowValidation:
     async def test_options_flow_demand_window_start_after_end(
         self, mock_hass, mock_config_entry
     ):
-        """Test options flow when demand window start is after end."""
+        """A start after the end is accepted as given (an overnight window)."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
         flow.handler = mock_config_entry.entry_id
 
@@ -1215,9 +1242,12 @@ class TestOptionsFlowValidation:
             CONF_MANUAL_OVERRIDE_TIMEOUT: 24,
         }
 
-        _ = await flow.async_step_init(user_input)
+        result = await flow.async_step_settings(user_input)
 
-        # Should handle gracefully (might swap, reject, or accept as overnight window)
+        # Neither swapped nor rejected: the times are stored exactly as entered.
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["data"][CONF_DEMAND_WINDOW_START] == "22:00:00"
+        assert result["data"][CONF_DEMAND_WINDOW_END] == "18:00:00"
 
 
 # =============================================================================

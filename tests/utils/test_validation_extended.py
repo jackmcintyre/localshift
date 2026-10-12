@@ -1354,9 +1354,19 @@ class TestResetMethods:
     def test_reset_entity_tracking_unknown_key(self, mock_hass: MagicMock) -> None:
         """Reset entity tracking for unknown key does nothing."""
         validator = _create_validator(mock_hass)
+        health = validator._entity_health[CONF_TESLEMETRY_SOC]
+        health.status = EntityStatus.MISSING
+        health.consecutive_failures = 5
+        health.is_broken = True
 
-        # Should not raise
         validator.reset_entity_tracking("unknown_key")
+
+        # No entry is created for the unknown key and tracked entities keep
+        # their state.
+        assert "unknown_key" not in validator._entity_health
+        assert health.status == EntityStatus.MISSING
+        assert health.consecutive_failures == 5
+        assert health.is_broken is True
 
 
 # =============================================================================

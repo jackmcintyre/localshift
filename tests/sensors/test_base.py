@@ -96,8 +96,12 @@ class TestLocalShiftSensorBase:
         sensor = ConcreteSensor(mock_coordinator, mock_entry)
         sensor._unsub = None
 
-        # Should not raise
         await sensor.async_will_remove_from_hass()
+
+        # Removing an entity that never subscribed leaves it unsubscribed and
+        # does not reach back into the coordinator.
+        assert sensor._unsub is None
+        assert mock_coordinator.method_calls == []
 
     def test_handle_coordinator_update(self):
         """Test _handle_coordinator_update calls update and writes state."""

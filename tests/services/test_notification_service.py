@@ -132,13 +132,21 @@ class TestSendNotification:
 
     @pytest.mark.asyncio
     async def test_send_notification_handles_persistent_failure(
-        self, notification_service, mock_hass
+        self, notification_service, mock_hass, caplog
     ):
         """Test handling when both notify and persistent notification fail."""
         mock_hass.services.async_call.side_effect = Exception("All services fail")
 
-        # Should not raise exception
         await notification_service.send_notification("Test", "Message")
+
+        # Both routes were tried, in order, and the final failure is logged
+        # rather than raised.
+        calls = mock_hass.services.async_call.call_args_list
+        assert [call[0][0] for call in calls] == ["notify", "persistent_notification"]
+        assert (
+            "Failed to create persistent notification: All services fail"
+            in caplog.text
+        )
 
 
 # =============================================================================

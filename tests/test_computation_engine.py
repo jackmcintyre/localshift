@@ -1097,12 +1097,23 @@ class TestWeatherCorrelation:
         self, computation_engine, coordinator_data
     ):
         """Learning should skip when disabled or correlation missing."""
+        # A sample that would be learned if learning were active.
+        coordinator_data.weather_temperature_current = 22.0
+        coordinator_data.load_power_kw = 1.5
+        computation_engine._last_weather_save_hour = None
+
         computation_engine._weather_correlation = None
         await computation_engine.async_learn_weather_sample(coordinator_data)
+        assert computation_engine._last_weather_save_hour is None
 
-        computation_engine._weather_correlation = MagicMock()
+        wc_instance = MagicMock()
+        wc_instance.async_save = AsyncMock()
+        computation_engine._weather_correlation = wc_instance
         computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = False
         await computation_engine.async_learn_weather_sample(coordinator_data)
+
+        wc_instance.learn_from_sample.assert_not_called()
+        wc_instance.async_save.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_learn_weather_sample_skips_invalid_values(
@@ -1110,16 +1121,23 @@ class TestWeatherCorrelation:
     ):
         """Learning should skip invalid temperature or load."""
         computation_engine.entry.options[CONF_WEATHER_LEARNING_ENABLED] = True
-        computation_engine._weather_correlation = MagicMock()
+        wc_instance = MagicMock()
+        wc_instance.async_save = AsyncMock()
+        computation_engine._weather_correlation = wc_instance
         coordinator_data.weather_temperature_current = 0.0
         coordinator_data.load_power_kw = 1.0
 
         await computation_engine.async_learn_weather_sample(coordinator_data)
 
+        wc_instance.learn_from_sample.assert_not_called()
+
         coordinator_data.weather_temperature_current = 10.0
         coordinator_data.load_power_kw = 0.0
 
         await computation_engine.async_learn_weather_sample(coordinator_data)
+
+        wc_instance.learn_from_sample.assert_not_called()
+        wc_instance.async_save.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_learn_weather_sample_saves_hourly(

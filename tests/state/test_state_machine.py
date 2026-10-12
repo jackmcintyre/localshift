@@ -5,6 +5,7 @@ and error handling as specified in backlog-crit-002.
 """
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1009,6 +1010,10 @@ class TestModeTransitions:
                 state_machine.evaluate_state_machine(coordinator_data, mock_engine)
             )
 
+        mock_battery_controller.set_force_charge.assert_called_once()
+        assert state_machine._commanded_mode == BatteryMode.GRID_CHARGING
+
+
     def test_transition_to_boost_charging(
         self, state_machine, coordinator_data, mock_battery_controller
     ):
@@ -1026,6 +1031,10 @@ class TestModeTransitions:
             asyncio.run(
                 state_machine.evaluate_state_machine(coordinator_data, mock_engine)
             )
+
+        mock_battery_controller.set_boost_charge.assert_called_once()
+        assert state_machine._commanded_mode == BatteryMode.BOOST_CHARGING
+
 
     def test_transition_to_spike_discharge(
         self, state_machine, coordinator_data, mock_battery_controller
@@ -1048,6 +1057,12 @@ class TestModeTransitions:
         state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
         coordinator_data.active_mode = BatteryMode.PROACTIVE_EXPORT
 
+        # The mode has been continuously desired since 16:00, so the 2 min
+        # debounce is already served when the evaluation runs at 16:03.
+        state_machine._mode_desired_since[BatteryMode.PROACTIVE_EXPORT] = dt_aware(
+            2026, 2, 16, 16, 0, 0
+        )
+
         mock_engine = MagicMock()
         mock_engine.compute_derived_values = MagicMock()
 
@@ -1060,6 +1075,10 @@ class TestModeTransitions:
             asyncio.run(
                 state_machine.evaluate_state_machine(coordinator_data, mock_engine)
             )
+
+        mock_battery_controller.set_proactive_export.assert_called_once()
+        assert state_machine._commanded_mode == BatteryMode.PROACTIVE_EXPORT
+
 
     def test_failed_transition_keeps_previous_mode(
         self, state_machine, coordinator_data, mock_battery_controller
@@ -1616,10 +1635,16 @@ class TestGridChargingListener:
         handle.assert_called_once()
         assert state_machine._grid_charging_listener is None
 
-    def test_stop_listener_noop_when_none(self, state_machine):
+    def test_stop_listener_noop_when_none(self, state_machine, caplog):
         """stop_grid_charging_listener should not error when no listener is active."""
         state_machine._grid_charging_listener = None
-        state_machine.stop_grid_charging_listener()  # should not raise
+
+        with caplog.at_level(logging.DEBUG):
+            state_machine.stop_grid_charging_listener()
+
+        # Nothing was registered, so nothing is reported as unregistered.
+        assert state_machine._grid_charging_listener is None
+        assert "Unregistered grid_charging state listener" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_reactive_correction_turns_off_grid_charging(

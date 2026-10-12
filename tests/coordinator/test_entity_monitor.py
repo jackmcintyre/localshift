@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from unittest.mock import MagicMock
 
@@ -53,6 +55,8 @@ class TestReadAllExternalState:
 
         # ACT
         monitor.read_all_external_state()
+        # ASSERT - nothing is read, so the coordinator data is never touched
+        assert mock_coordinator.data.mock_calls == []
 
         # ASSERT - should return early without error
         # No assertions needed, test passes if no exception raised
@@ -67,10 +71,16 @@ class TestCheckEntityHealth:
         mock_coordinator = MagicMock()
         mock_coordinator.hass = MagicMock()
         mock_coordinator._entity_validator = None
+        mock_coordinator.data.integration_status = "sentinel"
+        mock_coordinator.data.entity_errors = ["sentinel"]
         monitor = EntityMonitor(mock_coordinator)
 
         # ACT
         monitor.check_entity_health()
+
+        # ASSERT - no validator ran, so the previous status is not overwritten
+        assert mock_coordinator.data.integration_status == "sentinel"
+        assert mock_coordinator.data.entity_errors == ["sentinel"]
 
         # ASSERT - should return early without error
         # No assertions needed, test passes if no exception raised
@@ -402,7 +412,7 @@ class TestResetEntityTrackingOnOptionsChange:
         # ASSERT
         mock_validator.reset_entity_tracking.assert_called_once()
 
-    def test_reset_without_validator(self) -> None:
+    def test_reset_without_validator(self, caplog) -> None:
         """Test reset entity tracking when validator is None."""
         # ARRANGE
         mock_coordinator = MagicMock()
@@ -411,7 +421,11 @@ class TestResetEntityTrackingOnOptionsChange:
         monitor = EntityMonitor(mock_coordinator)
 
         # ACT
-        monitor.reset_entity_tracking_on_options_change()
+        with caplog.at_level(logging.INFO):
+            monitor.reset_entity_tracking_on_options_change()
+
+        # ASSERT - with nothing to reset, the reset is not reported as done
+        assert "Reset entity tracking for options change" not in caplog.text
 
         # ASSERT - should return early without error
         # No assertions needed, test passes if no exception raised
@@ -456,10 +470,14 @@ class TestRefreshWeatherForecast:
         mock_coordinator = MagicMock()
         mock_coordinator.hass = MagicMock()
         mock_coordinator._computation_engine = None
+        mock_coordinator.data.weather_temperature_forecast = {12: 21.5}
         monitor = EntityMonitor(mock_coordinator)
 
         # ACT
         await monitor.refresh_weather_forecast()
+
+        # ASSERT - the previous forecast is kept, not cleared
+        assert mock_coordinator.data.weather_temperature_forecast == {12: 21.5}
 
         # ASSERT - should return early without error
         # No assertions needed, test passes if no exception raised

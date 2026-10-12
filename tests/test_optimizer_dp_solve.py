@@ -2618,8 +2618,19 @@ def test_is_cheap_import_window_expensive_price():
 
 
 def test_transition_unknown_action():
-    """Line 1868: Unknown action returns (soc, 0.0, 0.0) - tested via type checker."""
-    pass
+    """An action the transition model does not know leaves the battery alone."""
+    slot = _make_slot(solar_kwh=0.5, consumption_kwh=0.3)
+    config = OptimizerConfig(battery_capacity_kwh=13.5)
+
+    result = transition(
+        42.0,
+        "not-a-planner-action",  # type: ignore[arg-type]
+        slot,
+        config,
+    )
+
+    # SOC unchanged and no grid flow, even though the slot has solar and load.
+    assert result == (42.0, 0.0, 0.0)
 
 
 def test_transition_hold_surplus_zero_efficiency():
@@ -2780,8 +2791,22 @@ def test_futile_cycling_battery_at_floor():
 
 
 def test_classify_reason_idle():
-    """Line 1420: Unknown action returns IDLE reason - tested via type checker."""
-    pass
+    """An action with no hold/export/charge classifier is reported as IDLE."""
+    slot = _make_slot()
+    config = OptimizerConfig(battery_capacity_kwh=13.5)
+
+    reason = classify_reason(
+        action=PlannerAction.HOLD_STRICT,
+        slot=slot,
+        slot_idx=0,
+        slots=[slot],
+        soc=50.0,
+        next_soc=50.0,
+        config=config,
+        terminal_penalty_idx=None,
+    )
+
+    assert reason == PlannerReasonCode.IDLE
 
 
 def test_plan_with_empty_slots():

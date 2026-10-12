@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -44,6 +45,8 @@ async def test_handle_state_change_no_dispatcher(coordinator):
 
     # Should not raise
     scheduler.handle_state_change(MagicMock())
+    # No dispatcher means no evaluation is scheduled.
+    coordinator.hass.async_create_task.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -350,9 +353,14 @@ async def test_accumulate_costs_no_tracker(coordinator):
     """Test _accumulate_costs handles missing cost tracker gracefully."""
     scheduler = TickScheduler(coordinator)
     coordinator._cost_tracker = None
+    coordinator.data.grid_power_kw = 3.0
+    coordinator.data.general_price = 0.40
+    before = copy.deepcopy(coordinator.data)
 
-    # Should not raise
     scheduler._accumulate_costs()
+
+    # With no tracker nothing is accumulated, even with power flowing.
+    assert coordinator.data == before
 
 
 @pytest.mark.asyncio
@@ -435,8 +443,10 @@ async def test_send_daily_summary_no_service(coordinator):
     scheduler = TickScheduler(coordinator)
     coordinator._notification_service = None
 
-    # Should not raise
     await scheduler._send_daily_summary()
+
+    # No service, so no notification call reaches Home Assistant.
+    coordinator.hass.services.async_call.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -448,8 +458,11 @@ async def test_backfill_solar_actual_no_tracker_attribute(coordinator):
     if hasattr(coordinator, "solar_accuracy_tracker"):
         delattr(coordinator, "solar_accuracy_tracker")
 
-    # Should not raise
     scheduler._backfill_solar_actual()
+
+    # No tracker: the integration baseline is not started.
+    assert scheduler._last_solar_power_timestamp is None
+    assert scheduler._period_energy_accum == {}
 
 
 @pytest.mark.asyncio
@@ -458,8 +471,11 @@ async def test_backfill_solar_actual_tracker_none(coordinator):
     scheduler = TickScheduler(coordinator)
     coordinator.solar_accuracy_tracker = None
 
-    # Should not raise
     scheduler._backfill_solar_actual()
+
+    # No tracker: the integration baseline is not started.
+    assert scheduler._last_solar_power_timestamp is None
+    assert scheduler._period_energy_accum == {}
 
 
 @pytest.mark.asyncio
@@ -817,8 +833,10 @@ async def test_handle_slow_tick_no_entity_monitor(coordinator):
     coordinator._entity_monitor = None
     coordinator._computation_engine = None
 
-    # Should not raise
     scheduler.handle_slow_tick(now)
+
+    # Neither the weather refresh nor the accuracy/save tasks are scheduled.
+    coordinator.hass.async_create_task.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -890,5 +908,11 @@ async def test_handle_medium_tick_no_entity_monitor(coordinator):
     coordinator._decision_telemetry = None
     coordinator.data = MagicMock()
 
-    # Should not raise
     scheduler.handle_medium_tick(now)
+
+    # Past the grace period the tick runs, but without a monitor the Tesla
+    # tariff refresh is not scheduled.
+    task_names = [
+        call.args[1] for call in coordinator.hass.async_create_task.call_args_list
+    ]
+    assert "localshift_tesla_tariff" not in task_names
