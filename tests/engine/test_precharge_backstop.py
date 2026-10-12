@@ -1694,6 +1694,35 @@ class TestRunwayBackstopLogsOncePerHold:
         assert "RUNWAY BACKSTOP" not in infos[0]
         assert caplog.text.count("RUNWAY BACKSTOP") == 1
 
+    def test_a_hold_ended_by_the_gap_closing_is_logged_once(self, caplog) -> None:
+        """The other exit: the battery reaches target while slack is still short."""
+        facade = OptimizerFacade()
+        data = _runway_data()
+
+        with caplog.at_level("DEBUG"):
+            self._cycle(facade, data, self.FIRING_SLACK)
+            assert data.active_mode == BatteryMode.BOOST_CHARGING
+            data.soc = LIVE_TARGET_PCT
+            for _ in range(3):
+                self._cycle(facade, data, self.FIRING_SLACK)
+                assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+
+            infos = self._records(caplog, "INFO")
+            assert infos == [
+                "Runway backstop hold ended: the gap to target has closed."
+            ]
+            assert caplog.text.count("RUNWAY BACKSTOP") == 1
+
+            # The gap reopens: a new hold, announced with the marker again.
+            data.soc = LIVE_SOC_PCT
+            self._cycle(facade, data, self.FIRING_SLACK)
+            assert data.active_mode == BatteryMode.BOOST_CHARGING
+
+        warnings = self._records(caplog, "WARNING")
+        assert len(warnings) == 2
+        assert all(line.startswith("RUNWAY BACKSTOP: forcing") for line in warnings)
+        assert len(self._records(caplog, "INFO")) == 1
+
     def test_a_second_hold_warns_again(self, caplog) -> None:
         facade = OptimizerFacade()
         data = _runway_data()

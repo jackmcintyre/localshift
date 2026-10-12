@@ -7,8 +7,10 @@ every forecast call for an hour that is being clamped repeated the same line.
 import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
+from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.const import (
     LOAD_FORECAST_CEILING_FACTOR,
@@ -49,8 +51,13 @@ def _ceiling_lines(caplog: pytest.LogCaptureFixture, level: int) -> list[str]:
 
 
 @pytest.fixture
-def clock():
-    """A settable ``dt_util.utcnow`` for the forecaster module."""
+def clock(monkeypatch):
+    """A settable ``dt_util.utcnow`` for the forecaster module.
+
+    The HA-local zone is pinned to UTC so the daily re-arm cannot depend on
+    whatever zone an earlier test left behind.
+    """
+    monkeypatch.setattr(dt_util, "DEFAULT_TIME_ZONE", UTC)
     with patch(
         "custom_components.localshift.forecast.load.dt_util.utcnow",
         return_value=START,
@@ -131,3 +138,78 @@ def test_a_new_forecaster_warns_on_its_first_clamp(caplog, clock) -> None:
         _estimate(_forecaster(), 12, 20.0)
 
     assert len(_ceiling_lines(caplog, logging.WARNING)) == 2
+
+
+# --- Daily re-arm -----------------------------------------------------------
+#
+# The quiet period runs from the last clamp, so a clamp that recurs on every
+# cycle for days would warn once and then stay silent until a restart. Each
+# HA-local calendar day on which an hour is clamped warns at least once.
+
+SYDNEY = ZoneInfo("Australia/Sydney")  # UTC+11 on these dates
+
+
+def _sydney(day: int, hour: int, minute: int) -> datetime:
+    return datetime(2026, 10, day, hour, minute, tzinfo=SYDNEY).astimezone(UTC)
+
+
+def test_an_uninterrupted_clamp_warns_again_on_a_new_local_day(
+    caplog, clock, monkeypatch
+) -> None:
+    monkeypatch.setattr(dt_util, "DEFAULT_TIME_ZONE", SYDNEY)
+    forecaster = _forecaster()
+    start = _sydney(11, 23, 40)
+
+    with caplog.at_level(logging.DEBUG):
+        # 23:40 on the 11th to 00:35 on the 12th, never 15 minutes quiet.
+        for minute in range(0, 60, 5):
+            clock.return_value = start + timedelta(minutes=minute)
+            # Logging only: the clamp is the same on every call.
+            assert _estimate(forecaster, 23, 20.0) == pytest.approx(CEILING_KW)
+
+    # One for the 11th, one for the first clamp of the 12th, and the rest of
+    # the 12th is the same episode.
+    assert len(_ceiling_lines(caplog, logging.WARNING)) == 2
+    assert len(_ceiling_lines(caplog, logging.DEBUG)) == 10
+
+
+def test_the_day_boundary_is_local_midnight_not_utc_midnight(
+    caplog, clock, monkeypatch
+) -> None:
+    """10:40 to 11:35 Sydney time is one local day, though it crosses 00:00 UTC."""
+    monkeypatch.setattr(dt_util, "DEFAULT_TIME_ZONE", SYDNEY)
+    forecaster = _forecaster()
+    start = _sydney(12, 10, 40)
+    assert start.date() != (start + timedelta(minutes=55)).date()
+
+    with caplog.at_level(logging.DEBUG):
+        for minute in range(0, 60, 5):
+            clock.return_value = start + timedelta(minutes=minute)
+            assert _estimate(forecaster, 10, 20.0) == pytest.approx(CEILING_KW)
+
+    assert len(_ceiling_lines(caplog, logging.WARNING)) == 1
+    assert len(_ceiling_lines(caplog, logging.DEBUG)) == 11
+
+
+def test_a_clamp_that_runs_for_days_warns_once_per_day_and_stays_bounded(
+    caplog, clock
+) -> None:
+    forecaster = _forecaster()
+    start = datetime(2026, 10, 11, 0, 5, tzinfo=UTC)
+
+    with caplog.at_level(logging.WARNING):
+        for step in range(3 * 24 * 6):  # every 10 minutes for three days
+            clock.return_value = start + timedelta(minutes=10 * step)
+            for hour in range(24):
+                assert _estimate(forecaster, hour, 20.0) == pytest.approx(CEILING_KW)
+
+    warnings = _ceiling_lines(caplog, logging.WARNING)
+    assert len(warnings) == 3 * 24
+    assert sum("for hour 12 " in line for line in warnings) == 3
+    latch_state = [
+        value
+        for name, value in vars(forecaster).items()
+        if name.startswith("_ceiling_clamp") and isinstance(value, dict)
+    ]
+    assert latch_state
+    assert all(len(state) <= 24 for state in latch_state)
