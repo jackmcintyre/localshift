@@ -1773,10 +1773,11 @@ class TestDwEntryTelemetryClockGate:
         assert coordinator_data.dw_entry_actual_soc_pct == 93.0
         assert coordinator_data.dw_entry_actual_at == at
 
+    @pytest.mark.parametrize("block_on", [False, True])
     def test_soc_unavailable_past_the_grace_period_records_nothing(
-        self, computation_engine, coordinator_data
+        self, computation_engine, coordinator_data, block_on
     ):
-        engine = self._engine(computation_engine, block_on=False)
+        engine = self._engine(computation_engine, block_on=block_on)
         self._set_soc(engine, "unavailable")
         self._tick(engine, coordinator_data, datetime(2026, 10, 12, 15, 0, tzinfo=UTC))
 
@@ -1784,3 +1785,67 @@ class TestDwEntryTelemetryClockGate:
         self._tick(engine, coordinator_data, datetime(2026, 10, 12, 15, 5, tzinfo=UTC))
         assert coordinator_data.dw_entry_actual_soc_pct is None
         assert coordinator_data.dw_entry_actual_date is None
+
+    # ── Wiring: the capture is reached from the real per-tick entry point ──
+
+    @staticmethod
+    def _full_tick(engine, data, now_dt):
+        """One evaluation through ``compute_derived_values`` — the method the
+        coordinator calls every tick — rather than the capture helper itself."""
+        with patch(
+            "custom_components.localshift.computation_engine.dt_util.now",
+            return_value=now_dt,
+        ):
+            engine.compute_derived_values(data)
+
+    @pytest.mark.parametrize("manual_override", [False, True])
+    def test_compute_derived_values_records_the_entry_across_the_window_start(
+        self, computation_engine, coordinator_data, manual_override
+    ):
+        """The tests above call the capture directly, so none of them would
+        notice the call being dropped from ``compute_derived_values`` or moved
+        below the manual-override early return. This one goes through the
+        orchestrator, block switch off, in automatic and in manual mode."""
+        engine = self._engine(computation_engine, block_on=False)
+        self._set_soc(engine, "64.0")
+        coordinator_data.manual_override = manual_override
+
+        self._full_tick(
+            engine, coordinator_data, datetime(2026, 10, 12, 14, 59, tzinfo=UTC)
+        )
+        assert coordinator_data.dw_entry_actual_soc_pct is None
+        assert coordinator_data.dw_entry_actual_date is None
+
+        at = datetime(2026, 10, 12, 15, 0, tzinfo=UTC)
+        self._full_tick(engine, coordinator_data, at)
+
+        assert coordinator_data.demand_window_active is False
+        assert (coordinator_data.active_mode == BatteryMode.MANUAL) is manual_override
+        assert coordinator_data.dw_entry_actual_soc_pct == 64.0
+        assert coordinator_data.dw_entry_actual_target_pct == 95.0
+        assert coordinator_data.dw_entry_actual_shortfall_pct == pytest.approx(31.0)
+        assert coordinator_data.dw_entry_actual_at == at
+        assert coordinator_data.dw_entry_actual_date == at.date()
+
+    def test_under_target_warning_states_the_measurement_not_a_cause(
+        self, computation_engine, coordinator_data, caplog
+    ):
+        """The warning reports entry SOC, target and gap. It cannot know why the
+        battery arrived low — the plan may have chosen to — so it must not say."""
+        engine = self._engine(computation_engine, block_on=False)
+        self._set_soc(engine, "64.0")
+
+        with caplog.at_level("INFO"):
+            self._tick(
+                engine, coordinator_data, datetime(2026, 10, 12, 15, 0, tzinfo=UTC)
+            )
+
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert message.startswith("DEMAND WINDOW ENTERED UNDER TARGET: ")
+        assert "entry SOC 64.0%" in message
+        assert "target 95%" in message
+        assert "31.0 points short" in message
+        assert "did not execute" not in message
+        assert "Pre-charge" not in message

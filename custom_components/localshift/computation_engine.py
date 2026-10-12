@@ -436,10 +436,12 @@ class ComputationEngine:
         data.dw_entry_actual_date = ctx.today
 
         # Same threshold the execution backstop fires on — one number, not two.
+        # The message states the measurement only. Why the battery arrived low is
+        # not knowable here: the plan may have chosen to enter under target.
         if shortfall > PRECHARGE_BACKSTOP_SHORTFALL_PCT:
             _LOGGER.warning(
-                "DEMAND WINDOW ENTERED UNDER TARGET: %.1f%% against a %.0f%% target "
-                "(%.1f points short) at %s. Pre-charge did not execute.",
+                "DEMAND WINDOW ENTERED UNDER TARGET: entry SOC %.1f%%, target "
+                "%.0f%%, %.1f points short, at %s.",
                 soc,
                 target,
                 shortfall,
