@@ -106,6 +106,7 @@ class TestIntegrationStatusSensorSyntheticSlotHealth:
         assert attrs["synthetic_slot_rate"] == 0.0
         assert attrs["synthetic_slot_degraded"] is False
         assert isinstance(attrs["synthetic_slot_health"], dict)
+        assert attrs["synthetic_slot_health"]["last_sample_at"] is None
 
     def test_synthetic_slot_health_is_unrecorded(self):
         assert "synthetic_slot_health" in IntegrationStatusSensor._unrecorded_attributes

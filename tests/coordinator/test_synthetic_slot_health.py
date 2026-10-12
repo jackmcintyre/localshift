@@ -211,10 +211,25 @@ class TestToDict:
             "sample_count",
             "consecutive_above",
             "consecutive_below",
+            "last_sample_at",
         }
         assert isinstance(result["rate"], float)
         assert isinstance(result["degraded"], bool)
         assert isinstance(result["sample_count"], int)
+
+    def test_last_sample_at_is_none_before_any_sample(self):
+        # Issue #996
+        health = SyntheticSlotHealth()
+        assert health.last_sample_at is None
+        assert health.to_dict()["last_sample_at"] is None
+
+    def test_last_sample_at_is_the_newest_sample(self):
+        # Issue #996: the only field that shows sampling has stopped.
+        health = SyntheticSlotHealth()
+        health.record(True, T0)
+        health.record(True, _at(5))
+        assert health.last_sample_at == _at(5)
+        assert health.to_dict()["last_sample_at"] == _at(5).isoformat()
 
     def test_rate_is_rounded(self):
         health = SyntheticSlotHealth()

@@ -565,7 +565,7 @@ Attributes:
   last_check: 2026-02-26T09:08:34+11:00
   synthetic_slot_rate: 0.0
   synthetic_slot_degraded: false
-  synthetic_slot_health: {rate: 0.0, degraded: false, sample_count: 12, consecutive_above: 0, consecutive_below: 12}
+  synthetic_slot_health: {rate: 0.0, degraded: false, sample_count: 12, consecutive_above: 0, consecutive_below: 12, last_sample_at: 2026-02-26T09:08:10+11:00}
 ```
 
 **Synthetic slot-0 rate (Issue #956):** `engine/slot_schedule.py` prices slot 0
@@ -585,8 +585,12 @@ optimizer evaluation records whether slot 0 was synthetic onto a rolling
   once the rate drops back below 0.5 for 3 consecutive evaluations. Streaks
   count evaluations, not wall-clock time.
 - `synthetic_slot_health` — the tracker's full state (`rate`, `degraded`,
-  `sample_count`, `consecutive_above`, `consecutive_below`), for diagnostics.
-  Not recorded to history (`_unrecorded_attributes`).
+  `sample_count`, `consecutive_above`, `consecutive_below`, `last_sample_at`),
+  for diagnostics. Not recorded to history (`_unrecorded_attributes`).
+  The window is only aged when a new evaluation is recorded, so if
+  evaluations stop the rate, count and `degraded` flag freeze at their last
+  values; `last_sample_at` (#996) is the time of the newest sample, and a
+  value more than a few minutes old means the rest is stale.
 
 While `synthetic_slot_degraded` is `true`, `state` escalates from `ok` to
 `degraded` (never downgrading an existing `error`) and `message` names the

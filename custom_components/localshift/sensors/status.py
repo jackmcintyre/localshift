@@ -18,6 +18,7 @@ _SYNTHETIC_SLOT_HEALTH_FALLBACK: dict[str, Any] = {
     "sample_count": 0,
     "consecutive_above": 0,
     "consecutive_below": 0,
+    "last_sample_at": None,
 }
 
 
