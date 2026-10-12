@@ -228,6 +228,85 @@ def test_under_sampled_accuracy_is_used_the_same_way_816_uses_it():
     assert result.negative_fit_recovery_solar_factor == pytest.approx(0.576)
 
 
+def _dawn_noise_tracker(periods: int = 2) -> SolarAccuracyTracker:
+    """A real tracker fed through its production methods with dawn periods:
+    forecast 0.3 kWh, actual 0.02 kWh. Each is a 1400% error and
+    ``backfill_actual`` keeps it, so MAPE is far over 100 and the tracker
+    reports accuracy 0 from its first sample."""
+    with patch("custom_components.localshift.forecast.solar_accuracy.Store"):
+        tracker = SolarAccuracyTracker(MagicMock(), "issue-1103-dawn")
+    start = datetime(2026, 10, 9, 6, 0, tzinfo=AEDT)
+    for i in range(periods):
+        when = start + timedelta(minutes=30 * i)
+        tracker.record_forecast(when, 0.3, "sunny")
+        tracker.backfill_actual(when, 0.02)
+    return tracker
+
+
+def test_measured_zero_accuracy_is_the_least_trusted_not_the_most():
+    """Review finding on PR #1123. Tracker accuracy is ``max(0, 100 - MAPE)``,
+    so MAPE at or over 100 reports 0, and ``get_forecast_accuracy`` turns a
+    non-positive figure into 1.0 ("unavailable"). The floor then snapped from
+    believing 3% of the forecast at accuracy 3 to believing 80% at accuracy 0:
+    the worst measurement got the most licence to sell the battery."""
+    tracker = _dawn_noise_tracker()
+    assert tracker.metrics.sample_count == 2
+    assert tracker.metrics.accuracy == 0.0
+    assert tracker.has_sufficient_samples() is False
+
+    result = _plan(tracker)
+
+    assert result.success
+    assert result.negative_fit_recovery_solar_factor == 0.0
+    # No forecast solar is counted on, so the floor is the target itself...
+    assert result.negative_fit_floor_now_pct == pytest.approx(TARGET_PCT)
+    # ...and a battery starting under it is not sold at all.
+    assert _exported_kwh(result) == 0.0
+    assert _lowest_soc(result) >= 90.0 - 1.5
+
+
+def test_floor_never_falls_as_measured_accuracy_gets_worse():
+    """No accuracy at which a worse measurement lowers the floor. Run from
+    barely-measured-up down through zero; the floor only climbs, and it lands
+    on the target, not back on the fixed-haircut floor."""
+    floors = [
+        _plan(_tracker(pct, samples=3)).negative_fit_floor_now_pct
+        for pct in (80.0, 57.6, 20.0, 3.0, 0.5, 0.0)
+    ]
+
+    assert floors == sorted(floors)
+    assert floors[-1] == pytest.approx(TARGET_PCT)
+    assert floors[-1] > floors[0] + 10.0
+
+
+def test_one_more_bad_period_does_not_flip_the_export_licence():
+    """The flap the finding describes: consecutive half-hourly backfills taking
+    MAPE across 100 moved the factor 0.05 -> 0.8 -> 0.05. Either side of that
+    line the plan must now be the same one."""
+    just_measurable = _plan(_tracker(0.5, samples=3))
+    past_the_line = _plan(_tracker(0.0, samples=3))
+
+    assert just_measurable.negative_fit_recovery_solar_factor == pytest.approx(0.005)
+    assert past_the_line.negative_fit_recovery_solar_factor == 0.0
+    assert past_the_line.negative_fit_floor_now_pct == pytest.approx(
+        just_measurable.negative_fit_floor_now_pct, abs=0.5
+    )
+    assert [d.action for d in past_the_line.decisions] == [
+        d.action for d in just_measurable.decisions
+    ]
+
+
+def test_zero_accuracy_default_without_records_is_still_unmeasured():
+    """Only a measurement counts as one. Metrics that say 0 with no samples
+    behind them (nothing recorded, or a malformed store) keep the fixed 0.8,
+    as a tracker with no records always has."""
+    result = _plan(_tracker(0.0, samples=0))
+
+    assert (
+        result.negative_fit_recovery_solar_factor == NEGATIVE_FIT_RECOVERY_SOLAR_FACTOR
+    )
+
+
 def test_no_window_reports_no_factor_or_floor():
     """Nothing to explain when avoidance is not in play."""
     inputs = OptimizerInputs(

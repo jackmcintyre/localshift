@@ -216,7 +216,9 @@ def _materiality(
     return True, False
 
 
-def recovery_solar_factor(config: OptimizerConfig) -> float:
+def recovery_solar_factor(
+    config: OptimizerConfig, solar_accuracy_tracker: object | None = None
+) -> float:
     """Share of forecast net solar the recoverability floor counts on (#1103).
 
     The smaller of the fixed ``NEGATIVE_FIT_RECOVERY_SOLAR_FACTOR`` haircut and
@@ -230,11 +232,25 @@ def recovery_solar_factor(config: OptimizerConfig) -> float:
     It is a ceiling on the haircut, not a replacement for it: accuracy at or
     above 80%, and the 1.0 the config carries when nothing has been measured,
     leave the floor exactly where it has always been.
+
+    One case the config figure cannot carry: a tracker whose samples measure
+    accuracy at zero (MAPE at or over 100, which a few dawn periods with tiny
+    actuals are enough to produce). ``get_forecast_accuracy`` reports that as
+    1.0, the same as "unmeasured", which would hand the worst measurement the
+    full 0.8 and make the factor jump 0.05 -> 0.8 -> 0.05 as successive
+    backfills carried MAPE across 100. Here it is what it measures: no forecast
+    solar is counted on and the floor is the target. So the factor never rises
+    as measured accuracy falls.
     """
     from custom_components.localshift.const import (
         NEGATIVE_FIT_RECOVERY_SOLAR_FACTOR,
     )
+    from custom_components.localshift.engine.solar import (
+        forecast_accuracy_measured_as_zero,
+    )
 
+    if forecast_accuracy_measured_as_zero(solar_accuracy_tracker):
+        return 0.0
     accuracy = max(0.0, min(1.0, config.solar_forecast_accuracy))
     return min(NEGATIVE_FIT_RECOVERY_SOLAR_FACTOR, accuracy)
 
@@ -427,7 +443,7 @@ def assess_negative_fit_avoidance(inputs: OptimizerInputs) -> NegativeFitAssessm
         return none
 
     # Issue #1103: believe forecast solar no further than it has measured up.
-    solar_factor = recovery_solar_factor(config)
+    solar_factor = recovery_solar_factor(config, inputs.solar_accuracy_tracker)
     recovery_by_slot = compute_recovery_by_slot(
         slots, recovery_deadline_idx, config.charge_efficiency, solar_factor
     )
