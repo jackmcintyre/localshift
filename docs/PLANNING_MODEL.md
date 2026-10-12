@@ -184,11 +184,12 @@ A solve handles one demand window: the first entry slot in the horizon. The
 funding water level, the hard floor, the urgency window and the boost unlock are
 all computed from that one entry index and the SOC at the start of the plan.
 
-The price feed carries 48 half-hours from the current one, so it never contains
-the same time tomorrow. In the afternoon the horizon therefore ends at or just
-short of tomorrow's window: before 15:00 the one window in view is today's, and
-from 15:00 until 15:30 there is none (the window in progress at slot 0 is not a
-target). Nothing asked for charge before tomorrow's window, so the published
+The price feed is at most 24 hours long (in the October 2026 captures, 48
+half-hours from the current one). In the afternoon the horizon therefore ends
+at or just short of tomorrow's window: before 15:00 the one window in view is
+today's, and from 15:00 until tomorrow's entry slot enters the feed there is
+none (the window in progress at slot 0 is not a target). That was 15:30 in the
+October captures and by 15:07 in the 2026-09-07 report. Nothing asked for charge before tomorrow's window, so the published
 tail drained to the SOC floor until the entry slot entered the feed. A longer
 horizon does not help, because there are no prices past the feed, and before
 15:00 it would not help even with them: the first entry is still today's.

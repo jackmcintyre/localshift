@@ -36,8 +36,10 @@ during a busy half hour (10-11: 2.3 kW all day).
 
 ## How often the horizon ends short of the window
 
-The feed carries 48 half-hours from the current one, so it never contains the
-same time tomorrow. Measured gap from the end of the last slot to the next
+In these captures the feed carries 48 half-hours from the current one, so it
+never contains the same time tomorrow. (The 2026-09-07 report had tomorrow's
+entry slot by 15:07, so the feed's exact length is not constant; no capture
+from that day reaches that far.) Measured gap from the end of the last slot to the next
 15:00, by capture time:
 
 | Captured at (local) | Gap | Tail re-planned |
