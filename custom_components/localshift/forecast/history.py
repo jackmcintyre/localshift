@@ -320,7 +320,14 @@ class HistoryFetcher:
         combined, weekday/weekend, per-day, baseline and hvac — is masked
         from this one change point.
         """
-        start_time = now - timedelta(days=HISTORY_WINDOW_DAYS)
+        # Issue #1006: floor the window start to the hour. Hourly rows are
+        # keyed by hour start, so a fetch at HH:MM dropped the row that began
+        # 28 days ago at HH:00 while the current hour's row does not exist
+        # yet — leaving that hour's cell for today's day-of-week one sample
+        # short on every fetch.
+        start_time = (now - timedelta(days=HISTORY_WINDOW_DAYS)).replace(
+            minute=0, second=0, microsecond=0
+        )
 
         recorder_stats = self._import_recorder_statistics()
         if recorder_stats is None:

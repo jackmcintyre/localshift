@@ -7,10 +7,11 @@ against mocked hass/coordinator/entry objects to see what the code actually
 produces, and parses the doc's table -- rather than hand-maintaining a
 second list that could drift from either the code or the doc on its own.
 
-Three ways this can fail, each naming the offending unique_id(s):
+Four ways this can fail, each naming the offending unique_id(s):
   - an entity exists in code but has no row in the doc table
   - a doc row names a unique_id no entity actually has (stale/removed entity)
   - a unique_id's category in code doesn't match its documented category
+  - a unique_id's platform in code doesn't match its documented platform
 
 Follows the mock style of tests/test_switch.py / tests/test_sensor.py: no
 real Home Assistant instance is needed, just MagicMock coordinators/entries.
@@ -58,11 +59,13 @@ def _category_of(entity):
     return entity.entity_category
 
 
-async def _collect_entities_from_code() -> dict[str, str | None]:
-    """Run every platform's async_setup_entry and collect unique_id -> category.
+async def _collect_entities_from_code() -> tuple[dict[str, str | None], dict[str, str]]:
+    """Run every platform's async_setup_entry and collect two maps.
 
-    Category is the HA `EntityCategory` value string ("config", "diagnostic")
-    or None for an entity with no category.
+    Returns ``(categories, platforms)``, both keyed by unique_id. Category is
+    the HA `EntityCategory` value string ("config", "diagnostic") or None for
+    an entity with no category; platform is the HA platform domain the entity
+    was registered under.
     """
     hass = MagicMock()
     entry = _make_mock_entry()
@@ -90,8 +93,8 @@ async def _collect_entities_from_code() -> dict[str, str | None]:
     return categories, seen_platforms
 
 
-def _parse_doc_table() -> dict[str, str | None]:
-    """Parse the `## Entity Categories` markdown table into unique_id -> category."""
+def _parse_doc_rows() -> dict[str, tuple[str, str | None]]:
+    """Parse the `## Entity Categories` table into unique_id -> (platform, category)."""
     text = ENTITY_REFERENCE_PATH.read_text()
 
     marker = "## Entity Categories"
@@ -105,21 +108,30 @@ def _parse_doc_table() -> dict[str, str | None]:
     end_match = re.search(r"\n---\n", rest)
     section = rest[: end_match.start()] if end_match else rest
 
-    doc_categories: dict[str, str | None] = {}
+    doc_rows: dict[str, tuple[str, str | None]] = {}
     row_pattern = re.compile(
-        r"^\|\s*`[^`]+`\s*\|\s*`([^`]+)`\s*\|\s*`[^`]+`\s*\|\s*([^\|]+?)\s*\|$",
+        r"^\|\s*`[^`]+`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*([^\|]+?)\s*\|$",
         re.MULTILINE,
     )
     for match in row_pattern.finditer(section):
-        unique_id, category = match.group(1), match.group(2).strip()
-        doc_categories[unique_id] = None if category in ("—", "-", "") else category
+        unique_id, platform = match.group(1), match.group(2)
+        category = match.group(3).strip()
+        doc_rows[unique_id] = (
+            platform,
+            None if category in ("—", "-", "") else category,
+        )
 
-    assert doc_categories, (
+    assert doc_rows, (
         "Parsed zero rows from docs/ENTITY_REFERENCE.md § Entity Categories -- "
         "table format may have changed; update the parser in "
         "tests/test_entity_category.py"
     )
-    return doc_categories
+    return doc_rows
+
+
+def _parse_doc_table() -> dict[str, str | None]:
+    """Parse the `## Entity Categories` markdown table into unique_id -> category."""
+    return {uid: category for uid, (_, category) in _parse_doc_rows().items()}
 
 
 class TestEntityCategoryDocSync:
@@ -170,6 +182,27 @@ class TestEntityCategoryDocSync:
             f"docs/ENTITY_REFERENCE.md § Entity Categories: {details}. "
             "Update docs/ENTITY_REFERENCE.md § Entity Categories to match the code "
             "(or fix the code if the doc is right)."
+        )
+
+    @pytest.mark.asyncio
+    async def test_platform_matches_doc(self):
+        """Each unique_id's code platform matches its documented platform."""
+        _, code_platforms = await _collect_entities_from_code()
+        doc_platforms = {
+            uid: platform for uid, (platform, _) in _parse_doc_rows().items()
+        }
+
+        common = set(code_platforms) & set(doc_platforms)
+        details = [
+            f"{uid}: code={code_platforms[uid]!r} doc={doc_platforms[uid]!r}"
+            for uid in sorted(common)
+            if code_platforms[uid] != doc_platforms[uid]
+        ]
+        assert not details, (
+            "platform mismatch between code and "
+            f"docs/ENTITY_REFERENCE.md § Entity Categories: {details}. "
+            "Update the Platform column in docs/ENTITY_REFERENCE.md § Entity "
+            "Categories to match the code."
         )
 
     @pytest.mark.asyncio

@@ -19,6 +19,8 @@ from .solar_accuracy import SolarAccuracyTracker
 
 _LOGGER = logging.getLogger(__name__)
 
+_DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
 
 class ForecastPipeline:
     """Compute forecast-related fields used by the coordinator."""
@@ -36,6 +38,9 @@ class ForecastPipeline:
         self._forecast_history_store = forecast_history_store
         self._get_switch_state = get_switch_state
         self._excess_solar_signals = excess_solar_signals
+        # Issue #1006: fallback hours last written to the log, so the rung
+        # trace is logged when it changes rather than on every run.
+        self._logged_fallback_rungs: tuple[tuple[str, str], ...] | None = None
 
     def compute_load_forecast_slots(
         self,
@@ -60,6 +65,7 @@ class ForecastPipeline:
 
         slots: list[float] = []
         source_counts: dict[str, int] = {}
+        profile_rungs: dict[str, str] = {}
         for i in range(total_slots):
             slot_start = base_slot + timedelta(minutes=15 * i)
             slot_hour = slot_start.hour
@@ -80,11 +86,46 @@ class ForecastPipeline:
             )
             slots.append(load_kw)
             source_counts[source] = source_counts.get(source, 0) + 1
+            # The forecaster suffixes the source with the rung that fed the
+            # hour (":day_5", ":aggregate_weekend", ...); a bare source means
+            # the combined average.
+            _, _, rung = source.rpartition(":")
+            hour_label = f"{_DAY_NAMES[day_of_week]} {slot_hour:02d}:00"
+            profile_rungs[hour_label] = rung if ":" in source else "global_avg"
 
         data.load_forecast_slots = slots
         data.forecast_consumption_source_counts = source_counts
+        data.load_forecast_profile_rungs = profile_rungs
+        self._log_profile_rungs(profile_rungs)
         data.weather_adjustment_applied = (
             self._load_forecaster.get_weather_adjustment_applied()
+        )
+
+    def _log_profile_rungs(self, profile_rungs: dict[str, str]) -> None:
+        """Log the per-hour load-profile rung trace when it changes (Issue #1006).
+
+        An hour leaving the day-specific rung changes its forecast with no
+        code change, so the hours on a fallback rung are named. Logged only
+        when that set differs from the last one logged: the trace itself is
+        on ``data.load_forecast_profile_rungs`` for every run.
+        """
+        fallback = tuple(
+            (hour, rung)
+            for hour, rung in profile_rungs.items()
+            if not rung.startswith("day_")
+        )
+        if fallback == self._logged_fallback_rungs:
+            return
+        self._logged_fallback_rungs = fallback
+
+        counts: dict[str, int] = {}
+        for rung in profile_rungs.values():
+            key = "day" if rung.startswith("day_") else rung
+            counts[key] = counts.get(key, 0) + 1
+        _LOGGER.info(
+            "Load profile rungs (Issue #1006): %s; fallback hours: %s",
+            " ".join(f"{key}={count}" for key, count in sorted(counts.items())),
+            ", ".join(f"{hour}={rung}" for hour, rung in fallback) or "none",
         )
 
     def compute_solar_battery_forecast(
