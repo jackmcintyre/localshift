@@ -79,8 +79,9 @@ class TestDefaultModeExportsOnTheRealSpike:
         spike = result["spike_export"]
         assert spike["admitted"] is False
         assert spike["exporting"] is False
-        # Buying the energy back in the next interval costs several times more.
-        assert spike["rebuy_price"] > 3.0
+        # The dear evening that follows pays several times more than now.
+        assert spike["later_spike_sell"] > 3.0
+        assert spike["sell"] < spike["spike_floor"]
 
     def test_unconfirmed_carried_spike_price_does_not_start_an_export(self):
         """15:20:10 still showed 15:15's $24.23; the real price was 71c."""
@@ -168,7 +169,11 @@ class TestPlannerAdmission:
 
         assert result.decisions[0].action == PlannerAction.EXPORT_PROACTIVE
         assert inputs.slots[0].spike_export_admitted is True
-        assert inputs.config.spike_export_now["rebuy_price"] == pytest.approx(2.55)
+        verdict = inputs.config.spike_export_now
+        # The two dear slots that follow are the tail of the same spike: they
+        # pay less than now, and the rebuy price is the night after them.
+        assert verdict["later_spike_sell"] == pytest.approx(2.26)
+        assert verdict["rebuy_price"] == pytest.approx(0.20)
 
     def test_ordinary_evening_peak_gains_no_export(self):
         result, inputs = _plan(ORDINARY_EVENING)
@@ -179,13 +184,15 @@ class TestPlannerAdmission:
         )
 
     def test_high_price_with_a_dearer_interval_still_to_come_does_not_export(self):
-        """An outlier price is not enough: buying back later must be cheaper."""
+        """An outlier price is not enough: the next interval pays three times more."""
         prices = [(1.10, 1.00), (3.30, 3.00)] + [(0.20, 0.10)] * 30
 
         _, inputs = _plan(prices)
 
         assert inputs.slots[0].spike_export_admitted is False
-        assert inputs.config.spike_export_now["rebuy_price"] == pytest.approx(3.30)
+        verdict = inputs.config.spike_export_now
+        assert verdict["later_spike_sell"] == pytest.approx(3.00)
+        assert verdict["min_sell"] == pytest.approx(3.00)
 
     def test_spread_without_an_outlier_price_does_not_export(self):
         """Selling 40c against a 15c rebuy is arbitrage, not a spike."""
@@ -243,6 +250,170 @@ class TestPlannerAdmission:
         slot = _slots([(0.10, 0.30)])[0]
 
         assert PlannerAction.EXPORT_PROACTIVE in feasible_actions(50.0, slot, config)
+
+
+# --------------------------------------------------------------------------
+# A spike that lasts more than one interval (PR #1125 review)
+# --------------------------------------------------------------------------
+
+
+def _roll_through_spike(
+    spike: list[tuple[float, float]], mode: str = "self_consumption"
+) -> list[tuple[PlannerAction, dict]]:
+    """Plan once per 5-minute interval of ``spike``, as the live loop does.
+
+    Each plan sees the rest of the spike as 5-minute slots followed by an
+    ordinary night, and starts from the SOC the previous plan left behind.
+    Returns each plan's slot-0 action and spike verdict.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    night = [(0.20, 0.10)] * 30
+    start = datetime(2026, 10, 12, 17, 0, tzinfo=timezone(timedelta(hours=11)))
+    soc = 90.0
+    out = []
+    for i in range(len(spike)):
+        remaining = spike[i:]
+        slots = []
+        clock = start + timedelta(minutes=5 * i)
+        for idx, (buy, sell) in enumerate(remaining + night):
+            minutes = 5 if idx < len(remaining) else 30
+            slots.append(
+                SlotContext(
+                    slot_index=idx,
+                    timestamp_iso=clock.isoformat(),
+                    slot_interval_minutes=minutes,
+                    buy_price=buy,
+                    sell_price=sell,
+                    solar_kwh=0.0,
+                    consumption_kwh=0.5 * minutes / 60.0,
+                )
+            )
+            clock += timedelta(minutes=minutes)
+        config = OptimizerConfig(optimization_mode=mode, export_price_margin=0.10)
+        result = DPPlanner().plan(
+            OptimizerInputs(
+                cycle_id=f"roll-{i}", initial_soc_pct=soc, slots=slots, config=config
+            )
+        )
+        assert result.success, result.error_message
+        out.append((result.decisions[0].action, dict(config.spike_export_now)))
+        soc = result.decisions[0].predicted_soc_pct
+    return out
+
+
+FLAT_SPIKE = [(11.20, 10.00)] * 4
+FALLING_SPIKE = [(16.80, 15.00), (13.40, 12.00), (11.20, 10.00), (8.96, 8.00)]
+RISING_SPIKE = list(reversed(FALLING_SPIKE))
+
+
+class TestSpikeLastingSeveralIntervals:
+    """The rest of the same spike is not what the energy costs to replace.
+
+    The rebuy price used to be the dearest buy price in the next 12 hours,
+    which included the next interval of the spike being sold into. Feed-in is
+    about 0.9x general, so any following interval forecast above roughly 87%
+    of the current sell price blocked the export, and a spike was held through
+    until its last interval.
+    """
+
+    @pytest.mark.parametrize("spike", [FLAT_SPIKE, FALLING_SPIKE])
+    def test_every_interval_of_a_flat_or_falling_spike_exports(self, spike):
+        rolled = _roll_through_spike(spike)
+
+        assert [action for action, _ in rolled] == [
+            PlannerAction.EXPORT_PROACTIVE
+        ] * len(spike)
+        assert all(verdict["admitted"] for _, verdict in rolled)
+
+    def test_falling_spike_is_judged_against_the_night_not_the_next_interval(self):
+        _, verdict = _roll_through_spike(FALLING_SPIKE)[0]
+
+        # $15 now, $12 next: the next interval pays less, so it does not block.
+        assert verdict["later_spike_sell"] == pytest.approx(12.00)
+        # What the energy costs to replace is the night after the spike.
+        assert verdict["rebuy_price"] == pytest.approx(0.20)
+
+    def test_rising_spike_waits_for_its_dearest_interval(self):
+        """A dearer interval of the same spike still blocks (owner decision 1)."""
+        rolled = _roll_through_spike(RISING_SPIKE)
+
+        actions = [action for action, _ in rolled]
+        assert PlannerAction.EXPORT_PROACTIVE not in actions[:3]
+        assert actions[3] == PlannerAction.EXPORT_PROACTIVE
+        assert [verdict["admitted"] for _, verdict in rolled] == [
+            False,
+            False,
+            False,
+            True,
+        ]
+        assert rolled[0][1]["later_spike_sell"] == pytest.approx(15.00)
+        assert rolled[0][1]["min_sell"] == pytest.approx(15.00)
+
+    def test_arbitrage_mode_counts_every_interval_as_the_spike(self):
+        """The verdict is what lets the state machine skip the export debounce.
+
+        Arbitrage mode exported all four intervals already, but the first
+        three were not "admitted", so they kept the 2-minute debounce.
+        """
+        rolled = _roll_through_spike(FLAT_SPIKE, mode="arbitrage")
+
+        assert [action for action, _ in rolled] == [PlannerAction.EXPORT_PROACTIVE] * 4
+        assert all(verdict["admitted"] for _, verdict in rolled)
+
+    def test_dear_interval_after_a_gap_is_still_a_rebuy_price(self):
+        """Only the unbroken run after now is "the same spike"."""
+        prices = [(1.10, 1.00), (0.20, 0.10), (3.30, 3.00)] + [(0.20, 0.10)] * 30
+
+        _, inputs = _plan(prices)
+
+        verdict = inputs.config.spike_export_now
+        assert verdict["later_spike_sell"] is None
+        assert verdict["rebuy_price"] == pytest.approx(3.30)
+        assert inputs.slots[0].spike_export_admitted is False
+
+
+# --------------------------------------------------------------------------
+# A spike before the demand window: the export is refilled (PR #1125 review)
+# --------------------------------------------------------------------------
+
+
+class TestSpikeBeforeTheDemandWindow:
+    """2026-10-09 12:30, SOC 29.8, with a confirmed spike in the current interval.
+
+    The admission can make the plan grid-charge: selling before the demand
+    window leaves a gap to the 95% entry target, and the planner refills it.
+    What holds is that the refill is cheap against the sale and the target is
+    still met, not that no charging is added.
+    """
+
+    @staticmethod
+    def _run(sell: float, buy: float, arm: str) -> dict:
+        sys.path.insert(0, str(REPO_ROOT / "scripts"))
+        from replay_spike_export import run
+
+        scenario = json.loads((CONTROLS / "2026-10-09T123040.json").read_text())
+        payload = scenario["input"]
+        payload["feed_in_forecast"][0]["per_kwh"] = sell
+        payload["general_forecast"][0]["per_kwh"] = buy
+        payload["feed_in_price"] = sell
+        payload["general_price"] = buy
+        return run(scenario, arm)
+
+    @pytest.mark.parametrize(("sell", "buy"), [(1.00, 1.15), (10.00, 11.20)])
+    def test_export_is_refilled_cheaply_and_the_target_is_still_met(self, sell, buy):
+        base = self._run(sell, buy, "base")
+        branch = self._run(sell, buy, "branch")
+
+        assert base["actions"][0] == "hold"
+        assert branch["actions"][0] == "export_proactive"
+        # The export is paid back with grid charging before the window.
+        assert branch["charge_slots"] > base["charge_slots"]
+        # Each refill slot costs less than a fifth of what the energy sold for.
+        assert branch["max_charge_buy"] < sell / 5
+        # ...and the plan still reaches the demand-window target.
+        assert branch["dw_entry_soc_pct"] >= 95.0
+        assert branch["terminal_shortfall_pct"] == 0.0
 
 
 # --------------------------------------------------------------------------

@@ -930,8 +930,9 @@ Attributes:
   - `admitted` - true when the current slot's sell price reached `min_sell`. In `self_consumption` mode this is what lets the planner consider exporting below the same interval's buy price; the planner still decides
   - `exporting` - true when the slot was admitted and the plan's current action is export
   - `sell` - the sell price that was judged ($/kWh)
-  - `rebuy_price`, `rebuy_at` - the dearest buy price in the next 12 hours of the plan and the slot it falls in: the worst the exported energy could cost to replace
-  - `min_sell` - the sell price needed: the larger of `spike_floor` and `rebuy_price` / round-trip efficiency + `export_price_margin`
+  - `later_spike_sell` - the dearest sell price in the rest of the same spike: the unbroken run of slots after the current one whose sell price is at or above `spike_floor`. Null when the next slot is already ordinary. The current slot is not admitted while a later one pays more
+  - `rebuy_price`, `rebuy_at` - the dearest buy price in the next 12 hours of the plan once that run is over, and the slot it falls in: the worst the exported energy could cost to replace
+  - `min_sell` - the sell price needed: the largest of `spike_floor`, `rebuy_price` / round-trip efficiency + `export_price_margin`, and `later_spike_sell`
   - `spike_floor`, `median_buy` - 4x the horizon's median buy price, and that median
   - `skip_debounce` - true when `exporting` is true and Amber has confirmed the sell price (`slot0_price.sell_estimate` false). The export start then skips the 2-minute export debounce. An estimate, or a price with no confirmation flag, never sets it
 

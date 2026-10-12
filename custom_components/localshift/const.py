@@ -311,8 +311,9 @@ EXPORT_FLOOR_HOLD_PRICE_RATIO: Final[float] = 0.5
 # the median, the 2026-10-12 intervals sold at 50x and 120x, so neither class
 # sits near the boundary. Do not lower it to catch "nearly spikes".
 SPIKE_EXPORT_OUTLIER_FACTOR: Final[float] = 4.0
-# How far ahead the rebuy price looks: the dearest buy price in this window is
-# what the exported energy is judged against. Twelve hours covers the rest of
+# How far ahead the rebuy price looks: the dearest buy price in this window,
+# leaving out the rest of the spike being sold into, is what the exported
+# energy is judged against. Twelve hours covers the rest of
 # the evening and the night, by which time solar or pre-charge has refilled.
 SPIKE_EXPORT_REBUY_LOOKAHEAD_HOURS: Final[float] = 12.0
 DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive (flat knob)

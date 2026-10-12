@@ -150,8 +150,17 @@ def run(scenario: dict[str, Any], arm: str) -> dict[str, Any]:
     decisions = getattr(data, "optimizer_decisions", None) or []
     summary = getattr(data, "optimizer_summary", None) or {}
     actions = [d.get("action") for d in decisions]
+    charge_buys = [
+        d.get("buy_price") or 0.0
+        for d in decisions
+        if str(d.get("action", "")).startswith("charge_grid")
+    ]
     return {
         "actions": actions,
+        "charge_slots": len(charge_buys),
+        "max_charge_buy": max(charge_buys) if charge_buys else None,
+        "dw_entry_soc_pct": summary.get("dw_entry_soc_pct"),
+        "terminal_shortfall_pct": summary.get("terminal_shortfall_pct"),
         "export_slots": actions.count("export_proactive"),
         "transitions": sum(
             1 for a, b in zip(actions, actions[1:], strict=False) if a != b
@@ -172,8 +181,8 @@ def replay_spike(in_dir: Path) -> list[dict[str, Any]]:
     rows = []
     print("2026-10-12 spike, replayed in self_consumption mode")
     print(
-        f"{'instant':<10}{'confirmed':<11}{'sell':>9}{'buy':>9}{'rebuy':>8}"
-        f"{'min sell':>10}{'base':>18}{'branch':>18}{'skip debounce':>15}"
+        f"{'instant':<10}{'confirmed':<11}{'sell':>9}{'buy':>9}{'later spike':>12}"
+        f"{'rebuy':>8}{'min sell':>10}{'base':>18}{'branch':>18}{'skip debounce':>15}"
     )
     for path in sorted(in_dir.glob("*.json")):
         scenario = json.loads(path.read_text())
@@ -185,6 +194,7 @@ def replay_spike(in_dir: Path) -> list[dict[str, Any]]:
         print(
             f"{at.strftime('%H:%M:%S'):<10}{'yes' if confirmed else 'no':<11}"
             f"{branch['sell']:>9.4f}{branch['buy']:>9.4f}"
+            f"{spike.get('later_spike_sell') or 0:>12.2f}"
             f"{spike.get('rebuy_price') or 0:>8.2f}{spike.get('min_sell') or 0:>10.2f}"
             f"{base['actions'][0]:>18}{branch['actions'][0]:>18}"
             f"{spike.get('skip_debounce')!s:>15}"
