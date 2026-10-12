@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
@@ -31,17 +30,52 @@ _BATTERY_FULL_SOC_PCT = 99.0
 # reset_daily_accumulators. target_reached_today is deliberately absent: it
 # feeds the pre-charge price calculation, so restoring it would change control
 # behaviour after a restart.
-DAILY_ACCUMULATOR_FIELDS: tuple[str, ...] = (
+#
+# The dollar totals are signed. Each is a non-negative power multiplied by a
+# raw price, and prices are stored unclamped (state/reader.py): the buy price
+# and the feed-in price both go negative in this system, so any of the four
+# can legitimately finish a day below zero.
+DAILY_DOLLAR_FIELDS: tuple[str, ...] = (
     "grid_import_cost",
     "grid_export_revenue",
     "battery_savings",
     "battery_charge_cost",
+)
+# The kWh totals can never be negative: _accumulate_energy_kwh is their only
+# writer and every amount it adds is max(power, 0) / 60 behind a positive
+# deadband, a min() of two such amounts, or an SOC delta gated on > 0.
+DAILY_KWH_FIELDS: tuple[str, ...] = (
     "grid_import_kwh_today",
     "grid_export_kwh_today",
     "solar_kwh_today",
     "grid_to_battery_kwh_today",
     "soc_gain_during_grid_charge_kwh_today",
     "export_while_battery_not_full_kwh_today",
+)
+DAILY_ACCUMULATOR_FIELDS: tuple[str, ...] = DAILY_DOLLAR_FIELDS + DAILY_KWH_FIELDS
+
+# Sanity bounds on a restored total. They exist to catch a corrupt or
+# hand-edited snapshot (1e300, a value in the wrong unit), not to police a
+# real day, so both are far beyond anything a house can do:
+#   - 5,000 kWh in a day is about 208 kW held for 24 hours. A 100 A
+#     three-phase supply, the largest residential connection, flat out all
+#     day is about 1,660 kWh.
+#   - $100,000 is that 5,000 kWh at $20/kWh, about the NEM wholesale market
+#     price cap, i.e. three times the largest supply's energy bought at the
+#     cap for every minute of the day. Dollar totals are signed, so the bound
+#     applies both ways (the market floor is -$1/kWh, well inside it).
+# A total outside its bound rejects the whole snapshot, like any other
+# malformed value.
+MAX_DAILY_TOTAL_KWH: float = 5_000.0
+MAX_DAILY_TOTAL_DOLLARS: float = 100_000.0
+
+# (field, lowest, highest) accepted on restore: dollars signed, kWh not.
+_TOTAL_BOUNDS: tuple[tuple[str, float, float], ...] = (
+    *(
+        (key, -MAX_DAILY_TOTAL_DOLLARS, MAX_DAILY_TOTAL_DOLLARS)
+        for key in DAILY_DOLLAR_FIELDS
+    ),
+    *((key, 0.0, MAX_DAILY_TOTAL_KWH) for key in DAILY_KWH_FIELDS),
 )
 
 
@@ -102,14 +136,17 @@ class CostTracker:
             raise ValueError("missing totals")
 
         # A total introduced after the snapshot was written restores as zero.
+        # Keys this version does not know, here or at the top level, are
+        # ignored: only DAILY_ACCUMULATOR_FIELDS are ever read or written.
         values: dict[str, float] = {}
-        for key in DAILY_ACCUMULATOR_FIELDS:
+        for key, low, high in _TOTAL_BOUNDS:
             value = totals.get(key, 0.0)
+            # The range test also rejects NaN (every comparison is False) and
+            # both infinities, and is safe for an int too large for a float.
             if (
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-                or value < 0
+                or not low <= value <= high
             ):
                 raise ValueError(f"invalid {key}: {value!r}")
             values[key] = float(value)
@@ -136,8 +173,10 @@ class CostTracker:
         # Issue #1102: totals restored seconds before midnight would outlive
         # the day if the midnight timer was armed too late to fire. Start the
         # new day from zero here rather than keep adding to yesterday's.
+        # Totals only: target_reached_today is a control input and is not
+        # this guard's to clear (computation_engine clears it on date change).
         if dt_util.now().date() != self._totals_date:
-            self.reset_daily_accumulators(data)
+            self._reset_daily_totals(data)
 
         # Grid import cost: positive grid power × buy price
         import_cost = max(data.grid_power_kw, 0.0) * data.general_price / 60
@@ -223,13 +262,22 @@ class CostTracker:
     def reset_daily_accumulators(self, data: CoordinatorData) -> None:
         """Reset daily cost and energy accumulators and the target flag.
 
-        Replaces YAML A12 (localshift_reset_target_reached).
+        Replaces YAML A12 (localshift_reset_target_reached). This is the
+        midnight reset: the day's totals and the target latch together.
+        """
+        data.target_reached_today = False
+        self._reset_daily_totals(data)
+
+    def _reset_daily_totals(self, data: CoordinatorData) -> None:
+        """Zero the ten day-to-date totals and start a new totals day.
+
+        Reporting state only. It must never write target_reached_today or any
+        other control input: accumulate_costs calls it from its date guard.
         """
         data.grid_import_cost = 0.0
         data.grid_export_revenue = 0.0
         data.battery_savings = 0.0
         data.battery_charge_cost = 0.0
-        data.target_reached_today = False
         self._reset_energy_accumulators(data)
         # Issue #899: also clear the SOC baseline so the first grid-charge
         # sample after midnight establishes a fresh baseline. Without this, a

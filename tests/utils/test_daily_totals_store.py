@@ -8,6 +8,7 @@ snapshot at startup only when it belongs to the current local day.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from datetime import date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,6 +19,10 @@ import pytest
 from custom_components.localshift.coordinator import CoordinatorData
 from custom_components.localshift.utils.costs import (
     DAILY_ACCUMULATOR_FIELDS,
+    DAILY_DOLLAR_FIELDS,
+    DAILY_KWH_FIELDS,
+    MAX_DAILY_TOTAL_DOLLARS,
+    MAX_DAILY_TOTAL_KWH,
     CostTracker,
 )
 from custom_components.localshift.utils.daily_totals_store import DailyTotalsStore
@@ -242,21 +247,163 @@ class TestRestore:
         assert data.solar_kwh_today == 0.0
         assert data.grid_import_cost == pytest.approx(1.14)
 
-    async def test_restore_leaves_control_inputs_alone(
-        self, totals_store, mock_store, data
+    @pytest.mark.parametrize("latch_before", [True, False])
+    async def test_restore_never_writes_the_target_latch(
+        self, totals_store, mock_store, data, latch_before
     ):
-        """Only display totals are restored; the target latch is not."""
+        """target_reached_today is a control input and is not restorable.
+
+        Keys the restore does not know are ignored on purpose, at the top level
+        and inside ``totals``, rather than rejecting the snapshot: a snapshot
+        written by a newer version (one more total) must still restore the
+        totals this version does know after a downgrade. Ignored means ignored:
+        a ``target_reached_today`` smuggled in either place must not reach the
+        latch, in either direction, and no unknown key becomes an attribute.
+        """
         now = _at(2026, 10, 13)
+        data.target_reached_today = latch_before
+        smuggled = not latch_before
+        totals: dict = _totals()
+        totals["target_reached_today"] = smuggled
+        totals["some_future_total_kwh"] = 3.0
         mock_store.async_load.return_value = {
             "date": "2026-10-13",
-            "totals": _totals(),
-            "target_reached_today": True,
+            "totals": totals,
+            "target_reached_today": smuggled,
+            "some_future_key": 1,
         }
 
         with patch(NOW_PATH, return_value=now):
-            await totals_store.async_restore(data, _tracker(now))
+            restored = await totals_store.async_restore(data, _tracker(now))
 
-        assert data.target_reached_today is False
+        assert restored is True
+        assert data.grid_import_cost == pytest.approx(1.14)
+        assert data.target_reached_today is latch_before
+        assert not hasattr(data, "some_future_total_kwh")
+        assert not hasattr(data, "some_future_key")
+
+
+class TestSignedDollarTotals:
+    """Dollar totals are signed; kWh totals are not.
+
+    Buy and feed-in prices are stored raw (state/reader.py) and both go
+    negative in this system, so each of the four dollar totals can legitimately
+    end a day below zero. Rejecting that would discard the whole snapshot on
+    exactly the days the totals are most interesting.
+    """
+
+    def test_field_groups_partition_the_persisted_fields(self):
+        assert set(DAILY_DOLLAR_FIELDS) | set(DAILY_KWH_FIELDS) == set(
+            DAILY_ACCUMULATOR_FIELDS
+        )
+        assert not set(DAILY_DOLLAR_FIELDS) & set(DAILY_KWH_FIELDS)
+        assert len(DAILY_ACCUMULATOR_FIELDS) == 10
+
+    @pytest.mark.parametrize("field", DAILY_DOLLAR_FIELDS)
+    async def test_negative_dollar_total_round_trips(
+        self, totals_store, mock_store, data, field
+    ):
+        """Saved negative, restarted, restored negative, with the rest intact."""
+        now = _at(2026, 10, 13, 13, 0)
+        expected = _totals(**{field: -2.37})
+        for key, value in expected.items():
+            setattr(data, key, value)
+        await totals_store.async_save(data, _tracker(now))
+        mock_store.async_load.return_value = mock_store.async_save.await_args.args[0]
+
+        fresh = CoordinatorData()
+        later = _at(2026, 10, 13, 13, 2)
+        with patch(NOW_PATH, return_value=later):
+            assert await totals_store.async_restore(fresh, _tracker(later)) is True
+
+        for key, value in expected.items():
+            assert getattr(fresh, key) == pytest.approx(value), key
+        assert getattr(fresh, field) < 0
+
+    @pytest.mark.parametrize("field", DAILY_KWH_FIELDS)
+    async def test_negative_kwh_total_is_rejected(
+        self, totals_store, mock_store, data, field
+    ):
+        """Every kWh total only ever has non-negative amounts added to it."""
+        now = _at(2026, 10, 13)
+        mock_store.async_load.return_value = {
+            "date": "2026-10-13",
+            "totals": _totals(**{field: -0.5}),
+        }
+
+        with patch(NOW_PATH, return_value=now):
+            assert await totals_store.async_restore(data, _tracker(now)) is False
+        _assert_all_zero(data)
+
+
+class TestImplausibleTotals:
+    """A value no single day could produce rejects the snapshot whole."""
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("grid_import_cost", 1e300),
+            ("grid_export_revenue", -1e300),
+            ("battery_savings", MAX_DAILY_TOTAL_DOLLARS * 1.01),
+            ("battery_charge_cost", -MAX_DAILY_TOTAL_DOLLARS * 1.01),
+            ("solar_kwh_today", 1e300),
+            ("grid_import_kwh_today", MAX_DAILY_TOTAL_KWH * 1.01),
+            # An int too large for a float must be rejected, not overflow.
+            ("grid_export_kwh_today", 10**400),
+            ("grid_import_cost", -(10**400)),
+        ],
+        ids=[
+            "dollars-1e300",
+            "dollars-minus-1e300",
+            "dollars-just-over",
+            "dollars-just-under-negative",
+            "kwh-1e300",
+            "kwh-just-over",
+            "kwh-oversized-int",
+            "dollars-oversized-negative-int",
+        ],
+    )
+    async def test_out_of_range_total_is_rejected(
+        self, totals_store, mock_store, data, caplog, field, value
+    ):
+        now = _at(2026, 10, 13)
+        mock_store.async_load.return_value = {
+            "date": "2026-10-13",
+            "totals": _totals(**{field: value}),
+        }
+
+        with patch(NOW_PATH, return_value=now), caplog.at_level(logging.WARNING):
+            assert await totals_store.async_restore(data, _tracker(now)) is False
+
+        _assert_all_zero(data)
+        assert f"invalid {field}" in caplog.text
+
+    def test_oversized_int_raises_value_error(self, data):
+        """The documented failure type, not an OverflowError from math."""
+        now = _at(2026, 10, 13)
+        tracker = _tracker(now)
+        snapshot = {"date": "2026-10-13", "totals": _totals(solar_kwh_today=10**400)}
+        with patch(NOW_PATH, return_value=now), pytest.raises(ValueError):
+            tracker.restore_daily_totals(data, snapshot)
+
+    async def test_totals_at_the_bounds_are_accepted(
+        self, totals_store, mock_store, data
+    ):
+        now = _at(2026, 10, 13)
+        mock_store.async_load.return_value = {
+            "date": "2026-10-13",
+            "totals": _totals(
+                grid_import_cost=MAX_DAILY_TOTAL_DOLLARS,
+                grid_export_revenue=-MAX_DAILY_TOTAL_DOLLARS,
+                solar_kwh_today=MAX_DAILY_TOTAL_KWH,
+                grid_export_kwh_today=0,
+            ),
+        }
+
+        with patch(NOW_PATH, return_value=now):
+            assert await totals_store.async_restore(data, _tracker(now)) is True
+        assert data.grid_export_revenue == -MAX_DAILY_TOTAL_DOLLARS
+        assert data.solar_kwh_today == MAX_DAILY_TOTAL_KWH
 
 
 class TestFirstTickAfterRestore:
@@ -356,6 +503,73 @@ class TestFirstTickAfterRestore:
         assert data.grid_export_revenue == 0.0
         assert tracker.totals_date == date(2026, 10, 14)
 
+    @pytest.mark.parametrize("latch", [True, False])
+    def test_rollover_guard_does_not_touch_the_target_latch(self, data, latch):
+        """The guard in accumulate_costs resets totals only.
+
+        target_reached_today is a control input (engine/price_calculator.py).
+        Its date-change clear belongs to computation_engine and to the midnight
+        handler; the cost tracker's own tick must never write it.
+        """
+        tracker = _tracker(_at(2026, 10, 13, 23, 59))
+        for key in DAILY_ACCUMULATOR_FIELDS:
+            setattr(data, key, 5.0)
+        data.target_reached_today = latch
+        # Idle: nothing accumulates on the tick, so the totals show the reset.
+        data.grid_power_kw = 0.0
+        data.battery_power_kw = 0.0
+        data.solar_power_kw = 0.0
+
+        with patch(NOW_PATH, return_value=_at(2026, 10, 14, 0, 1)):
+            tracker.accumulate_costs(data)
+
+        _assert_all_zero(data)
+        assert tracker.totals_date == date(2026, 10, 14)
+        assert data.target_reached_today is latch
+
+    def test_rollover_guard_drops_the_soc_baseline(self, data):
+        """A stale pre-midnight baseline must not book its gain to the new day."""
+        tracker = _tracker(_at(2026, 10, 13, 23, 59))
+        tracker._last_soc_pct = 40.0
+        data.grid_power_kw = 5.0
+        data.battery_power_kw = -5.0
+        data.general_price = 0.10
+        data.soc = 70.0
+
+        with patch(NOW_PATH, return_value=_at(2026, 10, 14, 0, 1)):
+            tracker.accumulate_costs(data)
+
+        assert data.soc_gain_during_grid_charge_kwh_today == 0.0
+        assert tracker._last_soc_pct == 70.0
+
+    def test_midnight_handler_still_clears_the_target_latch(self, data):
+        """What midnight does is unchanged: totals, baseline and the latch.
+
+        Driven through the real TickScheduler.handle_midnight_reset with a real
+        CostTracker, so this pins the production path rather than the method.
+        """
+        from custom_components.localshift.coordinator.tick_scheduler import (
+            TickScheduler,
+        )
+
+        tracker = _tracker(_at(2026, 10, 13, 23, 59))
+        tracker._last_soc_pct = 63.0
+        for key in DAILY_ACCUMULATOR_FIELDS:
+            setattr(data, key, 5.0)
+        data.target_reached_today = True
+        coordinator = MagicMock()
+        coordinator.data = data
+        coordinator.cost_tracker = tracker
+        midnight = _at(2026, 10, 14, 0, 0)
+
+        with patch(NOW_PATH, return_value=midnight):
+            TickScheduler(coordinator).handle_midnight_reset(midnight)
+
+        _assert_all_zero(data)
+        assert data.target_reached_today is False
+        assert tracker._last_soc_pct is None
+        assert tracker.totals_date == date(2026, 10, 14)
+
 
 class TestSave:
     async def test_saves_dated_snapshot(self, totals_store, mock_store, data):
@@ -426,3 +640,54 @@ class TestPersistedFieldsMatchTheDailyReset:
         tracker.reset_daily_accumulators(data)
 
         _assert_all_zero(data)
+
+    # Fields the daily reset clears that are deliberately NOT persisted. Adding
+    # a name here is a decision that the field may be lost on restart; say why.
+    _RESET_BUT_NOT_PERSISTED = frozenset({
+        # Control input: engine/price_calculator.py reads it to set the
+        # effective cheap price for pre-charge. Restoring it would change
+        # charging behaviour after a restart (Issue #1102, out of scope).
+        "target_reached_today",
+    })
+
+    def test_every_field_the_daily_reset_clears_is_persisted(self):
+        """The reverse guard: a new accumulator cannot silently miss the store.
+
+        Every scalar field on CoordinatorData is set away from its default, the
+        daily reset is run, and whatever it changed must be either persisted or
+        on the commented exclusion list above. (The midnight handler zeroes two
+        more counters itself, anticipated_transitions_today and
+        anticipation_corrections_today; they are not the cost tracker's and are
+        outside this guard.)
+        """
+        data = CoordinatorData()
+        before: dict[str, object] = {}
+        for field in dataclasses.fields(CoordinatorData):
+            current = getattr(data, field.name)
+            if isinstance(current, bool):
+                marked: object = not current
+            elif isinstance(current, (int, float)):
+                marked = current + 7
+            else:
+                continue
+            setattr(data, field.name, marked)
+            before[field.name] = marked
+        assert set(DAILY_ACCUMULATOR_FIELDS) <= set(before)
+        assert self._RESET_BUT_NOT_PERSISTED <= set(before)
+
+        _tracker(_at(2026, 10, 13)).reset_daily_accumulators(data)
+
+        cleared = {
+            name for name, value in before.items() if getattr(data, name) != value
+        }
+        unaccounted = (
+            cleared - set(DAILY_ACCUMULATOR_FIELDS) - self._RESET_BUT_NOT_PERSISTED
+        )
+        assert not unaccounted, (
+            f"reset_daily_accumulators clears {sorted(unaccounted)} but they are "
+            "not in DAILY_ACCUMULATOR_FIELDS, so a restart loses them. Persist "
+            "them, or add them to _RESET_BUT_NOT_PERSISTED with the reason."
+        )
+        # The exclusion list must not go stale either.
+        assert self._RESET_BUT_NOT_PERSISTED <= cleared
+        assert not self._RESET_BUT_NOT_PERSISTED & set(DAILY_ACCUMULATOR_FIELDS)
