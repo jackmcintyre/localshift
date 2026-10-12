@@ -637,7 +637,11 @@ def dw_entry_engine(mock_hass, mock_get_entity_id):
 
 
 def _tick(engine, data, now_dt):
-    """One capture tick: refresh demand_window_active, then capture the actual."""
+    """One capture tick: refresh demand_window_active, then capture the actual.
+
+    The capture takes a fresh SOC read (#1049); ``data.soc`` stands in for it.
+    """
+    engine._read_fresh_soc = lambda: data.soc
     with patch(
         "custom_components.localshift.computation_engine.dt_util.now",
         return_value=now_dt,
