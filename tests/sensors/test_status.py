@@ -431,6 +431,7 @@ class TestDecisionLagSensor:
         assert attrs["physical_response_timed_out"] is False
         assert attrs["boundary_lag_seconds"] is None
         assert attrs["boundary_lag_history"] == []
+        assert attrs["boundary_lag_grant_source"] is None
         assert attrs["anticipated_transitions_today"] == 0
         assert attrs["anticipation_corrections_today"] == 0
 
@@ -499,6 +500,48 @@ class TestDecisionLagSensor:
         ]
         assert attrs["anticipated_transitions_today"] == 3
         assert attrs["anticipation_corrections_today"] == 1
+
+    def test_boundary_lag_grant_source_is_a_recorded_scalar(self):
+        # #945: boundary_lag_history is unrecorded, so the source of the
+        # latest measurement must reach the recorder as a scalar next to
+        # boundary_lag_seconds, or recorded history cannot separate price
+        # grants from backstop corrections after a restart. "Latest" is
+        # chronological across buckets, not dict order: backstop is the last
+        # bucket here but price is the most recent transition.
+        boundary_history = {
+            "price": [
+                {
+                    "boundary_lag": 23.4,
+                    "grant_source": "price",
+                    "interval_start_utc": "2026-10-12T02:05:00+00:00",
+                }
+            ],
+            "backstop": [
+                {
+                    "boundary_lag": 200.0,
+                    "grant_source": "backstop",
+                    "interval_start_utc": "2026-10-12T02:00:00+00:00",
+                }
+            ],
+        }
+        sensor = _sensor(
+            DecisionLagSensor,
+            decision_lag_seconds=None,
+            physical_response_lag_seconds=None,
+            physical_response_timed_out=False,
+            physical_response_watch=None,
+            decision_lag_history=[],
+            decision_timestamp=None,
+            command_completion_timestamp=None,
+            boundary_lag_seconds=23.4,
+            boundary_lag_history=boundary_history,
+            anticipated_transitions_today=0,
+            anticipation_corrections_today=0,
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs["boundary_lag_grant_source"] == "price"
+        assert "boundary_lag_grant_source" not in sensor._unrecorded_attributes
+        assert "boundary_lag_seconds" not in sensor._unrecorded_attributes
 
     def test_extra_state_attributes_boundary_lag_history_windowed(self):
         # The attribute exposes the last 20 entries overall, flattened across

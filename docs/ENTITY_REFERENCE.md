@@ -679,6 +679,7 @@ Attributes:
   decision_timestamp: "2026-02-26T09:05:00"
   implementation_timestamp: "2026-02-26T09:05:45"
   boundary_lag_seconds: 23.4
+  boundary_lag_grant_source: price
   boundary_lag_history: [...last 20 boundary-lag measurements, tagged by grant_source...]
   anticipated_transitions_today: 0
   anticipation_corrections_today: 0
@@ -686,7 +687,7 @@ Attributes:
 
 Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_lag_history`: how far into its 5-minute price interval each transition landed, tagged by `grant_source` (`price`, `spike`, `demand_window`, `soc_floor`, `plan_charge`, `price_confirmed`, `debounce`, `retry`, `backstop`, `unknown`). `debounce` and `retry` (#941) mark a transition that did not land on a fresh price grant — a debounce timer completing, or a retry of a command the controller rejected or the entity validator blocked — and should be excluded from the Amber-latency baseline the same way `backstop` is. Each boundary-lag history entry's `from_mode` (#940) is the previously *commanded* mode, not the transition's own target (`data.active_mode`, which always equals the target); the `from_mode` field of the `history` entries above means the same thing (#967), so both rings agree on its meaning. Internally the boundary-lag ring is partitioned per `grant_source` (200 entries each, #942/#990 — enough per-source samples for #510 slice 3's Amber-latency tail estimate) so a backstop correction burst can never evict the price-tagged samples; the attribute is still the last 20 entries overall, flattened from that per-source ring into one chronologically ordered list. `anticipated_transitions_today` / `anticipation_corrections_today` are declared here and daily-reset but stay at 0 until a later slice implements the anticipatory logic they count. No new entity — these are attributes on this existing sensor.
 
-`history` and `boundary_lag_history` are excluded from the recorder (#945): they are on the live state but not in the entity's stored history. The scalar attributes, including `boundary_lag_seconds`, are still recorded.
+`history` and `boundary_lag_history` are excluded from the recorder (#945): they are on the live state but not in the entity's stored history. The scalar attributes are still recorded, including `boundary_lag_seconds` and `boundary_lag_grant_source` (the `grant_source` of the latest boundary-lag measurement). Recorded together, those two let the per-source lag distribution be rebuilt from recorder history after a restart, which the in-memory ring does not survive.
 
 ---
 

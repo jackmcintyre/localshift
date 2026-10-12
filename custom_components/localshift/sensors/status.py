@@ -262,6 +262,8 @@ class DecisionLagSensor(LocalShiftSensorBase):
     # boundary_lag_history changes on corrections, re-probes and retries, so
     # recording them writes a new state_attributes row each time. They stay on
     # the live state; only the recorder skips them (as Entity Health does).
+    # boundary_lag_seconds and boundary_lag_grant_source stay recorded, so the
+    # per-source lag distribution survives a restart in recorder history.
     _unrecorded_attributes = frozenset({"history", "boundary_lag_history"})
 
     def _update_from_coordinator(self) -> None:
@@ -292,6 +294,10 @@ class DecisionLagSensor(LocalShiftSensorBase):
 
         def _round_or_none(values: list[float]) -> float | None:
             return round(sum(values) / len(values), 2) if values else None
+
+        boundary_lag_history = _flatten_boundary_lag_history(
+            d.boundary_lag_history or {}
+        )
 
         return {
             "command_lag_seconds": round(d.decision_lag_seconds, 2)
@@ -327,9 +333,14 @@ class DecisionLagSensor(LocalShiftSensorBase):
             "boundary_lag_seconds": round(d.boundary_lag_seconds, 2)
             if d.boundary_lag_seconds is not None
             else None,
-            "boundary_lag_history": _flatten_boundary_lag_history(
-                d.boundary_lag_history or {}
-            ),
+            # #945: the ring below is unrecorded, so the grant source of the
+            # latest measurement is also a recorded scalar. Without it the
+            # recorder holds only untagged boundary_lag_seconds values and the
+            # per-source distribution cannot be rebuilt after a restart.
+            "boundary_lag_grant_source": boundary_lag_history[-1].get("grant_source")
+            if boundary_lag_history
+            else None,
+            "boundary_lag_history": boundary_lag_history,
             "anticipated_transitions_today": d.anticipated_transitions_today,
             "anticipation_corrections_today": d.anticipation_corrections_today,
         }
