@@ -2,11 +2,39 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from custom_components.localshift.engine.types import (
     NegativeFitAvoidanceContext,
     OptimizerConfig,
     OptimizerInputs,
 )
+
+
+@dataclass(frozen=True)
+class NegativeFitAssessment:
+    """What the avoidance derivation decided this cycle, and why (Issue #1103).
+
+    ``context`` is what the DP consumes. The rest exists so a window that was
+    found and then dropped as immaterial can be explained from the optimizer
+    summary instead of looking identical to "no negative prices today".
+    """
+
+    context: NegativeFitAvoidanceContext | None = None
+    """The avoidance context, or None when avoidance does not apply."""
+
+    spill_cost: float | None = None
+    """Dollars the risk window would cost on the do-nothing trajectory: surplus
+    that cannot be stored, times the magnitude of the non-positive sell price.
+    None when the horizon has no risk window to cost."""
+
+    spill_threshold: float = 0.0
+    """Dollar threshold the spill cost must reach (``min_cycle_saving``).
+    0.0 means the gate is disabled."""
+
+    suppressed: bool = False
+    """True when a context would have been created and the materiality gate
+    alone removed it."""
 
 
 def find_risk_window(
@@ -68,6 +96,62 @@ def compute_required_headroom(
     return min(required_headroom_kwh, max_headroom_kwh)
 
 
+def compute_spill_cost(
+    slots: list,
+    risk_start_idx: int,
+    risk_end_idx: int,
+    initial_soc_pct: float,
+    config: OptimizerConfig,
+) -> float:
+    """Dollar cost of the spill the risk window forces if nothing is done.
+
+    Walks the do-nothing trajectory (solar minus load, clamped to the SOC
+    bounds) from slot 0 through the end of the window. In each non-positive
+    FIT slot, whatever surplus the battery has no room for goes to the grid at
+    that slot's price, and its magnitude is the cost. Surplus the battery
+    absorbs costs nothing, and positive-FIT slots inside the window earn rather
+    than cost, so neither contributes.
+
+    This is the quantity the avoidance mechanism exists to reduce. Comparing it
+    with a dollar threshold is what stops a window worth a fraction of a cent
+    from unlocking a morning of battery export (Issue #1103).
+    """
+    battery_capacity_kwh = config.battery_capacity_kwh
+    charge_efficiency = config.charge_efficiency
+    soc_pct = min(max(initial_soc_pct, config.discharge_floor_pct), config.max_soc_pct)
+
+    spill_cost = 0.0
+    for idx in range(min(risk_end_idx, len(slots) - 1) + 1):
+        slot = slots[idx]
+        net_kwh = slot.solar_kwh - slot.consumption_kwh
+        if net_kwh <= 0.0:
+            soc_pct += net_kwh / battery_capacity_kwh * 100.0
+            soc_pct = max(soc_pct, config.discharge_floor_pct)
+            continue
+
+        room_kwh = (config.max_soc_pct - soc_pct) / 100.0 * battery_capacity_kwh
+        storable_kwh = room_kwh / charge_efficiency if charge_efficiency > 0.0 else 0.0
+        absorbed_kwh = min(net_kwh, max(storable_kwh, 0.0))
+        soc_pct += absorbed_kwh * charge_efficiency / battery_capacity_kwh * 100.0
+        soc_pct = min(soc_pct, config.max_soc_pct)
+
+        if idx >= risk_start_idx and slot.sell_price <= 0:
+            spill_cost += (net_kwh - absorbed_kwh) * -slot.sell_price
+
+    return spill_cost
+
+
+def _spill_cost_is_immaterial(spill_cost: float, threshold: float) -> bool:
+    """True when the window is not worth cycling the battery for.
+
+    ``threshold`` is ``min_cycle_saving`` read as dollars for the whole window:
+    the same "not worth cycling the battery for less than this" judgement the
+    grid-charge gate makes, without a second knob. 0 disables the gate, as it
+    does there.
+    """
+    return threshold > 0.0 and spill_cost < threshold
+
+
 def compute_recovery_by_slot(
     slots: list, recovery_deadline_idx: int, charge_efficiency: float
 ) -> list[float]:
@@ -120,37 +204,78 @@ def compute_floor_by_slot(
     return floor_by_slot
 
 
+def _recovery_deadline_idx(slots: list) -> int:
+    """First demand-window slot, or the end of the horizon when there is none."""
+    for idx, slot in enumerate(slots):
+        if slot.is_demand_window_slot:
+            return idx
+    return len(slots) - 1
+
+
+def _existing_headroom_kwh(inputs: OptimizerInputs, risk_start_idx: int) -> float:
+    """Room to full at the start of the risk window if nothing is done.
+
+    Projects SOC to the start of the risk window along the do-nothing
+    trajectory: solar minus load, slot by slot, clamped to the SOC bounds.
+    The static ``target - initial SOC`` headroom this replaces is blind to
+    overnight load drain — on a heavy-load evening it counts headroom the
+    house consumes before the spill window opens, admitting pre-discharge
+    exports that only displace load-serving energy. Headroom is room to
+    *full*, matching the ``capacity - floor`` cap on the required headroom:
+    spill charges the battery toward max SOC regardless of target.
+    """
+    config = inputs.config
+    battery_capacity_kwh = config.battery_capacity_kwh
+    soc_at_risk_pct = inputs.initial_soc_pct
+    for slot in inputs.slots[:risk_start_idx]:
+        net_kwh = slot.solar_kwh - slot.consumption_kwh
+        stored_kwh = net_kwh * config.charge_efficiency if net_kwh > 0.0 else net_kwh
+        soc_at_risk_pct += stored_kwh / battery_capacity_kwh * 100.0
+    soc_at_risk_pct = min(
+        max(soc_at_risk_pct, config.discharge_floor_pct), config.max_soc_pct
+    )
+    return (config.max_soc_pct - soc_at_risk_pct) / 100.0 * battery_capacity_kwh
+
+
 def derive_negative_fit_avoidance_context(
     inputs: OptimizerInputs,
 ) -> NegativeFitAvoidanceContext | None:
     """Derive context for recoverability-based negative-FIT avoidance.
 
+    Thin wrapper over ``assess_negative_fit_avoidance`` for callers that only
+    need the context; the planner uses the assessment so it can publish why a
+    window was dropped.
+    """
+    return assess_negative_fit_avoidance(inputs).context
+
+
+def assess_negative_fit_avoidance(inputs: OptimizerInputs) -> NegativeFitAssessment:
+    """Derive the avoidance context, with the figures that explain the outcome.
+
     The planner may proactively discharge at positive FIT before a bad-price
     spill window when conservative future solar can still recover the battery
     to target by the relevant deadline.
 
-    Returns None if any of:
+    ``context`` is None if any of:
     - No negative-FIT window within horizon
     - No bad-FIT slot at or before the recovery deadline
     - No positive-FIT slot to sell into at or before the window ends
     - No recovery path to target (cannot safely pre-discharge)
     - Projected load drain already leaves room to absorb the spill
+    - The spill the window would cost is below ``min_cycle_saving`` dollars
+      (Issue #1103) — the one case reported as ``suppressed``
     """
     slots = inputs.slots
     config = inputs.config
     battery_capacity_kwh = config.battery_capacity_kwh
     n_slots = len(slots)
+    spill_threshold = max(0.0, config.min_cycle_saving)
+    none = NegativeFitAssessment(spill_threshold=spill_threshold)
 
     if n_slots == 0:
-        return None
+        return none
 
-    recovery_deadline_idx = None
-    for idx, slot in enumerate(slots):
-        if slot.is_demand_window_slot:
-            recovery_deadline_idx = idx
-            break
-    if recovery_deadline_idx is None:
-        recovery_deadline_idx = n_slots - 1
+    recovery_deadline_idx = _recovery_deadline_idx(slots)
 
     # Bound the scan at the recovery deadline. A 24h+ horizon usually carries
     # tomorrow's negative middle as well, and sizing today's pre-discharge off a
@@ -159,7 +284,14 @@ def derive_negative_fit_avoidance_context(
     # act on.
     risk_start_idx, risk_end_idx = find_risk_window(slots, recovery_deadline_idx)
     if risk_start_idx is None or risk_end_idx is None:
-        return None
+        return none
+
+    # Costed as soon as a window exists, so the summary carries the figure
+    # whichever of the checks below ends up deciding the outcome.
+    spill_cost = compute_spill_cost(
+        slots, risk_start_idx, risk_end_idx, inputs.initial_soc_pct, config
+    )
+    none = NegativeFitAssessment(spill_cost=spill_cost, spill_threshold=spill_threshold)
 
     # An export opportunity is any positive-FIT slot at or before the end of the
     # risk window. Requiring one strictly *before* ``risk_start_idx`` made the
@@ -173,7 +305,7 @@ def derive_negative_fit_avoidance_context(
         s.sell_price > 0 and s.export_available for s in slots[: risk_end_idx + 1]
     )
     if not has_export_opportunity:
-        return None
+        return none
 
     min_floor_kwh = config.discharge_floor_pct / 100.0 * battery_capacity_kwh
     max_headroom_kwh = battery_capacity_kwh - min_floor_kwh
@@ -186,32 +318,12 @@ def derive_negative_fit_avoidance_context(
         max_headroom_kwh,
     )
     if required_headroom_kwh <= 0:
-        return None
+        return none
 
     target_kwh = config.demand_window_target_soc_pct / 100.0 * battery_capacity_kwh
 
-    # Project SOC to the start of the risk window along the do-nothing
-    # trajectory: solar minus load, slot by slot, clamped to the SOC bounds.
-    # The static ``target - initial SOC`` headroom this replaces is blind to
-    # overnight load drain — on a heavy-load evening it counts headroom the
-    # house consumes before the spill window opens, admitting pre-discharge
-    # exports that only displace load-serving energy. Headroom is room to
-    # *full*, matching the ``capacity - floor`` cap on ``required`` above:
-    # spill charges the battery toward max SOC regardless of target.
-    soc_at_risk_pct = inputs.initial_soc_pct
-    for slot in slots[:risk_start_idx]:
-        net_kwh = slot.solar_kwh - slot.consumption_kwh
-        stored_kwh = net_kwh * config.charge_efficiency if net_kwh > 0.0 else net_kwh
-        soc_at_risk_pct += stored_kwh / battery_capacity_kwh * 100.0
-    soc_at_risk_pct = min(
-        max(soc_at_risk_pct, config.discharge_floor_pct), config.max_soc_pct
-    )
-    existing_headroom_kwh = (
-        (config.max_soc_pct - soc_at_risk_pct) / 100.0 * battery_capacity_kwh
-    )
-
-    if existing_headroom_kwh >= required_headroom_kwh:
-        return None
+    if _existing_headroom_kwh(inputs, risk_start_idx) >= required_headroom_kwh:
+        return none
 
     recovery_by_slot = compute_recovery_by_slot(
         slots, recovery_deadline_idx, config.charge_efficiency
@@ -225,13 +337,31 @@ def derive_negative_fit_avoidance_context(
         recovery_by_slot,
     )
 
-    return NegativeFitAvoidanceContext(
-        risk_window_start_idx=risk_start_idx,
-        risk_window_end_idx=risk_end_idx,
-        required_headroom_kwh=required_headroom_kwh,
-        recovery_deadline_idx=recovery_deadline_idx,
-        conservative_recovery_kwh_by_slot=tuple(recovery_by_slot),
-        recoverability_floor_pct_by_slot=tuple(floor_by_slot),
+    # Issue #1103: materiality. Everything above asks whether pre-discharge is
+    # possible and safe; none of it asks whether the spill is worth avoiding.
+    # Any ``sell_price <= 0`` opened the window, and an open window drops the
+    # ordinary export value test in ``_determine_export_actions``, so a slot at
+    # -0.04c was enough to license exporting the battery all morning at 1-7c.
+    # Checked last so ``suppressed`` means exactly "this gate, and only this
+    # gate, removed the context".
+    if _spill_cost_is_immaterial(spill_cost, spill_threshold):
+        return NegativeFitAssessment(
+            spill_cost=spill_cost,
+            spill_threshold=spill_threshold,
+            suppressed=True,
+        )
+
+    return NegativeFitAssessment(
+        context=NegativeFitAvoidanceContext(
+            risk_window_start_idx=risk_start_idx,
+            risk_window_end_idx=risk_end_idx,
+            required_headroom_kwh=required_headroom_kwh,
+            recovery_deadline_idx=recovery_deadline_idx,
+            conservative_recovery_kwh_by_slot=tuple(recovery_by_slot),
+            recoverability_floor_pct_by_slot=tuple(floor_by_slot),
+        ),
+        spill_cost=spill_cost,
+        spill_threshold=spill_threshold,
     )
 
 

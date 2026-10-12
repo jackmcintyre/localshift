@@ -905,6 +905,20 @@ class OptimizerResult:
     dw_entry_soc_pct: float | None = None
     """SOC (%) at demand window entry slot. None if no DW."""
 
+    # Negative-FIT avoidance materiality (Issue #1103)
+    negative_fit_spill_cost: float | None = None
+    """Dollars the negative-FIT risk window would cost if nothing were done
+    (unstorable surplus x magnitude of the non-positive sell price). None when
+    the horizon has no risk window before the recovery deadline."""
+
+    negative_fit_spill_threshold: float = 0.0
+    """Dollar threshold the spill cost must reach for avoidance to open
+    (``min_cycle_saving``). 0.0 means the gate is disabled."""
+
+    negative_fit_suppressed: bool = False
+    """True when avoidance would otherwise have opened and was dropped only
+    because the spill cost was below the threshold."""
+
 
 # -----------------------------------------------------------------------------
 # Negative FIT avoidance context

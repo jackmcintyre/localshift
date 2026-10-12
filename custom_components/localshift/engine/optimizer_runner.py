@@ -704,6 +704,16 @@ def _build_summary(
         result.spike_funding_net_cost_delta, 4
     )
 
+    # Negative-FIT avoidance materiality (Issue #1103). A spill cost with
+    # suppressed=True is a window that was found and judged not worth cycling
+    # the battery for; spill cost None is a horizon with no window at all.
+    spill_cost = result.negative_fit_spill_cost
+    summary["negative_fit_spill_cost"] = (
+        round(spill_cost, 4) if spill_cost is not None else None
+    )
+    summary["negative_fit_spill_threshold"] = result.negative_fit_spill_threshold
+    summary["negative_fit_suppressed"] = result.negative_fit_suppressed
+
     return summary
 
 
