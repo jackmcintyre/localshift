@@ -213,6 +213,50 @@ class TestSyntheticPathRunsWithoutValidator:
 
         assert coordinator.data.integration_status == "degraded"
 
+    def test_repeated_checks_without_validator_keep_one_warning(self):
+        """Issue #995: with no validator nothing rebuilds entity_warnings, so
+        the monitor must replace its own warning rather than stack a copy on
+        every check."""
+        monitor, coordinator = _monitor_with_data(
+            validator_status=None, synthetic_slot_health=_degraded_tracker()
+        )
+
+        for _ in range(10):
+            monitor.check_entity_health()
+
+        assert len(coordinator.data.entity_warnings) == 1
+
+    def test_other_warnings_survive_without_validator(self):
+        """Only the monitor's own warning is withdrawn."""
+        monitor, coordinator = _monitor_with_data(
+            validator_status=None, synthetic_slot_health=_degraded_tracker()
+        )
+        coordinator.data.entity_warnings = ["unrelated warning"]
+
+        monitor.check_entity_health()
+        monitor.check_entity_health()
+
+        assert coordinator.data.entity_warnings[0] == "unrelated warning"
+        assert len(coordinator.data.entity_warnings) == 2
+
+    def test_warning_is_withdrawn_on_clear_without_validator(self):
+        """Issue #995: once the tracker clears, the stale warning goes too."""
+        health = _degraded_tracker()
+        monitor, coordinator = _monitor_with_data(
+            validator_status=None, synthetic_slot_health=health
+        )
+        monitor.check_entity_health()
+        assert len(coordinator.data.entity_warnings) == 1
+
+        health.samples = []
+        for i in range(CONSECUTIVE_TO_CLEAR):
+            health.record(False, datetime(2026, 9, 6, 13, 0, i, tzinfo=UTC))
+        assert health.degraded is False
+
+        monitor.check_entity_health()
+
+        assert coordinator.data.entity_warnings == []
+
     def test_no_crash_when_synthetic_slot_health_is_a_plain_mock(self):
         """A coordinator.data built from a bare MagicMock (as in the existing
         TestCheckEntityHealth suite) must not crash or leak Mock truthiness

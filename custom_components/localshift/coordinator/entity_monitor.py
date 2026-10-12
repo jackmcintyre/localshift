@@ -47,6 +47,9 @@ class EntityMonitor:
         self._coordinator = coordinator
         # Issue #1097: warn once per failure streak, not on every 5-minute tick.
         self._tesla_tariff_read_failing = False
+        # Issue #995: the synthetic-slot warning this monitor last appended, so
+        # it can be withdrawn before the next one is added.
+        self._synthetic_slot_warning: str | None = None
 
     def read_all_external_state(self) -> None:
         """Read current state of all monitored external entities."""
@@ -140,6 +143,16 @@ class EntityMonitor:
         if not isinstance(health, SyntheticSlotHealth):
             return
 
+        # Issue #995: withdraw last cycle's warning before deciding on this
+        # cycle's. With a validator the list was rebuilt above and this is a
+        # no-op; without one nothing else clears it, and the warning would
+        # otherwise be appended again on every check.
+        if self._synthetic_slot_warning is not None:
+            data.entity_warnings = [
+                w for w in data.entity_warnings if w != self._synthetic_slot_warning
+            ]
+            self._synthetic_slot_warning = None
+
         # Issue #956 review fix: the pricing entity mappings live in
         # entry.data, never entry.options (get_option reads entry.options
         # and would always return None here) -- get_entity_id is the
@@ -168,6 +181,7 @@ class EntityMonitor:
             f"check {forecast_entity}"
         )
         data.entity_warnings = list(data.entity_warnings) + [warning]
+        self._synthetic_slot_warning = warning
         if data.integration_status == "ok":
             data.integration_status = "degraded"
             data.integration_status_message = warning
