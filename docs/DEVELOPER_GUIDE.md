@@ -49,8 +49,7 @@ custom_components/localshift/
 │   ├── history_store.py     # Forecast history storage
 │   ├── bootstrapper.py      # Forecast initialization
 │   ├── load_deviation.py    # Real-time load deviation detection
-│   ├── solar_events.py      # Mid-day solar re-optimization detection
-│   └── corrections.py       # Cloud bias corrections
+│   └── solar_events.py      # Mid-day solar re-optimization detection
 │
 ├── integration/             # External integrations
 │   ├── controller.py        # Battery controller (Teslemetry)
