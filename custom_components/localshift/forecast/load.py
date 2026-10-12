@@ -8,6 +8,7 @@ from datetime import time
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     DEFAULT_CURRENT_HOUR_INSTANTANEOUS_WEIGHT,
@@ -15,6 +16,7 @@ from ..const import (
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
     LOAD_FORECAST_CEILING_FACTOR,
+    LOAD_FORECAST_CEILING_LOG_QUIET_MIN,
     MIN_AWAY_SAMPLES_PER_HOUR,
     MIN_SAMPLES_PER_AGGREGATE_HOUR,
     MIN_SAMPLES_PER_DAY_HOUR,
@@ -94,6 +96,16 @@ class LoadForecaster:
         # call then behaves exactly as it did before this feature existed.
         self._away_profile: dict[int, float] | None = None
         self._away_profile_source: str = "at_home"
+        # Issue #1115: when (epoch seconds) each hour's forecast was last
+        # clamped by the #826 ceiling, so a clamp that repeats on every call
+        # warns once per episode. In memory only: a restart warns again on
+        # the first clamp.
+        self._ceiling_clamp_last_seen: dict[int, float] = {}
+        # The HA-local date (as a proleptic ordinal) on which each hour last
+        # warned, so a clamp that never goes quiet still warns once on every
+        # day it is present. Keyed by hour of day, like the dict above: at
+        # most 24 entries each.
+        self._ceiling_clamp_warned_on: dict[int, int] = {}
 
     def set_weather_correlation(self, weather_correlation: Any | None) -> None:
         """Set or clear WeatherCorrelation dependency at runtime."""
@@ -380,7 +392,28 @@ class LoadForecaster:
         if peaks:
             ceiling = max(peaks) * LOAD_FORECAST_CEILING_FACTOR
             if ceiling > 0 and final_load_kw > ceiling:
-                _LOGGER.warning(
+                # Issue #1115: an hour that is being clamped is re-estimated
+                # several times a cycle (155 lines in 46 minutes on
+                # 2026-10-11), so only the first clamp of an
+                # episode is a WARNING. The episode is over once the hour has
+                # gone LOAD_FORECAST_CEILING_LOG_QUIET_MIN without a clamp;
+                # until then the repeats are DEBUG. A clamp that never goes
+                # quiet would then warn once and stay silent until a restart,
+                # so the first clamp of each HA-local day also warns.
+                now_utc = dt_util.utcnow()
+                now = now_utc.timestamp()
+                today = dt_util.as_local(now_utc).toordinal()
+                last_seen = self._ceiling_clamp_last_seen.get(slot_hour)
+                self._ceiling_clamp_last_seen[slot_hour] = now
+                repeat = (
+                    last_seen is not None
+                    and now - last_seen < LOAD_FORECAST_CEILING_LOG_QUIET_MIN * 60
+                    and self._ceiling_clamp_warned_on.get(slot_hour) == today
+                )
+                if not repeat:
+                    self._ceiling_clamp_warned_on[slot_hour] = today
+                _LOGGER.log(
+                    logging.DEBUG if repeat else logging.WARNING,
                     "LOAD_FORECAST_CEILING (Issue #826): forecast %.3f kW for hour %d "
                     "exceeds data-driven ceiling %.3f kW; clamping",
                     final_load_kw,
