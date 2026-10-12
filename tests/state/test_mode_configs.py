@@ -77,6 +77,23 @@ class TestCalculateProactiveExportReserve:
         """SOC 0 (unavailable/empty entity) clamps to the floor (Issue #895)."""
         assert calculate_proactive_export_reserve(0.0, 20.0) == 20.0
 
+    def test_never_returns_a_reserve_tesla_resets(self):
+        """Issue #1118: 81-99 is reset to 80 by the firmware, so never ask."""
+        assert calculate_proactive_export_reserve(97.75, 10.0) == 80.0
+        assert calculate_proactive_export_reserve(86.0, 10.0) == 80.0
+        # 85 -> 80 exactly; below that the SOC - 5 leash applies unchanged.
+        assert calculate_proactive_export_reserve(85.0, 10.0) == 80.0
+        assert calculate_proactive_export_reserve(84.0, 10.0) == 79.0
+
+    def test_floor_in_reset_band_clamps_to_80(self):
+        """A floor of 81-99 cannot be held by the hardware either."""
+        assert calculate_proactive_export_reserve(97.0, 88.0) == 80.0
+        assert calculate_proactive_export_reserve(0.0, 88.0) == 80.0
+
+    def test_floor_of_100_is_kept(self):
+        """100 is the one value above 80 Tesla accepts."""
+        assert calculate_proactive_export_reserve(97.0, 100.0) == 100.0
+
     def test_uses_buffer_constant(self):
         """The buffer is PROACTIVE_EXPORT_SOC_BUFFER_PERCENT (5), not a literal."""
         assert calculate_proactive_export_reserve(30.0, 4.0) == (

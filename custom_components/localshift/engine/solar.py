@@ -169,3 +169,32 @@ def get_forecast_accuracy(
         return 1.0
 
     return accuracy_pct / 100.0
+
+
+def forecast_accuracy_measured_as_zero(
+    solar_accuracy_tracker: Any | None,
+) -> bool:
+    """True when the tracker has samples and they measure accuracy at zero.
+
+    Tracker accuracy is ``max(0, 100 - MAPE)``, so a MAPE at or over 100 reports
+    0. ``get_forecast_accuracy`` answers 1.0 for any non-positive figure, which
+    is right for "nothing measured" and wrong for "measured, and it was the
+    worst it can be". This tells the two apart for callers that must not read
+    the worst measurement as full trust (Issue #1103, the negative-FIT
+    recoverability floor). A zero with no samples behind it is not a
+    measurement.
+    """
+    if solar_accuracy_tracker is None:
+        return False
+
+    try:
+        metrics = solar_accuracy_tracker.metrics
+        accuracy_pct = metrics.accuracy
+        sample_count = metrics.sample_count
+    except AttributeError:
+        return False
+
+    try:
+        return sample_count > 0 and accuracy_pct is not None and accuracy_pct <= 0
+    except TypeError:
+        return False

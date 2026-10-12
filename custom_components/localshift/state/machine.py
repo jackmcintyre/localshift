@@ -26,6 +26,8 @@ from ..const import (
     EXPORT_INVERSION_HOLDOFF_MINUTES,
     EXPORT_INVERSION_POWER_KW,
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT,
+    PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT,
+    PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
     STATE_MACHINE_TRANSITION_GRACE_SECONDS,
     TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES,
@@ -129,6 +131,10 @@ class StateMachine:
         self._manual_override_set_at: datetime | None = None
         # Track dynamic reserve for PROACTIVE_EXPORT mode
         self._proactive_export_reserve: float | None = None
+        # Issue #1118: SOC when that reserve was last written (entry or step).
+        # The spike trigger only acts on drain measured from here, so a reserve
+        # the export floor raised is not stepped straight back down.
+        self._proactive_export_reserve_soc: float | None = None
         # Issue #1097: when the battery was first seen charging off the grid
         # during PROACTIVE_EXPORT (export-inversion watchdog).
         self._export_inversion_since: datetime | None = None
@@ -191,6 +197,16 @@ class StateMachine:
         # One-shot suppression for callers that explicitly must not grant a mode
         # change (async_recompute_and_evaluate(invalidate_decision=False)).
         self._suppress_plan_charge_grant: bool = False
+        # Issue #1119: the planner will not START an export on an unconfirmed
+        # price. Amber confirming it is an attribute update, so when the
+        # confirmed price equals the carried one nothing in the price context
+        # moves and no token follows. ``_export_start_owed`` is set when a token
+        # was spent while that deferral was in force; when the deferral lifts
+        # (confirmed, or the grace ran out) ``_export_start_epoch`` advances
+        # once, granting one decision that may only start the export (see
+        # _update_export_start_epoch).
+        self._export_start_owed: bool = False
+        self._export_start_epoch: int = 0
         self._MIN_CORRECTION_INTERVAL = timedelta(
             minutes=STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES
         )
@@ -424,6 +440,65 @@ class StateMachine:
                 data.active_mode.value,
             )
 
+    @staticmethod
+    def _export_start_deferred(data: CoordinatorData) -> bool:
+        """Whether the last plan held slot 0 back from starting an export (#1119).
+
+        Read from the summary the optimizer facade wrote on its last run.
+        """
+        summary = getattr(data, "optimizer_summary", None)
+        slot0_price = summary.get("slot0_price") if isinstance(summary, dict) else None
+        return (
+            isinstance(slot0_price, dict)
+            and slot0_price.get("export_start_deferred") is True
+        )
+
+    def _note_export_start_deferral(self, data: CoordinatorData) -> None:
+        """Record whether THIS evaluation's token was spent under a deferral.
+
+        Called in-lock straight after the facade has run. Only an evaluation
+        that held a token writes the latch: a deferral on a frozen evaluation
+        cost nothing (no decision was available to it), so it owes nothing. A
+        later token spent on a confirmed price clears the latch the same way.
+        """
+        if data.mode_decision_allowed:
+            self._export_start_owed = self._export_start_deferred(data)
+
+    def _update_export_start_epoch(
+        self, data: CoordinatorData, context: str | None
+    ) -> bool:
+        """Advance the export-start epoch when an owed deferral has lifted (#1119).
+
+        The deferral flag read here was written by the PREVIOUS evaluation's
+        facade run — the same one-tick lag as ``debug_plan_mode_pending``.
+
+        Bounded by construction: the epoch advances only to repay a token that
+        was spent under a deferral, the latch is cleared as it does so, and the
+        grant it produces is restricted to starting an export
+        (``mode_decision_export_start_only``). A grant that starts the export
+        cannot re-arm the latch (a running export is never deferred), and one
+        that does not commit anything changes nothing, so no cycle is reachable.
+
+        Returns:
+            True when the epoch advanced on this evaluation.
+
+        """
+        if not self._export_start_owed:
+            return False
+        if context is None or self._export_start_deferred(data):
+            # Prices unavailable (frozen anyway) or still deferred: keep waiting.
+            return False
+        self._export_start_owed = False
+        if data.active_mode == BatteryMode.PROACTIVE_EXPORT:
+            return False
+        self._export_start_epoch += 1
+        _LOGGER.debug(
+            "Export-start epoch %d: the unconfirmed price that deferred an "
+            "export start has been confirmed or outlived its grace",
+            self._export_start_epoch,
+        )
+        return True
+
     def _get_decision_fingerprint(self, data: CoordinatorData) -> str | None:
         """Generate the discrete decision-context fingerprint.
 
@@ -439,6 +514,9 @@ class StateMachine:
         - plan_charge_epoch: the optimizer plan wants to START charging while the
           committed decision is frozen (one-directional; see
           _update_plan_charge_epoch)
+        - export_start_epoch: an export start that was held back on an
+          unconfirmed price is no longer held back (one-directional; see
+          _update_export_start_epoch)
 
         ``dw_active`` and ``soc_floor_breached`` are read from ``data`` *before*
         compute_derived_values refreshes them this tick. The resulting 1-tick
@@ -453,9 +531,9 @@ class StateMachine:
         the falling edge (the disagreement resolving) is deliberately invisible,
         which is what makes the trigger flap-free.
 
-        This method is side-effect-free: it *reads* ``_plan_charge_epoch`` and
-        never updates it (``_apply_decision_token`` calls
-        ``_update_plan_charge_epoch`` first). Tests call it out-of-band to
+        This method is side-effect-free: it *reads* the two epochs and never
+        updates them (``_apply_decision_token`` calls
+        ``_update_plan_charge_epoch`` and ``_update_export_start_epoch`` first). Tests call it out-of-band to
         enumerate distinct contexts; a mutating fingerprint would corrupt them.
 
         Args:
@@ -469,7 +547,7 @@ class StateMachine:
         base = self._get_decision_context(data)
         if base is None:
             return None
-        return f"{base}|{self._plan_charge_epoch}"
+        return f"{base}|{self._plan_charge_epoch}|{self._export_start_epoch}"
 
     def _get_decision_context(self, data: CoordinatorData) -> str | None:
         """The price/spike/DW/floor half of the fingerprint, without the epoch.
@@ -871,14 +949,53 @@ class StateMachine:
         )
         return False
 
-    def _get_debounce_duration(self, desired: BatteryMode) -> timedelta:
+    def _get_debounce_duration(
+        self, desired: BatteryMode, data: CoordinatorData | None = None
+    ) -> timedelta:
         """Get debounce duration for a desired transition."""
         if self._skip_next_debounce:
             self._skip_next_debounce = False
             _LOGGER.info("Skipping debounce (first transition after startup)")
             return timedelta(0)
 
+        if desired == BatteryMode.PROACTIVE_EXPORT and self._spike_export_confirmed(
+            data
+        ):
+            return timedelta(0)
+
         return self.get_debounce_for_transition(self._commanded_mode, desired)
+
+    @staticmethod
+    def _spike_export_confirmed(data: CoordinatorData | None) -> bool:
+        """Whether the plan's export start is a genuine spike on a confirmed price.
+
+        Issue #1120. A price spike lasts one 5-minute interval, and the
+        2-minute export debounce (on top of the #1119 confirmation wait) left
+        about two of those minutes to export in.
+
+        The debounce exists to stop rapid cycling "when forecast oscillates
+        near the export threshold". This exemption cannot bring that back:
+
+        - It is only set for a slot the planner admitted as a spike: a sell
+          price at least four times the horizon's median buy price that also
+          beats the dearest later buy price after round-trip losses
+          (engine/spike_export.py). An export near the ordinary threshold
+          fails that by a wide factor and keeps the full debounce.
+        - It needs Amber's ``estimate`` flag to be False. A price carried over
+          from the previous interval, or one with no flag, keeps the debounce,
+          so a stale $24 cannot start an export in the seconds before the real
+          price lands.
+        - It adds no decisions. ``desired`` only changes on a decision token
+          (once per price change), so this can move an export start earlier
+          but cannot create a transition the debounce would not also have
+          made, unless a second token inside the same two minutes takes the
+          export away again, which needs the confirmed price itself to change.
+
+        Read from the summary the optimizer facade wrote on its last run.
+        """
+        summary = getattr(data, "optimizer_summary", None)
+        spike = summary.get("spike_export") if isinstance(summary, dict) else None
+        return isinstance(spike, dict) and spike.get("skip_debounce") is True
 
     def _handle_debounce_timing(
         self, desired: BatteryMode, now: datetime, debounce: timedelta
@@ -967,6 +1084,7 @@ class StateMachine:
                 # mode_decision_allowed / mode_backstop_allowed still True — leaving
                 # the out-of-lock recompute armed to force a charge.
                 computation_engine.compute_derived_values(data)
+                self._note_export_start_deferral(data)
                 await self._evaluate_core(data, computation_engine)
             finally:
                 # #622 gate replacement (transience guarantee): the decision
@@ -980,6 +1098,7 @@ class StateMachine:
                 # nor force one through the backstop.
                 data.mode_decision_allowed = False
                 data.mode_decision_plan_charge_only = False
+                data.mode_decision_export_start_only = False
                 data.mode_backstop_allowed = False
                 if notify_func is not None:
                     notify_func()
@@ -1009,24 +1128,35 @@ class StateMachine:
         # epoch this grant is based on. The context is passed in so the epoch's
         # per-context budget and the fingerprint agree on what "context" means.
         context = self._get_decision_context(data)
+        plan_epoch_before = self._plan_charge_epoch
         self._update_plan_charge_epoch(data, context)
         self._suppress_plan_charge_grant = False
+        plan_epoch_moved = self._plan_charge_epoch != plan_epoch_before
+        export_epoch_moved = self._update_export_start_epoch(data, context)
 
         fingerprint = (
-            None if context is None else f"{context}|{self._plan_charge_epoch}"
+            None
+            if context is None
+            else f"{context}|{self._plan_charge_epoch}|{self._export_start_epoch}"
         )
         decision_allowed = (
             fingerprint is not None and fingerprint != self._last_evaluated_fingerprint
         )
-        # Same price/spike/DW/floor context as the last grant ⇒ the epoch is the
-        # only thing that moved ⇒ the plan alone granted this.
-        plan_charge_only = decision_allowed and context == self._last_evaluated_base
+        # Same price/spike/DW/floor context as the last grant ⇒ only an epoch
+        # moved ⇒ the grant is restricted to what that epoch exists to start.
+        # Issue #1119: the export-start epoch is attributed separately, so its
+        # grant is not mistaken for a plan-charge one (and vice versa).
+        same_base = decision_allowed and context == self._last_evaluated_base
+        export_start_only = same_base and export_epoch_moved
+        plan_charge_only = same_base and (plan_epoch_moved or not export_epoch_moved)
         if decision_allowed:
             # Issue #510 slice 1 (measurement only): attribute the grant BEFORE
             # _last_evaluated_base is overwritten below — by transition time the
             # "previous" base is already this one, so the comparison must happen
             # here or the tag is unrecoverable.
-            self._last_grant_source = self._classify_grant_source(context)
+            self._last_grant_source = self._classify_grant_source(
+                context, export_start_only and not plan_epoch_moved
+            )
             # Issue #966: a fresh token is a new decision by construction, so
             # whatever attempt failed before it is no longer pending. Cleared
             # only here (never unconditionally) — a non-granting evaluation
@@ -1038,12 +1168,15 @@ class StateMachine:
             self._last_evaluated_fingerprint = fingerprint
             self._last_evaluated_base = context
             _LOGGER.debug(
-                "Decision token granted (fingerprint=%s, plan_charge_only=%s)",
+                "Decision token granted (fingerprint=%s, plan_charge_only=%s, "
+                "export_start_only=%s)",
                 fingerprint,
                 plan_charge_only,
+                export_start_only,
             )
         data.mode_decision_allowed = decision_allowed
         data.mode_decision_plan_charge_only = plan_charge_only
+        data.mode_decision_export_start_only = export_start_only
         # The pre-charge execution backstop is NOT a decision token, but it is
         # confined to the same in-lock window: opening it here (and closing it in
         # the evaluate finally block) guarantees the out-of-lock
@@ -1051,7 +1184,9 @@ class StateMachine:
         # never trip it.
         data.mode_backstop_allowed = True
 
-    def _classify_grant_source(self, context: str | None) -> str:
+    def _classify_grant_source(
+        self, context: str | None, export_start: bool = False
+    ) -> str:
         """Attribute a grant to the fingerprint component that moved (Issue #510).
 
         Observation only — the return value gates nothing. Compares the new
@@ -1065,7 +1200,10 @@ class StateMachine:
         if previous is None or context is None:
             return "unknown"
         if previous == context:
-            return "plan_charge"  # base unchanged ⇒ only the epoch moved
+            # Base unchanged ⇒ only an epoch moved. Issue #1119: a deferred
+            # export start released by the price being confirmed lands tens of
+            # seconds into the interval by design, so it gets its own tag.
+            return "price_confirmed" if export_start else "plan_charge"
         old = previous.split("|")
         new = context.split("|")
         if len(old) != 5 or len(new) != 5:
@@ -1220,7 +1358,7 @@ class StateMachine:
         return True
 
     async def _step_proactive_export_reserve(self, data: CoordinatorData) -> bool:
-        """Re-step the PROACTIVE_EXPORT reserve once SOC has drained to it.
+        """Re-step the PROACTIVE_EXPORT reserve as SOC drains toward it.
 
         Issue #1081: the reserve is written once on entry. When the planner keeps
         selecting export after SOC reaches it, the Powerwall pins at the reserve —
@@ -1242,15 +1380,44 @@ class StateMachine:
         if soc is None or soc <= 0.0:
             return False
 
+        new_reserve = calculate_proactive_export_reserve(soc, floor)
         if tracked < floor:
             # Away started (or its slider rose) while export stayed selected:
             # lift the reserve to the away floor rather than waiting for a
             # mode change (docs/holiday-away/plan.md item 4).
-            new_reserve = calculate_proactive_export_reserve(soc, floor)
-        else:
-            if soc > tracked + PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT:
+            #
+            # Issue #1118: a floor in 81-99 cannot be written, so the reserve
+            # is already as high as Tesla allows; re-sending 80 every tick is
+            # the rewrite loop this issue removes.
+            if new_reserve <= tracked:
                 return False
-            new_reserve = calculate_proactive_export_reserve(soc, floor)
+        else:
+            # Issue #1118: during a price spike the trigger is wider than one
+            # 5-minute SOC sample of drain, so the step lands before the battery
+            # reaches the reserve.
+            #
+            # The wider trigger also needs SOC to have drained since the last
+            # write by the spacing a SOC - 5 reserve implies (5 - 3 = 2 points).
+            # For a reserve written as SOC - 5 that is the same condition. It
+            # differs when the export floor raised the reserve (branch above):
+            # SOC then sits within 3 points of it without having moved, and
+            # stepping down would undo the raise on every floor change. Without
+            # that drain the ordinary trigger applies, as before #1118.
+            trigger = PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT
+            written_at = self._proactive_export_reserve_soc
+            if (
+                data.price_spike
+                and written_at is not None
+                and soc
+                <= written_at
+                - (
+                    PROACTIVE_EXPORT_SOC_BUFFER_PERCENT
+                    - PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT
+                )
+            ):
+                trigger = PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT
+            if soc > tracked + trigger:
+                return False
             if new_reserve >= tracked:
                 return False
 
@@ -1272,6 +1439,7 @@ class StateMachine:
             soc,
         )
         self._proactive_export_reserve = new_reserve
+        self._proactive_export_reserve_soc = soc
         self._last_reserve_step = dt_util.now()
         return True
 
@@ -1281,7 +1449,7 @@ class StateMachine:
         """Handle mode transition with debounce logic."""
         self._clear_stale_debounce_timers(desired)
 
-        debounce = self._get_debounce_duration(desired)
+        debounce = self._get_debounce_duration(desired, data)
         debounce_in_progress = desired in self._mode_desired_since
 
         # #622 gate replacement: the "decide only on context change" gate now
@@ -1470,6 +1638,11 @@ class StateMachine:
                 )
                 if transition_success:
                     self._update_transition_reserves(config)
+                    self._proactive_export_reserve_soc = (
+                        data.soc
+                        if config.proactive_export_reserve is not None
+                        else None
+                    )
                     _LOGGER.info(
                         "%s mode transition completed (reserve=%s)",
                         target.value,
@@ -1705,7 +1878,8 @@ class StateMachine:
         # fire up to once per 5 minutes for the length of a drift episode and
         # carry no analytic signal for the Amber-latency baseline, so they are
         # demoted to DEBUG. Every decision-granted transition (price, spike,
-        # demand_window, soc_floor, plan_charge, debounce, retry, unknown)
+        # demand_window, soc_floor, plan_charge, price_confirmed, debounce,
+        # retry, unknown)
         # stays at INFO.
         level = logging.DEBUG if grant_source == "backstop" else logging.INFO
         _LOGGER.log(

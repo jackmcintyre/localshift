@@ -25,6 +25,7 @@ from .optimizer_runner import (
     _serialize_result,
 )
 from .slots import SlotBuilder
+from .types import PlannerAction
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -306,8 +307,15 @@ class OptimizerFacade:
                 ),
                 solar_absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
                 solar_accuracy_tracker=self._solar_accuracy_tracker,
+                negative_fit_window_open=data.negative_fit_window_open,
             )
             result = self._planner.plan(inputs)
+
+            # Issue #1103: carry the window's open/closed state to the next
+            # cycle. A failed solve says nothing about the window, so it leaves
+            # the carried state alone.
+            if result.success:
+                data.negative_fit_window_open = result.negative_fit_window_open
 
             self._write_optimizer_fields(
                 data,
@@ -336,6 +344,42 @@ class OptimizerFacade:
                 "Inline DP optimizer failed (non-blocking): %s", exc, exc_info=True
             )
             self._mark_mode_debug_fallback(data)
+
+    @staticmethod
+    def _spike_export_summary(
+        result: Any, optimizer_config: Any | None, slot0_price: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Slot 0's spike-export verdict, for the sensor and the state machine.
+
+        Issue #1120. ``rebuy_price`` is what the export was judged against and
+        ``min_sell`` the sell price it had to reach, so a spike export (or a
+        spike that was not exported) can be explained afterwards.
+
+        ``skip_debounce`` tells the state machine this export start is a genuine
+        spike on a CONFIRMED price and need not wait out the 2-minute export
+        debounce. An estimate, or a price with no confirmation flag at all,
+        never sets it. Nor does anything while the rule is switched off
+        (``enabled`` False, ``switch.localshift_spike_discharge_enabled``):
+        the verdict is then never ``admitted``, in either optimisation mode.
+        """
+        verdict = getattr(optimizer_config, "spike_export_now", None)
+        summary: dict[str, Any] = dict(verdict) if isinstance(verdict, dict) else {}
+        admitted = summary.get("admitted") is True
+        decisions = getattr(result, "decisions", None) or []
+        exporting = bool(
+            admitted
+            and decisions
+            and decisions[0].action == PlannerAction.EXPORT_PROACTIVE
+        )
+        summary["enabled"] = bool(
+            getattr(optimizer_config, "spike_export_enabled", True)
+        )
+        summary["admitted"] = admitted
+        summary["exporting"] = exporting
+        summary["skip_debounce"] = bool(
+            exporting and slot0_price.get("sell_estimate") is False
+        )
+        return summary
 
     def _write_optimizer_fields(
         self,
@@ -422,6 +466,18 @@ class OptimizerFacade:
         )
         data.optimizer_summary["precharge_runway_margin_min"] = getattr(
             optimizer_config, "precharge_runway_margin_min", None
+        )
+
+        # Issue #1119: what slot 0 was priced on -- the price, where it came
+        # from, and whether Amber had confirmed it -- so a plan that commits on
+        # a wrong or unconfirmed price is visible on the sensor, not inferred.
+        slot0_price = getattr(slot_metadata, "slot0_price", None)
+        data.optimizer_summary["slot0_price"] = (
+            dict(slot0_price) if isinstance(slot0_price, dict) else {}
+        )
+
+        data.optimizer_summary["spike_export"] = self._spike_export_summary(
+            result, optimizer_config, data.optimizer_summary["slot0_price"]
         )
 
         data.forecast_horizon_hours = slot_metadata.horizon_hours
@@ -607,21 +663,18 @@ class OptimizerFacade:
             data.optimizer_last_apply_status = "ready_to_apply"
             data.optimizer_safety_block_reason = ""
 
-            # A token granted purely by the plan-charge trigger is one-directional in
-            # what committed it, so it must be one-directional in what it commits.
-            # Otherwise a grant raised because the plan wanted to START charging is
-            # spent on whatever slot-0 has drifted to by the time the facade re-plans
-            # — including a discharge. Fall back to frozen: the wanted charge stays
-            # visible on debug_plan_mode_pending and the execution backstop (below)
-            # remains the deterministic path.
-            if (
-                decision_allowed
-                and getattr(data, "mode_decision_plan_charge_only", False)
-                and new_mode not in _CHARGE_MODES
-            ):
+            # A token granted purely by an epoch is one-directional in what
+            # raised it, so it must be one-directional in what it commits.
+            # Otherwise a grant raised because the plan wanted to START charging
+            # (plan-charge), or because a deferred export start was released
+            # (Issue #1119), is spent on whatever slot-0 has drifted to by the
+            # time the facade re-plans — including a discharge. Fall back to
+            # frozen: the wanted mode stays visible on debug_plan_mode_pending
+            # and the execution backstop (below) remains the deterministic path.
+            if decision_allowed and not self._epoch_grant_permits(data, new_mode):
                 _LOGGER.debug(
-                    "Plan-charge grant not spent: fresh plan selected %s, "
-                    "not a charge mode — holding",
+                    "Epoch grant not spent: fresh plan selected %s, which this "
+                    "grant may not commit — holding",
                     battery_mode_str,
                 )
                 decision_allowed = False
@@ -687,6 +740,23 @@ class OptimizerFacade:
                 decision_allowed,
                 mode_source="fallback",
             )
+
+    @staticmethod
+    def _epoch_grant_permits(data: CoordinatorData, new_mode: _BatteryMode) -> bool:
+        """Whether this evaluation's decision token may commit ``new_mode``.
+
+        An ordinary token (price/spike/DW/floor moved) may commit anything. A
+        token granted solely by an epoch may commit only what that epoch exists
+        to start: a charge mode for the plan-charge epoch, PROACTIVE_EXPORT for
+        the export-start epoch (Issue #1119).
+        """
+        plan_charge = getattr(data, "mode_decision_plan_charge_only", False)
+        export_start = getattr(data, "mode_decision_export_start_only", False)
+        if not (plan_charge or export_start):
+            return True
+        if plan_charge and new_mode in _CHARGE_MODES:
+            return True
+        return bool(export_start and new_mode == _BatteryMode.PROACTIVE_EXPORT)
 
     def _release_backstop_hold(self, data: CoordinatorData) -> bool:
         """Return True when a forced BOOST must be released this cycle.
@@ -1306,6 +1376,9 @@ class OptimizerFacade:
                     data, "solcast_analysis_tomorrow", None
                 ),
                 solar_absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
+                # Same carried state as the primary solve, so the comparison is
+                # like for like. The shadow run never writes it back.
+                negative_fit_window_open=data.negative_fit_window_open,
             )
             result = self._planner.plan(inputs)
 

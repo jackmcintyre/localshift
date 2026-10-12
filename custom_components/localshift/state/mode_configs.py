@@ -47,8 +47,20 @@ def calculate_proactive_export_reserve(soc: float, minimum_target_soc: float) ->
     ``PROACTIVE_EXPORT_MIN_RESERVE_PERCENT`` (4) floor is redundant here: for
     any SOC in (minimum_target_soc, minimum_target_soc + 5) it produced a
     reserve below the configured floor the planner never models.
+
+    Issue #1118: the result is a value Tesla will keep. The firmware resets a
+    reserve of 81-99 to 80, so from a full battery the SOC - 5 values (92, 87,
+    81) each bounced and were rewritten, and the health check, expecting the
+    value written rather than the 80 Tesla kept, re-ran the whole transition.
+    Above 85% SOC the reserve is therefore 80 and the leash is slack until SOC
+    comes down to it — which is what the hardware was already doing with the
+    bounced writes.
     """
-    return max(minimum_target_soc, soc - PROACTIVE_EXPORT_SOC_BUFFER_PERCENT)
+    reserve = max(minimum_target_soc, soc - PROACTIVE_EXPORT_SOC_BUFFER_PERCENT)
+    if reserve <= BACKUP_RESERVE_MAX_VALID:
+        return reserve
+    # 100 is the one value above 80 Tesla accepts; only a floor of 100 gets here.
+    return 100.0 if reserve >= 100 else float(BACKUP_RESERVE_MAX_VALID)
 
 
 def resolve_away_reserve_pct(raw: object) -> float:
