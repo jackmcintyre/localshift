@@ -234,9 +234,9 @@ def test_compute_load_forecast_slots_passes_context():
 
     assert len(load_forecaster.calls) == 4
     assert all("day_of_week" in call for call in load_forecaster.calls)
-    assert all("season" in call for call in load_forecaster.calls)
     assert all(call["day_of_week"] == 0 for call in load_forecaster.calls)
-    assert all(call["season"] == "winter" for call in load_forecaster.calls)
+    # #970: season only ever fed the removed context correction.
+    assert all("season" not in call for call in load_forecaster.calls)
 
 
 def test_compute_load_forecast_slots_day_of_week_changes_across_midnight():

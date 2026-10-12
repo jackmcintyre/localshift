@@ -11,6 +11,7 @@ from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
@@ -46,6 +47,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from ..state.machine import StateMachine
     from ..state.reader import StateReader
     from ..utils.costs import CostTracker
+    from ..utils.daily_totals_store import DailyTotalsStore
     from ..utils.validation import EntityValidator
     from .entity_monitor import EntityMonitor
     from .tick_scheduler import TickScheduler
@@ -103,6 +105,10 @@ class LocalShiftCoordinator:
         # Helper modules (initialized in async_start)
         self._state_reader: StateReader | None = None
         self._cost_tracker: CostTracker | None = None
+        # Issue #1102: snapshot of the day's cost/energy totals, and the
+        # shutdown listener that writes it (shutdown does not unload entries).
+        self._daily_totals_store: DailyTotalsStore | None = None
+        self._unsub_homeassistant_stop: CALLBACK_TYPE | None = None
         self._battery_controller: BatteryController | None = None
         self._notification_service: NotificationService | None = None
         self._computation_engine: ComputationEngine | None = None
@@ -270,6 +276,7 @@ class LocalShiftCoordinator:
         from ..state.machine import StateMachine
         from ..state.reader import StateReader
         from ..utils.costs import CostTracker
+        from ..utils.daily_totals_store import DailyTotalsStore
         from ..utils.validation import EntityValidator
 
         self._entity_validator = EntityValidator(self.hass, self.get_entity_id)
@@ -297,6 +304,13 @@ class LocalShiftCoordinator:
             self.hass, self.entry, self._entity_validator, _pricing_provider
         )
         self._cost_tracker = CostTracker(self.hass)
+        # Issue #1102: bring back the day's totals before any timer is
+        # subscribed, so no tick can accumulate ahead of the restore.
+        self._daily_totals_store = DailyTotalsStore(self.hass, self.entry.entry_id)
+        await self._daily_totals_store.async_restore(self.data, self._cost_tracker)
+        self._unsub_homeassistant_stop = self.hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STOP, self._handle_homeassistant_stop
+        )
         self._battery_controller = BatteryController(
             self.hass, self.get_entity_id, get_option_func=self.get_option
         )
@@ -495,6 +509,9 @@ class LocalShiftCoordinator:
         """
         if self._subscription_manager is not None:
             self._subscription_manager.stop()
+        if self._unsub_homeassistant_stop is not None:
+            self._unsub_homeassistant_stop()
+            self._unsub_homeassistant_stop = None
 
         # Issue #508: remove the temporary physical-response listener
         self._remove_battery_power_listener()
@@ -514,6 +531,11 @@ class LocalShiftCoordinator:
 
         Called on shutdown and periodically to prevent data loss.
         """
+        # Issue #1102: the day's cost/energy totals ride the same cadence.
+        # First, because it swallows its own errors and so cannot block the
+        # saves below, while a failure below must not cost the day's totals.
+        await self._save_daily_totals()
+
         if self._decision_telemetry is not None:
             await self._decision_telemetry.async_save_all()
 
@@ -528,6 +550,28 @@ class LocalShiftCoordinator:
         tracker = getattr(self, "solar_accuracy_tracker", None)
         if tracker is not None:
             await tracker.async_save()
+
+    async def _save_daily_totals(self) -> None:
+        """Persist the day's cost and energy totals (Issue #1102).
+
+        A no-op until async_start has created the store and the tracker, so it
+        is safe on a failed-startup teardown.
+        """
+        if self._daily_totals_store is None or self._cost_tracker is None:
+            return
+        await self._daily_totals_store.async_save(self.data, self._cost_tracker)
+
+    async def _handle_homeassistant_stop(self, _event: Event) -> None:
+        """Save the day's totals when Home Assistant shuts down (Issue #1102).
+
+        A shutdown or restart does not unload config entries, so async_stop
+        never runs on that path; without this the snapshot would be up to one
+        save interval old on every restart.
+        """
+        # The listener fires once and removes itself; drop the handle so
+        # async_stop does not try to remove it again.
+        self._unsub_homeassistant_stop = None
+        await self._save_daily_totals()
 
     @callback
     def _handle_learning_save(self, now: datetime) -> None:

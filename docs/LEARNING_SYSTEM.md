@@ -95,6 +95,17 @@ A ten-day offline replay over real captured days, varying only the offsets
   the offsets unconditionally and zero is the identity, so the field stays
   rather than threading a removal through seven call sites.
 
+## Removed afterwards
+
+- **Load-forecast context correction** (`forecast/corrections.py`,
+  `ForecastCorrectionProvider`) was deleted in October 2026 (#970). It was a
+  per day-of-week/hour/season multiplier on the load forecast that outlived
+  the layer only because the telemetry class kept loading and saving its
+  store. Nothing ever recorded an error sample into it and it was never
+  attached to the load forecaster, so the multiplier was always 1.0. Its
+  store file, `.storage/localshift.forecast_corrections.<entry_id>`, is left
+  on disk, the same as the stores of the modules above.
+
 ## Bringing it back
 
 `tests/test_learning_layer_retired.py` fails if a retired module or field

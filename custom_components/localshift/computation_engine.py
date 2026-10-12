@@ -111,6 +111,11 @@ BatteryMode = _BatteryMode
 
 _LOGGER = logging.getLogger(__name__)
 
+# How long after the demand-window start a reading still counts as the *entry*
+# SOC (#1049). Covers a few evaluations of an unavailable SOC entity and a restart
+# that straddles the boundary; anything later is a mid-window reading, not an entry.
+DW_ENTRY_CAPTURE_GRACE = timedelta(minutes=5)
+
 
 @dataclass(frozen=True)
 class _DerivedValuesContext:
@@ -131,6 +136,11 @@ class _DerivedValuesContext:
     before_dw: bool
     after_dw: bool
     target_pct: float
+
+    @property
+    def in_demand_window(self) -> bool:
+        """Clock only: inside the configured window, whatever the block switch says."""
+        return self.dw_start_time <= self.now_t < self.dw_end_time
 
 
 class ComputationEngine:
@@ -179,6 +189,8 @@ class ComputationEngine:
         # (see utils.away.away_state_unknown). Starts not-away after a restart.
         self._away_active_held: bool = False
         self._away_hold_logged: bool = False
+        # Day the "entry SOC not recorded" line was last logged (once per day).
+        self._dw_entry_missed_logged: date | None = None
 
         # Create core engines for DP optimizer pipeline
         self._load_forecaster = LoadForecaster(
@@ -369,18 +381,48 @@ class ComputationEngine:
 
         Captured once per day, on the first evaluation with the window live, and held
         untouched for the rest of the day (later ticks inside the window must not
-        overwrite it with a recovered SOC). A ``None`` SOC at the exact boundary defers
-        rather than recording a null: the next evaluation is ≤1 min away.
+        overwrite it with a recovered SOC).
+
+        Gated on the clock, not on ``data.demand_window_active`` (#1049): that flag
+        also requires the demand-window block switch, which left the record blank
+        on every instance running with the switch off.
+
+        The SOC is a fresh read, not the cached ``data.soc``: the cache is 0.0, not
+        ``None``, while the entity is unavailable (just after a restart), and that
+        0.0 was being recorded as the entry. An unavailable read defers to the next
+        evaluation (≤1 min away) — but only within ``DW_ENTRY_CAPTURE_GRACE`` of the
+        window start. Past that the reading is no longer the entry (a restart
+        mid-window, or an outage that outlasted the grace), so the record stays
+        blank for the day rather than passing a mid-window SOC off as the entry.
 
         Runs BEFORE the manual-override early return — this is telemetry about the
         battery, not about the optimizer, and the miss matters just as much when the
         user has taken manual control.
         """
-        if not data.demand_window_active:
+        if not ctx.in_demand_window:
             return
         if data.dw_entry_actual_date == ctx.today:
             return
-        soc = data.soc
+
+        dw_start_dt = ctx.now_dt.replace(
+            hour=ctx.dw_start_time.hour,
+            minute=ctx.dw_start_time.minute,
+            second=ctx.dw_start_time.second,
+            microsecond=0,
+        )
+        if ctx.now_dt - dw_start_dt >= DW_ENTRY_CAPTURE_GRACE:
+            if self._dw_entry_missed_logged != ctx.today:
+                self._dw_entry_missed_logged = ctx.today
+                _LOGGER.info(
+                    "Demand-window entry SOC not recorded today: no SOC reading "
+                    "within %.0f min of the %s window start (restart or SOC "
+                    "outage across the boundary).",
+                    DW_ENTRY_CAPTURE_GRACE.total_seconds() / 60,
+                    ctx.dw_start_time.strftime("%H:%M"),
+                )
+            return
+
+        soc = self._read_fresh_soc()
         if soc is None:
             return
 
@@ -394,10 +436,12 @@ class ComputationEngine:
         data.dw_entry_actual_date = ctx.today
 
         # Same threshold the execution backstop fires on — one number, not two.
+        # The message states the measurement only. Why the battery arrived low is
+        # not knowable here: the plan may have chosen to enter under target.
         if shortfall > PRECHARGE_BACKSTOP_SHORTFALL_PCT:
             _LOGGER.warning(
-                "DEMAND WINDOW ENTERED UNDER TARGET: %.1f%% against a %.0f%% target "
-                "(%.1f points short) at %s. Pre-charge did not execute.",
+                "DEMAND WINDOW ENTERED UNDER TARGET: entry SOC %.1f%%, target "
+                "%.0f%%, %.1f points short, at %s.",
                 soc,
                 target,
                 shortfall,
@@ -429,11 +473,7 @@ class ComputationEngine:
     ) -> None:
         """---- Step 3: demand_window_active ----"""
         dw_block_enabled = self._get_switch_state("demand_window_block")
-        data.demand_window_active = (
-            dw_block_enabled
-            and ctx.now_t >= ctx.dw_start_time
-            and ctx.now_t < ctx.dw_end_time
-        )
+        data.demand_window_active = dw_block_enabled and ctx.in_demand_window
 
     def _enter_manual_override(self, data: CoordinatorData) -> bool:
         """Handle manual override: set MANUAL mode, clear stale debug fields.

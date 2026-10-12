@@ -37,6 +37,9 @@ RETIRED_MODULES = (
     "engine/counterfactual.py",
     "learning/orchestrator.py",
     "sensors/learning.py",
+    # Removed later (#970): the load-forecast context correction, which was
+    # never fed a sample or attached to the forecaster.
+    "forecast/corrections.py",
 )
 
 # CoordinatorData fields that only ever carried learning output. adaptive_params

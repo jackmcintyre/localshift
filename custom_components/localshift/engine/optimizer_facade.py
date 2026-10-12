@@ -961,14 +961,17 @@ class OptimizerFacade:
             # --- Group 1: the arm's own conditions. Clearing one ends the hold. ---
             gap = self._live_target_gap_pct(data, optimizer_config)
             if gap is None or gap <= PRECHARGE_BACKSTOP_SHORTFALL_PCT:
-                self._runway_holding = False
+                self._end_runway_hold("the gap to target has closed")
                 return None
 
             armed = self._runway_slack_below_margin(optimizer_config)
             if armed is None:
                 # Slack recovered past the band, is uninterpretable, or the margin knob
                 # disabled the arm — all genuine ends to the hold.
-                self._runway_holding = False
+                self._end_runway_hold(
+                    "runway slack is no longer under the release band (recovered, "
+                    "unreadable, or the margin is 0)"
+                )
                 return None
             slack, threshold = armed
 
@@ -993,8 +996,13 @@ class OptimizerFacade:
             if self._price_above_precharge_ceiling(data, optimizer_config):
                 return None
 
+            # #1115: the hold is a held state, so only the cycle that opens it is a
+            # WARNING. The repeats while it holds — about one per 40 s, 200 lines on
+            # 2026-10-11 — drop to DEBUG.
+            opening = not self._runway_holding
             self._runway_holding = True
-            _LOGGER.warning(
+            _LOGGER.log(
+                logging.WARNING if opening else logging.DEBUG,
                 "RUNWAY BACKSTOP: forcing BOOST_CHARGING — soc=%.1f%% target=%.1f%% "
                 "gap=%.1f%% runway slack=%.1f min < %.1f min slot=%d (urgency window "
                 "%d..%d, hard_floor=%s). The #901 pre-charge backstop declined this "
@@ -1017,6 +1025,16 @@ class OptimizerFacade:
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Runway backstop check failed (non-fatal): %s", exc)
             return None
+
+    def _end_runway_hold(self, reason: str) -> None:
+        """Drop the runway arm's latch, logging the end of a hold once (#1115).
+
+        Deliberately without the ``RUNWAY BACKSTOP`` marker: that marker is on the
+        opening line only, so a grep for it counts holds rather than log lines.
+        """
+        if self._runway_holding:
+            _LOGGER.info("Runway backstop hold ended: %s.", reason)
+        self._runway_holding = False
 
     @staticmethod
     def _floor_suppressed_by_solar(optimizer_config: Any) -> bool:

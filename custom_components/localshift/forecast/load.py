@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     DEFAULT_CURRENT_HOUR_INSTANTANEOUS_WEIGHT,
@@ -15,15 +16,13 @@ from ..const import (
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
     LOAD_FORECAST_CEILING_FACTOR,
+    LOAD_FORECAST_CEILING_LOG_QUIET_MIN,
     MIN_AWAY_SAMPLES_PER_HOUR,
     MIN_SAMPLES_PER_AGGREGATE_HOUR,
     MIN_SAMPLES_PER_DAY_HOUR,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from .corrections import ForecastCorrectionProvider
 
 
 @dataclass
@@ -83,9 +82,10 @@ class LoadForecaster:
         self.entry = entry
         self._weather_correlation = weather_correlation
         self._adaptive_params = None  # Issue #170 Phase 2: Adaptive parameters
-        self._forecast_corrections: ForecastCorrectionProvider | None = None
         # True if ≥1 slot was weather-adjusted in the most recent forecast run;
-        # reset every run at pipeline.py:53, published at pipeline.py:77-79.
+        # ForecastPipeline.compute_load_forecast_slots resets it at the start of
+        # each run (reset_weather_adjustment_applied) and publishes it at the end
+        # as data.weather_adjustment_applied (get_weather_adjustment_applied).
         self._weather_adjustment_applied = False
         # Issue #679: per-day-of-week load profiles, injected via
         # set_daily_profiles(). None means "not wired up" — every call then
@@ -96,6 +96,16 @@ class LoadForecaster:
         # call then behaves exactly as it did before this feature existed.
         self._away_profile: dict[int, float] | None = None
         self._away_profile_source: str = "at_home"
+        # Issue #1115: when (epoch seconds) each hour's forecast was last
+        # clamped by the #826 ceiling, so a clamp that repeats on every call
+        # warns once per episode. In memory only: a restart warns again on
+        # the first clamp.
+        self._ceiling_clamp_last_seen: dict[int, float] = {}
+        # The HA-local date (as a proleptic ordinal) on which each hour last
+        # warned, so a clamp that never goes quiet still warns once on every
+        # day it is present. Keyed by hour of day, like the dict above: at
+        # most 24 entries each.
+        self._ceiling_clamp_warned_on: dict[int, int] = {}
 
     def set_weather_correlation(self, weather_correlation: Any | None) -> None:
         """Set or clear WeatherCorrelation dependency at runtime."""
@@ -110,11 +120,6 @@ class LoadForecaster:
 
         """
         self._adaptive_params = adaptive_params
-
-    def set_forecast_corrections(
-        self, provider: ForecastCorrectionProvider | None
-    ) -> None:
-        self._forecast_corrections = provider
 
     def set_daily_profiles(self, profiles: LoadProfiles | None) -> None:
         """Inject per-day-of-week load profiles (Issue #679), or clear with None.
@@ -285,7 +290,6 @@ class LoadForecaster:
         temperature: float | None = None,
         hours_ahead: float | None = None,
         day_of_week: int | None = None,
-        season: str | None = None,
     ) -> tuple[float, str]:
         """Estimate hourly household consumption with exponential decay weighting.
 
@@ -359,20 +363,15 @@ class LoadForecaster:
             # weather slope was learned from at-home hours, so it mostly models
             # the occupants' AC; on a 30°C day it would roughly triple the
             # empty-house forecast and buy grid pre-charge for load that won't
-            # happen (#1089).
+            # happen (#1089). The consumption bias is skipped for the same
+            # reason: it too was learned at home (#1096).
             adjusted_load_kw, adjusted_source = base_load_kw, base_source
+            final_load_kw = adjusted_load_kw
         else:
             adjusted_load_kw, adjusted_source = self._apply_weather_correlation(
                 base_load_kw, base_source, slot_hour, temperature
             )
-        final_load_kw = self._apply_consumption_bias(adjusted_load_kw, slot_hour)
-        if day_of_week is not None and season is not None:
-            final_load_kw = self._apply_context_correction(
-                final_load_kw,
-                day_of_week,
-                slot_hour,
-                season,
-            )
+            final_load_kw = self._apply_consumption_bias(adjusted_load_kw, slot_hour)
         # Issue #826 ceiling: derived from the broadest profile available, not
         # from the resolved day bucket alone. Taking the max across the
         # resolved profile AND the caller-supplied combined profile means a
@@ -393,7 +392,28 @@ class LoadForecaster:
         if peaks:
             ceiling = max(peaks) * LOAD_FORECAST_CEILING_FACTOR
             if ceiling > 0 and final_load_kw > ceiling:
-                _LOGGER.warning(
+                # Issue #1115: an hour that is being clamped is re-estimated
+                # several times a cycle (155 lines in 46 minutes on
+                # 2026-10-11), so only the first clamp of an
+                # episode is a WARNING. The episode is over once the hour has
+                # gone LOAD_FORECAST_CEILING_LOG_QUIET_MIN without a clamp;
+                # until then the repeats are DEBUG. A clamp that never goes
+                # quiet would then warn once and stay silent until a restart,
+                # so the first clamp of each HA-local day also warns.
+                now_utc = dt_util.utcnow()
+                now = now_utc.timestamp()
+                today = dt_util.as_local(now_utc).toordinal()
+                last_seen = self._ceiling_clamp_last_seen.get(slot_hour)
+                self._ceiling_clamp_last_seen[slot_hour] = now
+                repeat = (
+                    last_seen is not None
+                    and now - last_seen < LOAD_FORECAST_CEILING_LOG_QUIET_MIN * 60
+                    and self._ceiling_clamp_warned_on.get(slot_hour) == today
+                )
+                if not repeat:
+                    self._ceiling_clamp_warned_on[slot_hour] = today
+                _LOGGER.log(
+                    logging.DEBUG if repeat else logging.WARNING,
                     "LOAD_FORECAST_CEILING (Issue #826): forecast %.3f kW for hour %d "
                     "exceeds data-driven ceiling %.3f kW; clamping",
                     final_load_kw,
@@ -665,33 +685,3 @@ class LoadForecaster:
             adjusted,
         )
         return adjusted
-
-    def _apply_context_correction(
-        self,
-        load_kw: float,
-        day_of_week: int,
-        hour_of_day: int,
-        season: str,
-    ) -> float:
-        if self._forecast_corrections is None:
-            return load_kw
-
-        factor = self._forecast_corrections.get_correction_factor(
-            day_of_week,
-            hour_of_day,
-            season,
-        )
-        if factor == 1.0:
-            return load_kw
-
-        corrected = load_kw * factor
-        _LOGGER.debug(
-            "Context correction: day=%d hour=%d season=%s factor=%.3f (%.2f -> %.2f kW)",
-            day_of_week,
-            hour_of_day,
-            season,
-            factor,
-            load_kw,
-            corrected,
-        )
-        return max(0.0, corrected)
