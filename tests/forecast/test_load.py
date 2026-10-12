@@ -13,7 +13,6 @@ from custom_components.localshift.const import (
     MIN_SAMPLES_PER_AGGREGATE_HOUR,
     MIN_SAMPLES_PER_DAY_HOUR,
 )
-from custom_components.localshift.forecast.corrections import ForecastCorrectionProvider
 from custom_components.localshift.forecast.load import (
     AwayProfiles,
     LoadForecaster,
@@ -428,82 +427,6 @@ class TestLoadForecasterExponentialDecay:
         assert source == "live_load_fallback"
         assert kw == 0.0
         assert "NO_LOAD_DATA" in caplog.text
-
-    def test_context_correction_applies_when_context_provided(self):
-        forecaster = _create_load_forecaster()
-        corrections = ForecastCorrectionProvider(min_samples=1)
-        corrections.record_error(2.0, 1.0, 1, 11, "summer")
-        forecaster.set_forecast_corrections(corrections)
-
-        kw, source = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw={11: 0.6},
-            slot_hour=11,
-            current_hour=11,
-            current_load_kw=1.0,
-            recent_load_kw=1.0,
-            day_of_week=1,
-            season="summer",
-        )
-
-        assert source == "blended_live"
-        assert kw == 1.5
-
-    def test_context_correction_runs_after_global_bias(self):
-        forecaster = _create_load_forecaster()
-        adaptive = MagicMock()
-        adaptive.get.return_value = 0.2
-        forecaster.set_adaptive_params(adaptive)
-
-        corrections = ForecastCorrectionProvider(min_samples=1)
-        corrections.record_error(2.0, 1.0, 2, 11, "winter")
-        forecaster.set_forecast_corrections(corrections)
-
-        kw, _ = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw={11: 0.6},
-            slot_hour=11,
-            current_hour=11,
-            current_load_kw=1.0,
-            recent_load_kw=1.0,
-            day_of_week=2,
-            season="winter",
-        )
-
-        assert kw == 1.8
-
-    def test_context_correction_ignored_without_context_parameters(self):
-        forecaster = _create_load_forecaster()
-        corrections = ForecastCorrectionProvider(min_samples=1)
-        corrections.record_error(2.0, 1.0, 4, 11, "spring")
-        forecaster.set_forecast_corrections(corrections)
-
-        kw, source = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw={11: 0.6},
-            slot_hour=11,
-            current_hour=11,
-            current_load_kw=1.0,
-            recent_load_kw=1.0,
-        )
-
-        assert source == "blended_live"
-        assert kw == 1.0
-
-    def test_context_correction_neutral_factor_returns_original_load(self):
-        forecaster = _create_load_forecaster()
-        corrections = ForecastCorrectionProvider(min_samples=1)
-        corrections.record_error(1.0, 1.0, 6, 11, "autumn")
-        forecaster.set_forecast_corrections(corrections)
-
-        kw, _ = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw={11: 0.6},
-            slot_hour=11,
-            current_hour=11,
-            current_load_kw=1.0,
-            recent_load_kw=1.0,
-            day_of_week=6,
-            season="autumn",
-        )
-
-        assert kw == 1.0
 
     def test_parse_time_option_valid_and_invalid(self):
         entry = _create_mock_entry()
@@ -1214,36 +1137,6 @@ class TestPerDayOfWeekProfiles:
             abs=0.001,
         )
 
-    def test_context_correction_still_applies_after_profile_resolution(self):
-        """Ordering is unchanged: profile -> weather -> bias -> context correction."""
-        forecaster = _create_load_forecaster()
-        forecaster.set_daily_profiles(
-            self._profiles(
-                daily_avg={1: {11: 1.0}},
-                daily_counts={1: {11: MIN_SAMPLES_PER_DAY_HOUR}},
-            )
-        )
-        corrections = ForecastCorrectionProvider(min_samples=1)
-        corrections.record_error(2.0, 1.0, 1, 11, "summer")
-        forecaster.set_forecast_corrections(corrections)
-
-        kw, source = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw=_full_profile(0.5),
-            slot_hour=11,
-            current_hour=11,
-            current_load_kw=0.0,
-            recent_load_kw=0.0,
-            day_of_week=1,
-            season="summer",
-        )
-
-        assert source == "profile_hour:day_1"
-        # actual/forecast ratio is 2.0/1.0=2.0, clamped to the existing
-        # CORRECTION_CLAMP_MAX (1.5) by ForecastCorrectionProvider -- the
-        # clamp is pre-existing, unrelated-to-#679 behaviour this test must
-        # not silently bypass.
-        assert kw == 1.5
-
     def test_profiles_with_non_numeric_entry_are_ignored(self):
         """A malformed injected profile must not raise; the rung is skipped."""
         forecaster = _create_load_forecaster()
@@ -1598,6 +1491,37 @@ class TestAwayModeProfile:
         )
         weather.predict_load.assert_called_once()
         assert source == "weather_heating"
+
+    def test_consumption_bias_skipped_while_away(self, mock_adaptive_params):
+        """L8b (#1096): no consumption bias on the away profile either. Like
+        the weather slope, the bias was learned at home, so it must not shift
+        the empty-house forecast."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_adaptive_params(mock_adaptive_params)
+        forecaster.set_away_profiles(self._away_profiles(floor_kw=0.35))
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=11,
+            current_hour=None,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+        )
+
+        assert source == "profile_hour:away_floor"
+        assert kw == 0.35
+
+        # Clearing away brings the bias straight back.
+        forecaster.set_away_profiles(None)
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(2.0),
+            slot_hour=11,
+            current_hour=None,
+            current_load_kw=0.0,
+            recent_load_kw=0.0,
+        )
+        assert source == "profile_hour"
+        assert kw == pytest.approx(2.1)
 
     def test_switches_back_after_clearing(self):
         """L9: set_away_profiles(None) after an away profile restores at-home."""

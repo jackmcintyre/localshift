@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 
@@ -21,9 +21,6 @@ from ..const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from .corrections import ForecastCorrectionProvider
 
 
 @dataclass
@@ -83,9 +80,10 @@ class LoadForecaster:
         self.entry = entry
         self._weather_correlation = weather_correlation
         self._adaptive_params = None  # Issue #170 Phase 2: Adaptive parameters
-        self._forecast_corrections: ForecastCorrectionProvider | None = None
         # True if ≥1 slot was weather-adjusted in the most recent forecast run;
-        # reset every run at pipeline.py:53, published at pipeline.py:77-79.
+        # ForecastPipeline.compute_load_forecast_slots resets it at the start of
+        # each run (reset_weather_adjustment_applied) and publishes it at the end
+        # as data.weather_adjustment_applied (get_weather_adjustment_applied).
         self._weather_adjustment_applied = False
         # Issue #679: per-day-of-week load profiles, injected via
         # set_daily_profiles(). None means "not wired up" — every call then
@@ -110,11 +108,6 @@ class LoadForecaster:
 
         """
         self._adaptive_params = adaptive_params
-
-    def set_forecast_corrections(
-        self, provider: ForecastCorrectionProvider | None
-    ) -> None:
-        self._forecast_corrections = provider
 
     def set_daily_profiles(self, profiles: LoadProfiles | None) -> None:
         """Inject per-day-of-week load profiles (Issue #679), or clear with None.
@@ -285,7 +278,6 @@ class LoadForecaster:
         temperature: float | None = None,
         hours_ahead: float | None = None,
         day_of_week: int | None = None,
-        season: str | None = None,
     ) -> tuple[float, str]:
         """Estimate hourly household consumption with exponential decay weighting.
 
@@ -359,20 +351,15 @@ class LoadForecaster:
             # weather slope was learned from at-home hours, so it mostly models
             # the occupants' AC; on a 30°C day it would roughly triple the
             # empty-house forecast and buy grid pre-charge for load that won't
-            # happen (#1089).
+            # happen (#1089). The consumption bias is skipped for the same
+            # reason: it too was learned at home (#1096).
             adjusted_load_kw, adjusted_source = base_load_kw, base_source
+            final_load_kw = adjusted_load_kw
         else:
             adjusted_load_kw, adjusted_source = self._apply_weather_correlation(
                 base_load_kw, base_source, slot_hour, temperature
             )
-        final_load_kw = self._apply_consumption_bias(adjusted_load_kw, slot_hour)
-        if day_of_week is not None and season is not None:
-            final_load_kw = self._apply_context_correction(
-                final_load_kw,
-                day_of_week,
-                slot_hour,
-                season,
-            )
+            final_load_kw = self._apply_consumption_bias(adjusted_load_kw, slot_hour)
         # Issue #826 ceiling: derived from the broadest profile available, not
         # from the resolved day bucket alone. Taking the max across the
         # resolved profile AND the caller-supplied combined profile means a
@@ -665,33 +652,3 @@ class LoadForecaster:
             adjusted,
         )
         return adjusted
-
-    def _apply_context_correction(
-        self,
-        load_kw: float,
-        day_of_week: int,
-        hour_of_day: int,
-        season: str,
-    ) -> float:
-        if self._forecast_corrections is None:
-            return load_kw
-
-        factor = self._forecast_corrections.get_correction_factor(
-            day_of_week,
-            hour_of_day,
-            season,
-        )
-        if factor == 1.0:
-            return load_kw
-
-        corrected = load_kw * factor
-        _LOGGER.debug(
-            "Context correction: day=%d hour=%d season=%s factor=%.3f (%.2f -> %.2f kW)",
-            day_of_week,
-            hour_of_day,
-            season,
-            factor,
-            load_kw,
-            corrected,
-        )
-        return max(0.0, corrected)
