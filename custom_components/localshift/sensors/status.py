@@ -274,6 +274,11 @@ class DecisionLagSensor(LocalShiftSensorBase):
     _attr_native_unit_of_measurement = "s"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    # Issue #945: the two 20-entry rings are several KB together and
+    # boundary_lag_history changes on corrections, re-probes and retries, so
+    # recording them writes a new state_attributes row each time. They stay on
+    # the live state; only the recorder skips them (as Entity Health does).
+    _unrecorded_attributes = frozenset({"history", "boundary_lag_history"})
 
     def _update_from_coordinator(self) -> None:
         d = self.coordinator.data

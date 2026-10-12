@@ -332,6 +332,33 @@ class TestAutomationReadySensor:
 
 
 class TestDecisionLagSensor:
+    def test_history_rings_are_unrecorded(self):
+        # Issue #945: both rings are exposed live but kept out of the recorder.
+        assert DecisionLagSensor._unrecorded_attributes == frozenset({
+            "history",
+            "boundary_lag_history",
+        })
+
+    def test_unrecorded_names_are_real_attributes(self):
+        # A renamed attribute would silently start being recorded again.
+        sensor = _sensor(
+            DecisionLagSensor,
+            decision_lag_seconds=1.0,
+            physical_response_lag_seconds=None,
+            physical_response_watch=None,
+            physical_response_timed_out=False,
+            decision_lag_history=[],
+            decision_timestamp=None,
+            command_completion_timestamp=None,
+            boundary_lag_seconds=None,
+            boundary_lag_history={},
+            anticipated_transitions_today=0,
+            anticipation_corrections_today=0,
+        )
+        assert DecisionLagSensor._unrecorded_attributes <= set(
+            sensor.extra_state_attributes
+        )
+
     def test_update_with_value(self):
         sensor = _sensor(
             DecisionLagSensor,
