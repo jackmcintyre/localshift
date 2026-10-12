@@ -852,6 +852,22 @@ class PlannedSlotDecision:
 # -----------------------------------------------------------------------------
 
 
+# Why the next-window tail (issue #1033) was or was not re-planned. Published as
+# ``OptimizerResult.next_window_tail_status``; every value but ``applied`` means
+# the plan is the main solve's, unchanged.
+TAIL_APPLIED = "applied"
+TAIL_DISABLED = "disabled"  # OptimizerConfig.next_window_tail_enabled is False
+TAIL_UNDER_TARGET_MODE = "under_target_mode"  # allow_dw_entry_under_target
+TAIL_MAIN_UNSUCCESSFUL = "main_unsuccessful"  # the main solve produced no plan
+TAIL_NO_GAP = "no_gap"  # no gap supplied: feed ends inside a window, or unknown
+TAIL_NO_TAIL_SLOTS = "no_tail_slots"  # nothing after the handled window
+TAIL_WHOLE_PLAN_SKIPPED = "whole_plan_skipped"  # tail would include slot 0
+TAIL_GAP_TOO_LONG = "gap_too_long"  # the gap alone can refill the battery
+TAIL_AWAY_RESERVE_COVERS = "away_reserve_covers"  # reserve above the requirement
+TAIL_SOLVE_UNSUCCESSFUL = "solve_unsuccessful"  # the tail solve produced no plan
+TAIL_FAILED = "failed"  # the tail solve raised; logged once a day at WARNING
+
+
 @dataclass
 class OptimizerResult:
     """Full output from a DPPlanner.plan() call."""
@@ -948,6 +964,16 @@ class OptimizerResult:
 
     next_window_entry_soc_pct: float | None = None
     """SOC (%) the re-planned tail reaches at the end of the horizon."""
+
+    next_window_tail_status: str | None = None
+    """Why the tail was or was not re-planned: one of the ``TAIL_*`` values
+    above. Set on every plan that reaches the tail step, so a tail that never
+    runs can be told from one with nothing to do. None only when the planner
+    raised before it."""
+
+    next_window_gap_min: float | None = None
+    """The gap the planner was given: minutes from the end of the last slot to
+    the next demand-window start. None when none was supplied or usable."""
 
     # Negative-FIT avoidance materiality (Issue #1103)
     negative_fit_spill_cost: float | None = None

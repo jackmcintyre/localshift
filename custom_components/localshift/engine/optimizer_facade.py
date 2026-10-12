@@ -308,9 +308,11 @@ class OptimizerFacade:
                 solar_absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
                 solar_accuracy_tracker=self._solar_accuracy_tracker,
                 negative_fit_window_open=data.negative_fit_window_open,
-                next_demand_window_gap_min=getattr(
-                    slot_metadata, "next_demand_window_gap_min", None
-                ),
+                # Direct attribute access, not getattr: a renamed field or an
+                # injected slot builder returning other metadata must fail
+                # loudly, not switch the next-window tail off with every test
+                # still green (issue #1033; the #959 shape).
+                next_demand_window_gap_min=slot_metadata.next_demand_window_gap_min,
             )
             result = self._planner.plan(inputs)
 
@@ -512,9 +514,21 @@ class OptimizerFacade:
         """
         try:
             decisions = getattr(result, "decisions", None) or []
+            # Issue #1033: decisions from the tail start on are planned for the
+            # window after the horizon. dw_entry_soc / shortfall on this line
+            # describe the window before it, so the charge counts must too, or
+            # the line reports charge slots that do nothing for the shortfall
+            # beside them. The tail's are counted separately at the end.
+            tail_start = getattr(result, "next_window_tail_start_idx", None)
+            if not isinstance(tail_start, int):
+                tail_start = len(decisions)
             charge_decisions = [
-                d for d in decisions if getattr(d, "grid_charge", False)
+                d for d in decisions[:tail_start] if getattr(d, "grid_charge", False)
             ]
+            tail_charge_slots = sum(
+                1 for d in decisions[tail_start:] if getattr(d, "grid_charge", False)
+            )
+            tail_status = getattr(result, "next_window_tail_status", None)
             first_charge = charge_decisions[0] if charge_decisions else None
             target_soc = getattr(optimizer_config, "demand_window_target_soc_pct", None)
             dw_entry = getattr(result, "dw_entry_soc_pct", None)
@@ -523,7 +537,8 @@ class OptimizerFacade:
             _LOGGER.info(
                 "Pre-charge decision: initial_soc=%.1f%% target=%s dw_entry_soc=%s "
                 "peak_soc=%s shortfall=%s dw_active=%s charge_slots=%d "
-                "first_charge=%s dw_entry_actual=%s backstop=%s",
+                "first_charge=%s dw_entry_actual=%s backstop=%s "
+                "next_window_tail=%s tail_charge_slots=%d",
                 initial_soc,
                 f"{target_soc:.0f}%" if target_soc is not None else "n/a",
                 f"{dw_entry:.1f}%" if dw_entry is not None else "n/a",
@@ -534,6 +549,8 @@ class OptimizerFacade:
                 getattr(first_charge, "timestamp_iso", None),
                 self._format_dw_entry_actual(data),
                 getattr(data, "optimizer_precharge_backstop_active", False),
+                tail_status if isinstance(tail_status, str) else "n/a",
+                tail_charge_slots,
             )
             self._warn_soc_divergence(data, initial_soc, dw_entry, target_soc)
         except Exception as exc:  # noqa: BLE001
@@ -1383,9 +1400,7 @@ class OptimizerFacade:
                 # like for like. The shadow run never writes it back.
                 negative_fit_window_open=data.negative_fit_window_open,
                 # From the shadow build: its feed can end at a different time.
-                next_demand_window_gap_min=getattr(
-                    shadow_metadata, "next_demand_window_gap_min", None
-                ),
+                next_demand_window_gap_min=shadow_metadata.next_demand_window_gap_min,
             )
             result = self._planner.plan(inputs)
 

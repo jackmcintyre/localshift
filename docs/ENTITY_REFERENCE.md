@@ -942,7 +942,19 @@ Attributes:
 **Attributes (new):**
 - `peak_soc_pct` - Maximum SOC projected in the plan
 - `dw_entry_soc_pct` - SOC at demand window entry (null if no DW)
-- `next_window_tail_start_idx` - Index of the first plan slot that was planned for the demand window opening after the horizon ends (Issue #1033). Null when the tail was not re-planned; `terminal_shortfall_pct` and `dw_entry_soc_pct` always describe the window before it
+- `next_window_tail_start_idx` - Index of the first plan slot that was planned for the demand window opening after the horizon ends (Issue #1033). Always 1 or later: slot 0 is never the tail's. Null when the tail was not re-planned (`next_window_tail_status` says why); `terminal_shortfall_pct` and `dw_entry_soc_pct` always describe the window before it
+- `next_window_tail_status` - Why the plan tail was or was not re-planned for the next demand window (Issue #1033). Set on every successful plan, so a tail that never runs can be told from one with nothing to do. Every value except `applied` means the plan is the main solve's, unchanged:
+  - `applied` - the tail from `next_window_tail_start_idx` on was re-planned
+  - `gap_too_long` - the next window is far enough past the feed that normal-rate charging in the gap can refill the battery from the floor (about five hours). The usual value outside the afternoon
+  - `no_gap` - no gap was measured: the feed ends inside a demand window (the usual value from about 15:30, once tomorrow's entry slot is in the feed), or there were no slots
+  - `no_tail_slots` - nothing to re-plan: the window the main solve handled runs to the end of the feed, or a later window is already inside it
+  - `whole_plan_skipped` - no demand window in view and the plan does not start inside one, so the tail would be the whole plan including slot 0. Refused, so the tail can never change the executed command. Needs a truncated or stale price feed; if this persists, look at the feed
+  - `under_target_mode` - `allow_dw_entry_under_target` is on; the tail is not planned in that mode
+  - `away_reserve_covers` - the away reserve already holds the battery above what the next window needs
+  - `disabled` - `OptimizerConfig.next_window_tail_enabled` is False (a code default, not an entity)
+  - `main_unsuccessful` / `solve_unsuccessful` - the main solve, or the tail solve, returned no usable plan
+  - `failed` - the tail solve raised. The main plan is kept; logged with a traceback at WARNING once a day (`Next-window tail failed`) and at DEBUG for repeats
+- `next_window_gap_min` - Minutes from the end of the last plan slot to the next demand-window start, as given to the planner. Null when none was measured (see `no_gap`)
 - `next_window_required_soc_pct` - SOC the tail has to hold at the end of the horizon: the target less what normal-rate charging can add before the window opens
 - `next_window_entry_soc_pct` - SOC the re-planned tail reaches at the end of the horizon
 - `forecast_accuracy` - Current forecast accuracy (0-1)

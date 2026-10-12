@@ -565,6 +565,10 @@ class TestOptimizerRun:
             optimizer_decisions = None
 
         class MockMeta:
+            # _run reads this off the metadata directly (issue #1033), so a
+            # stand-in without it fails loudly rather than disabling the tail.
+            next_demand_window_gap_min = None
+
             @staticmethod
             def to_parity_dict():
                 return {"completeness_pct": 100.0}
