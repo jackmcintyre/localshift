@@ -9,18 +9,35 @@ planned a second time against that window (``DPPlanner._plan_next_window_tail``)
 Each captured instant runs twice through
 ``ComputationEngine.compute_derived_values`` on byte-identical inputs:
 
-  before   the tail re-plan switched off (main)
+  before   this branch with the tail re-plan switched off
   after    this branch
+
+Both arms are this branch. ``before`` is NOT the code on main: it differs from
+``after`` only in ``DPPlanner._plan_next_window_tail`` being a no-op, so the
+comparison isolates the tail and says nothing about any other difference
+between this branch and main.
 
 Instants come from two places:
 
   captured  simulations/replay-1120 (six instants a day, 2026-10-02 to 10-11)
             and simulations/replay-1119 (2026-10-12 afternoon), as recorded.
-  spliced   a 14:35 instant per day, the pre-window case no capture covers. The
-            feed is the 12:30 capture's entries from 14:30 on, continued by the
-            same day's 15:05 capture where the first runs out, cut at 14:00 the
-            next day (the feed carries 48 half-hours from the current one). SOC
-            and load are the 15:05 capture's. Real prices, assembled instant.
+  spliced   one more instant per day, half an hour before the afternoon
+            capture, the pre-window case no capture covers. The feed is the
+            12:30-stamped capture's entries from 14:30 (stamp time) on,
+            continued by the same day's 15:05-stamped capture where the first
+            runs out, cut 24 hours later (the feed carries 48 half-hours from
+            the current one). SOC and load are the later capture's. Real
+            prices, assembled instant.
+
+File stamps are UTC+11 throughout, but daylight saving only started on
+2026-10-04. Instants are therefore labelled with their Australia/Sydney local
+time, which is what the demand window runs on: the files stamped 15:05 on 10-02
+and 10-03 are 14:05 local, and the instant spliced at stamp 14:35 on those two
+days is 13:35 local.
+
+The run checks its own headline claims and exits non-zero if any fails: slot 0
+and the commanded mode never change, no decision before the tail start
+changes, and an instant whose tail was not applied is identical in both arms.
 
 Solar is measured, not forecast (see export_replay_days.py), and a capture has
 none for the following day. Tomorrow's solar is therefore the next day's
@@ -31,8 +48,10 @@ next-day capture tomorrow's solar is zero.
 Usage
 -----
   uv run scripts/replay_next_window_tail.py
-  uv run scripts/replay_next_window_tail.py --solar-scale 0.25 --json out.json
+  uv run scripts/replay_next_window_tail.py --solar-scale 1.0 0.25 --json out.json
   uv run scripts/replay_next_window_tail.py --only 15:05 --detail
+
+``--only`` matches the file stamp, not the local time.
 """
 
 from __future__ import annotations
@@ -45,6 +64,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -77,11 +97,23 @@ DW_START = time(15, 0)
 DW_END = time(21, 0)
 OVERNIGHT_END = time(6, 0)
 CHARGE_ACTIONS = ("charge_grid_normal", "charge_grid_boost")
+LOCAL_TZ = ZoneInfo("Australia/Sydney")
 
 
 def _no_tail(self: DPPlanner, inputs: Any, main: Any) -> Any:
-    """The ``before`` arm: the main solve's plan, as on main."""
+    """The ``before`` arm: this branch's main solve with no tail re-plan."""
     return main
+
+
+def _local_label(scenario: dict[str, Any], spliced: bool = False) -> str:
+    """The instant in Australia/Sydney local time, e.g. '2026-10-02 14:05'.
+
+    The file stamps are UTC+11 on every day, including the two before daylight
+    saving started, so the stamp is an hour ahead of the clock the demand
+    window runs on for those days.
+    """
+    when = datetime.fromisoformat(scenario["input"]["test_time"]).astimezone(LOCAL_TZ)
+    return f"{when:%Y-%m-%d %H:%M}" + (" spliced" if spliced else "")
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -105,7 +137,14 @@ def _tomorrow_solar(path: Path, scale: float) -> list[dict[str, Any]]:
 
 
 def _spliced_1435(day: str, directory: Path) -> dict[str, Any] | None:
-    """A 14:35 instant assembled from the day's 12:30 and 15:05 captures."""
+    """An instant at stamp 14:35 from the day's 12:30 and 15:05 stamped captures.
+
+    Stamp time, not local: 14:35+11:00 is 14:35 local from 2026-10-04 and 13:35
+    local on the two days before it. On those days the afternoon capture is
+    14:05 local, so the spliced instant is still the half hour before it, and
+    its feed ends half an hour earlier (a gap of 90 minutes against the
+    capture's 60 on 10-02).
+    """
     early = directory / f"{day}T123040.json"
     late = directory / f"{day}T150540.json"
     if not early.exists() or not late.exists():
@@ -198,6 +237,7 @@ def run(scenario: dict[str, Any], tail: bool) -> dict[str, Any]:
         "net_cost": (data.optimizer_result or {}).get("projected_net_cost"),
         "solve_s": solve_times[-1],
         "gap_min": captured["inputs"].next_demand_window_gap_min,
+        "status": result.next_window_tail_status,
         "tail_start": result.next_window_tail_start_idx,
         "required": result.next_window_required_soc_pct,
         "active_mode": str(getattr(data, "active_mode", "")),
@@ -245,7 +285,9 @@ def compare(label: str, scenario: dict[str, Any]) -> dict[str, Any]:
         "instant": label,
         "slots": len(a),
         "gap_min": after["gap_min"],
+        "status": after["status"],
         "tail_start": split,
+        "tail_start_before": before["tail_start"],
         "required": after["required"],
         "identical": a == b,
         "head_identical": a[:head] == b[:head],
@@ -271,7 +313,8 @@ def compare(label: str, scenario: dict[str, Any]) -> dict[str, Any]:
 
 
 HEADER = (
-    f"{'instant':<26}{'gap':>6}{'tail@':>6}{'req':>6}{'same':>6}{'head=':>6}"
+    f"{'instant (local)':<26}{'gap':>6}{'status':>20}{'tail@':>6}{'req':>6}"
+    f"{'same':>6}{'head=':>6}"
     f"{'endSOC':>14}{'chg kWh':>14}{'o/night':>12}{'cost $':>18}{'solve s':>14}"
 )
 
@@ -287,6 +330,7 @@ def _print_row(row: dict[str, Any]) -> None:
     print(
         f"{row['instant']:<26}"
         f"{_fmt(row['gap_min'], '.0f'):>6}"
+        f"{row['status'] or '-':>20}"
         f"{_fmt(row['tail_start'], 'd'):>6}"
         f"{_fmt(row['required'], '.0f'):>6}"
         f"{'yes' if row['identical'] else 'no':>6}"
@@ -300,33 +344,78 @@ def _print_row(row: dict[str, Any]) -> None:
 
 
 def _instants(scale: float, only: str | None) -> list[tuple[str, dict[str, Any]]]:
-    out: list[tuple[str, dict[str, Any]]] = []
+    out: list[tuple[str, str, dict[str, Any]]] = []
     for directory in CAPTURE_DIRS:
         for path in sorted(directory.glob("*.json")):
             scenario = _load(path)
             scenario["input"]["solcast_tomorrow"] = _tomorrow_solar(path, scale)
-            out.append((path.stem, scenario))
+            out.append((path.stem, _local_label(scenario), scenario))
         for day in sorted({p.stem[:10] for p in directory.glob("*.json")}):
             scenario = _spliced_1435(day, directory)
             if scenario is None:
                 continue
             late = directory / f"{day}T150540.json"
             scenario["input"]["solcast_tomorrow"] = _tomorrow_solar(late, scale)
-            out.append((f"{day}T143540 spliced", scenario))
-    out.sort(key=lambda item: item[0])
+            out.append((f"{day}T143540", _local_label(scenario, True), scenario))
+    out.sort(key=lambda item: item[1])
     if only:
         stamp = only.replace(":", "")
         out = [item for item in out if f"T{stamp}" in item[0]]
+    return [(label, scenario) for _, label, scenario in out]
+
+
+def violations(rows: list[dict[str, Any]]) -> list[str]:
+    """Every instant that breaks a headline claim. Empty means all hold."""
+    out: list[str] = []
+    for row in rows:
+        name = row["instant"]
+        applied = row["status"] == "applied"
+        checks = (
+            (
+                row["slot0_before"] != row["slot0_after"],
+                f"slot-0 action {row['slot0_before']} -> {row['slot0_after']}",
+            ),
+            (
+                row["mode_before"] != row["mode_after"],
+                f"commanded mode {row['mode_before']} -> {row['mode_after']}",
+            ),
+            (not row["head_identical"], "a decision before the tail start changed"),
+            (
+                row["tail_start_before"] is not None,
+                "the 'before' arm re-planned a tail",
+            ),
+            (
+                row["tail_start"] is not None and row["tail_start"] < 1,
+                f"tail starts at index {row['tail_start']}",
+            ),
+            (
+                applied != (row["tail_start"] is not None),
+                f"status {row['status']} with tail start {row['tail_start']}",
+            ),
+            (
+                not applied and not row["identical"],
+                f"status {row['status']} but the plan changed",
+            ),
+            (
+                not applied and row["cost_before"] != row["cost_after"],
+                f"status {row['status']} but the projected cost changed",
+            ),
+        )
+        out += [f"{name}: {message}" for failed, message in checks if failed]
     return out
 
 
 def _summarise(rows: list[dict[str, Any]]) -> None:
     changed = [r for r in rows if not r["identical"]]
     same = [r for r in rows if r["identical"]]
+    statuses: dict[str, int] = {}
+    for r in rows:
+        statuses[str(r["status"])] = statuses.get(str(r["status"]), 0) + 1
     print(
-        f"\n{len(rows)} instants: {len(changed)} with a re-planned tail, "
-        f"{len(same)} identical to main"
+        f"\n{len(rows)} instants: {len(changed)} with a changed plan, "
+        f"{len(same)} identical with the tail on or off"
     )
+    print("tail status: " + ", ".join(f"{k} {v}" for k, v in sorted(statuses.items())))
     print(
         "decisions before the tail changed in "
         f"{sum(1 for r in rows if not r['head_identical'])} instants; "
@@ -335,7 +424,7 @@ def _summarise(rows: list[dict[str, Any]]) -> None:
         "commanded mode changed in "
         f"{sum(1 for r in rows if r['mode_before'] != r['mode_after'])}"
     )
-    for name, group in (("re-planned", changed), ("identical", same)):
+    for name, group in (("changed", changed), ("identical", same)):
         if not group:
             continue
         n = len(group)
@@ -357,31 +446,49 @@ def main() -> int:
     parser.add_argument(
         "--solar-scale",
         type=float,
-        default=1.0,
-        help="multiply tomorrow's measured solar by this (default 1.0)",
+        nargs="+",
+        default=[1.0],
+        help="multiply tomorrow's measured solar by this; several values run "
+        "one after another (default 1.0)",
     )
     parser.add_argument("--only", help="only instants at this time, e.g. 15:05")
     parser.add_argument("--detail", action="store_true", help="print plan timelines")
     parser.add_argument("--json", help="also write full results here")
     args = parser.parse_args()
 
-    rows: list[dict[str, Any]] = []
-    print(f"tomorrow's solar x {args.solar_scale}")
-    print(HEADER)
-    print("-" * len(HEADER))
-    for label, scenario in _instants(args.solar_scale, args.only):
-        row = compare(label, scenario)
-        rows.append(row)
-        _print_row(row)
-        if args.detail and not row["identical"]:
-            print(f"    before {row['timeline_before']}")
-            print(f"    after  {row['timeline_after']}")
-            print(f"    charge slots {row['charge_span_after']}")
-    _summarise(rows)
+    results: dict[str, list[dict[str, Any]]] = {}
+    broken: list[str] = []
+    for scale in args.solar_scale:
+        rows: list[dict[str, Any]] = []
+        print(f"\ntomorrow's solar x {scale}")
+        print(HEADER)
+        print("-" * len(HEADER))
+        for label, scenario in _instants(scale, args.only):
+            row = compare(label, scenario)
+            rows.append(row)
+            _print_row(row)
+            if args.detail and not row["identical"]:
+                print(f"    before {row['timeline_before']}")
+                print(f"    after  {row['timeline_after']}")
+                print(f"    charge slots {row['charge_span_after']}")
+        _summarise(rows)
+        results[str(scale)] = rows
+        broken += [f"x{scale} {line}" for line in violations(rows)]
 
     if args.json:
-        Path(args.json).write_text(json.dumps(rows, indent=2, default=str) + "\n")
+        Path(args.json).write_text(json.dumps(results, indent=2, default=str) + "\n")
         print(f"\nfull results -> {args.json}")
+
+    if broken:
+        print(f"\nFAILED: {len(broken)} violation(s) of the headline claims")
+        for line in broken:
+            print(f"  {line}")
+        return 1
+    print(
+        "\nOK: slot 0 and the commanded mode unchanged, no decision before the "
+        "tail start changed, and every instant whose tail was not applied is "
+        "identical in both arms"
+    )
     return 0
 
 
