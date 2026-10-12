@@ -83,10 +83,18 @@ MIN_SAMPLES_PER_HOUR = 3
 # Issue #679: per-day-of-week load profile fallback chain thresholds.
 # Day-specific (Mon=0..Sun=6) bucket needs at least this many samples for the
 # hour before it is trusted over the weekday/weekend aggregate.
-MIN_SAMPLES_PER_DAY_HOUR = 4
+#
+# Issue #1006: both thresholds sit one row BELOW what a full window holds.
+# Hourly statistics over HISTORY_WINDOW_DAYS give each (day, hour) cell at
+# most HISTORY_WINDOW_DAYS // 7 = 4 samples and each weekend-aggregate hour at
+# most 8. At 4 and 8 the thresholds equalled those ceilings, so one missing
+# recorder row (restart, dropout, DST gap, an away hour) moved the hour to a
+# coarser rung for the next four weeks. Keep them strictly below the ceiling
+# if HISTORY_WINDOW_DAYS changes (tests/forecast/test_load.py enforces it).
+MIN_SAMPLES_PER_DAY_HOUR = 3
 # Weekday/weekend aggregate bucket needs at least this many samples for the
 # hour before it is trusted over the global (combined) average.
-MIN_SAMPLES_PER_AGGREGATE_HOUR = 8
+MIN_SAMPLES_PER_AGGREGATE_HOUR = 6
 
 # Away-mode consumption profile (docs/holiday-away/plan.md "What to build"
 # item 2). Mirrors MIN_SAMPLES_PER_HOUR: an hour needs at least this many

@@ -429,6 +429,15 @@ samples, or by the flat overnight floor until then.
 `weather_away_masked_hours` is the away-hour count masked out of the separate
 weather-correlation learning window (item 3).
 
+`load_forecast_profile_rungs` (Issue #1006) names, for each hour in the latest
+load forecast, which historical profile fed it — e.g.
+`{"Fri 23:00": "day_4", "Sat 00:00": "aggregate_weekend"}`. `day_N` is that
+day-of-week's own profile (Mon=0), `aggregate_weekday` / `aggregate_weekend`
+the pooled fallback, `global_avg` the all-days average, and
+`away_profile` / `away_floor` the empty-house forecast. An hour drops a rung
+when its bucket has too few samples in the 28-day window (3 for a day bucket,
+6 for an aggregate); the log line `Load profile rungs` records each change.
+
 ---
 
 ### 12. sensor.localshift_target_soc_minimum

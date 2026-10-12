@@ -260,6 +260,9 @@ class CoordinatorData:
     weekday_hourly_profile_kw: dict[int, float] = field(default_factory=dict)
     weekend_hourly_profile_kw: dict[int, float] = field(default_factory=dict)
     forecast_consumption_source_counts: dict[str, int] = field(default_factory=dict)
+    # Issue #1006: which load-profile fallback rung fed each forecast hour in
+    # the latest run, e.g. {"Sat 00:00": "aggregate_weekend"}.
+    load_forecast_profile_rungs: dict[str, str] = field(default_factory=dict)
     recent_load_1hr_kw: float = 0.0
     recent_load_short_kw: float = 0.0
     recent_load_1hr_statistic_id: str = ""

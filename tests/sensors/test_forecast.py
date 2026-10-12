@@ -561,6 +561,17 @@ class TestForecastDiagnosticsSensor:
         assert attrs["weather_avg_heating_slope"] == 0.03
         assert attrs["weather_avg_r_squared"] == 0.42
 
+    def test_extra_state_attributes_load_profile_rungs(self):
+        """Issue #1006: the per-hour rung trace is exposed for diagnosis."""
+        rungs = {"Fri 23:00": "aggregate_weekday", "Sat 00:00": "day_5"}
+        mock_coordinator, _data = create_mock_coordinator_with_data(
+            load_forecast_profile_rungs=rungs
+        )
+
+        sensor = ForecastDiagnosticsSensor(mock_coordinator, MagicMock())
+
+        assert sensor.extra_state_attributes["load_forecast_profile_rungs"] == rungs
+
     def test_extra_state_attributes_away_mode_fields(self):
         """S1: the five away-mode attributes (plan item 2/5) are present."""
         mock_coordinator, data = create_mock_coordinator_with_data(
