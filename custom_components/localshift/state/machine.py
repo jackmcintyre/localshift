@@ -26,6 +26,7 @@ from ..const import (
     EXPORT_INVERSION_HOLDOFF_MINUTES,
     EXPORT_INVERSION_POWER_KW,
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT,
+    PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
     STATE_MACHINE_TRANSITION_GRACE_SECONDS,
     TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES,
@@ -1220,7 +1221,7 @@ class StateMachine:
         return True
 
     async def _step_proactive_export_reserve(self, data: CoordinatorData) -> bool:
-        """Re-step the PROACTIVE_EXPORT reserve once SOC has drained to it.
+        """Re-step the PROACTIVE_EXPORT reserve as SOC drains toward it.
 
         Issue #1081: the reserve is written once on entry. When the planner keeps
         selecting export after SOC reaches it, the Powerwall pins at the reserve —
@@ -1242,15 +1243,30 @@ class StateMachine:
         if soc is None or soc <= 0.0:
             return False
 
+        new_reserve = calculate_proactive_export_reserve(soc, floor)
         if tracked < floor:
             # Away started (or its slider rose) while export stayed selected:
             # lift the reserve to the away floor rather than waiting for a
             # mode change (docs/holiday-away/plan.md item 4).
-            new_reserve = calculate_proactive_export_reserve(soc, floor)
-        else:
-            if soc > tracked + PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT:
+            #
+            # Issue #1118: a floor in 81-99 cannot be written, so the reserve
+            # is already as high as Tesla allows; re-sending 80 every tick is
+            # the rewrite loop this issue removes.
+            if new_reserve <= tracked:
                 return False
-            new_reserve = calculate_proactive_export_reserve(soc, floor)
+        else:
+            # Issue #1118: during a price spike the trigger is wider than one
+            # 5-minute SOC sample of drain, so the step lands before the battery
+            # reaches the reserve. The reserve only moves down here and each
+            # write is SOC - 5, so SOC must fall (5 - trigger) points between
+            # writes whichever trigger applies: the spike flag cannot flap it.
+            trigger = (
+                PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT
+                if data.price_spike
+                else PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT
+            )
+            if soc > tracked + trigger:
+                return False
             if new_reserve >= tracked:
                 return False
 
