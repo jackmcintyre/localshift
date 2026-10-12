@@ -161,8 +161,8 @@ class EntityMonitor:
             _LOGGER.warning(
                 "SYNTHETIC_SLOT_STARTUP: no entry from the configured price "
                 "forecast source %s has covered 'now' in %d evaluations "
-                "since startup -- every slot 0 has been priced synthetically "
-                "(Issue #956)",
+                "since startup -- every slot 0 was either priced synthetically "
+                "or not built at all (Issue #956)",
                 forecast_entity,
                 health.evaluations_since_start,
             )
@@ -171,10 +171,14 @@ class EntityMonitor:
         if not health.degraded:
             return
 
+        # Issue #998: a sample is also counted when no slots were built at all
+        # (empty forecast), so the wording names what is true of every counted
+        # sample -- no forecast entry covered "now" -- not the synthetic
+        # pricing step, which does not run on an empty build.
         warning = (
-            f"slot 0 priced synthetically in {round(health.rate * 100)}% of "
-            f"the last hour's evaluations ({health.sample_count} samples) -- "
-            f"check {forecast_entity}"
+            f"no price forecast entry covered the current interval in "
+            f"{round(health.rate * 100)}% of the last hour's evaluations "
+            f"({health.sample_count} samples) -- check {forecast_entity}"
         )
         data.entity_warnings = list(data.entity_warnings) + [warning]
         self._synthetic_slot_warning = warning

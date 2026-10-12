@@ -125,6 +125,20 @@ class TestDegradeEscalation:
         assert f"{round(health.rate * 100)}%" in warning
         assert str(health.sample_count) in warning
 
+    def test_warning_does_not_claim_synthetic_pricing(self):
+        """Issue #998: an empty slot build is counted as a sample too, and no
+        slot is priced at all on that path, so the message must describe the
+        missing forecast coverage rather than a pricing step."""
+        monitor, coordinator = _monitor_with_data(
+            synthetic_slot_health=_degraded_tracker()
+        )
+
+        monitor.check_entity_health()
+
+        warning = coordinator.data.entity_warnings[0]
+        assert "no price forecast entry covered the current interval" in warning
+        assert "synthetic" not in warning
+
     def test_warning_names_configured_forecast_entity(self):
         monitor, coordinator = _monitor_with_data(
             synthetic_slot_health=_degraded_tracker()

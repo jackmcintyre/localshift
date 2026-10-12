@@ -78,7 +78,7 @@ class TestIntegrationStatusSensorSyntheticSlotHealth:
             integration_status="degraded",
             integration_status_message="degraded",
             entity_errors=[],
-            entity_warnings=["slot 0 priced synthetically"],
+            entity_warnings=["no price forecast entry covered the current interval"],
             required_entities_healthy=True,
             last_entity_check="2026-09-06T12:00:00",
             synthetic_slot_health=health,

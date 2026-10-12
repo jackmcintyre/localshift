@@ -593,8 +593,11 @@ optimizer evaluation records whether slot 0 was synthetic onto a rolling
   value more than a few minutes old means the rest is stale.
 
 While `synthetic_slot_degraded` is `true`, `state` escalates from `ok` to
-`degraded` (never downgrading an existing `error`) and `message` names the
-rate and the configured forecast entity to check. If the configured forecast
+`degraded` (never downgrading an existing `error`) and `message` reads
+"no price forecast entry covered the current interval in N% of the last
+hour's evaluations", naming the configured forecast entity to check. It
+describes missing coverage rather than synthetic pricing because the count
+also includes evaluations where no slots were built at all (#998). If the configured forecast
 source has *never* produced an entry covering "now" since startup, a single
 loud `WARNING` fires once, naming that entity, independently of the rolling
 rate. This also covers the total-outage case where the configured source
