@@ -1638,3 +1638,214 @@ class TestStampConfidenceOverforecastCap:
         )
 
         assert coordinator_data.solar_absent_confidence == pytest.approx(0.24)
+
+
+# ─── DW-entry telemetry follows the clock, not the block switch (#1049) ─────
+
+
+class TestDwEntryTelemetryClockGate:
+    """The entry SOC is recorded at the window start whether or not the
+    demand-window block switch is on, from a fresh SOC read, and only close
+    enough to the start to still be an *entry* reading."""
+
+    @staticmethod
+    def _engine(computation_engine, block_on: bool):
+        computation_engine.entry.options.update({
+            "battery_target": 95,
+            "demand_window_start": "15:00:00",
+            "demand_window_end": "21:00:00",
+        })
+        computation_engine._get_switch_state = lambda key: (
+            block_on if key == "demand_window_block" else False
+        )
+        return computation_engine
+
+    @staticmethod
+    def _set_soc(engine, state: str) -> None:
+        from custom_components.localshift.const import CONF_TESLEMETRY_SOC
+
+        soc_entity = engine._get_entity_id(CONF_TESLEMETRY_SOC)
+        engine.hass.states = {soc_entity: SimpleNamespace(state=state)}
+
+    @staticmethod
+    def _tick(engine, data, now_dt):
+        with patch(
+            "custom_components.localshift.computation_engine.dt_util.now",
+            return_value=now_dt,
+        ):
+            ctx = engine._build_step_context()
+        engine._compute_demand_window_active(data, ctx)
+        engine._capture_dw_entry_actual(data, ctx)
+
+    def test_recorded_with_block_switch_off(self, computation_engine, coordinator_data):
+        engine = self._engine(computation_engine, block_on=False)
+        self._set_soc(engine, "64.0")
+
+        self._tick(engine, coordinator_data, datetime(2026, 10, 12, 14, 59, tzinfo=UTC))
+        assert coordinator_data.dw_entry_actual_soc_pct is None
+
+        at = datetime(2026, 10, 12, 15, 0, tzinfo=UTC)
+        self._tick(engine, coordinator_data, at)
+        # The switch-gated flag is untouched: block off means not "active".
+        assert coordinator_data.demand_window_active is False
+        assert coordinator_data.dw_entry_actual_soc_pct == 64.0
+        assert coordinator_data.dw_entry_actual_target_pct == 95.0
+        assert coordinator_data.dw_entry_actual_shortfall_pct == pytest.approx(31.0)
+        assert coordinator_data.dw_entry_actual_at == at
+        assert coordinator_data.dw_entry_actual_date == at.date()
+
+    def test_recorded_with_block_switch_on(self, computation_engine, coordinator_data):
+        engine = self._engine(computation_engine, block_on=True)
+        self._set_soc(engine, "64.0")
+
+        at = datetime(2026, 10, 12, 15, 0, tzinfo=UTC)
+        self._tick(engine, coordinator_data, at)
+        assert coordinator_data.demand_window_active is True
+        assert coordinator_data.dw_entry_actual_soc_pct == 64.0
+        assert coordinator_data.dw_entry_actual_shortfall_pct == pytest.approx(31.0)
+        assert coordinator_data.dw_entry_actual_at == at
+
+    @pytest.mark.parametrize("block_on", [False, True])
+    def test_unavailable_soc_defers_instead_of_recording_zero(
+        self, computation_engine, coordinator_data, block_on
+    ):
+        """The cached ``data.soc`` is 0.0 while the entity is unavailable (the
+        reader's float default), so it can't be what the record is taken from."""
+        engine = self._engine(computation_engine, block_on=block_on)
+        coordinator_data.soc = 0.0
+        self._set_soc(engine, "unavailable")
+
+        self._tick(engine, coordinator_data, datetime(2026, 10, 12, 15, 0, tzinfo=UTC))
+        assert coordinator_data.dw_entry_actual_soc_pct is None
+        assert coordinator_data.dw_entry_actual_date is None
+
+        self._set_soc(engine, "88.0")
+        at = datetime(2026, 10, 12, 15, 1, tzinfo=UTC)
+        self._tick(engine, coordinator_data, at)
+        assert coordinator_data.dw_entry_actual_soc_pct == 88.0
+        assert coordinator_data.dw_entry_actual_at == at
+
+    def test_records_the_fresh_read_not_the_cached_soc(
+        self, computation_engine, coordinator_data
+    ):
+        engine = self._engine(computation_engine, block_on=False)
+        coordinator_data.soc = 0.0
+        self._set_soc(engine, "97.0")
+
+        self._tick(engine, coordinator_data, datetime(2026, 10, 12, 15, 0, tzinfo=UTC))
+        assert coordinator_data.dw_entry_actual_soc_pct == 97.0
+        assert coordinator_data.dw_entry_actual_shortfall_pct == 0.0
+        # Telemetry only: the capture must not write the planner's SOC.
+        assert coordinator_data.soc == 0.0
+
+    @pytest.mark.parametrize("block_on", [False, True])
+    def test_first_evaluation_mid_window_records_nothing(
+        self, computation_engine, coordinator_data, block_on, caplog
+    ):
+        """A restart inside the window comes up with a blank record. The SOC it
+        sees is long past the entry, so it stays blank rather than being
+        reported as the entry — and says so once, not on every tick."""
+        engine = self._engine(computation_engine, block_on=block_on)
+        self._set_soc(engine, "40.0")
+
+        with caplog.at_level("INFO"):
+            for minute in (41, 42, 43):
+                self._tick(
+                    engine,
+                    coordinator_data,
+                    datetime(2026, 10, 12, 16, minute, tzinfo=UTC),
+                )
+
+        assert coordinator_data.dw_entry_actual_soc_pct is None
+        assert coordinator_data.dw_entry_actual_at is None
+        assert coordinator_data.dw_entry_actual_date is None
+        assert "ENTERED UNDER TARGET" not in caplog.text
+        assert caplog.text.count("Demand-window entry SOC not recorded") == 1
+
+    def test_restart_just_after_window_start_still_records(
+        self, computation_engine, coordinator_data
+    ):
+        engine = self._engine(computation_engine, block_on=False)
+        self._set_soc(engine, "93.0")
+
+        at = datetime(2026, 10, 12, 15, 4, 30, tzinfo=UTC)
+        self._tick(engine, coordinator_data, at)
+        assert coordinator_data.dw_entry_actual_soc_pct == 93.0
+        assert coordinator_data.dw_entry_actual_at == at
+
+    @pytest.mark.parametrize("block_on", [False, True])
+    def test_soc_unavailable_past_the_grace_period_records_nothing(
+        self, computation_engine, coordinator_data, block_on
+    ):
+        engine = self._engine(computation_engine, block_on=block_on)
+        self._set_soc(engine, "unavailable")
+        self._tick(engine, coordinator_data, datetime(2026, 10, 12, 15, 0, tzinfo=UTC))
+
+        self._set_soc(engine, "70.0")
+        self._tick(engine, coordinator_data, datetime(2026, 10, 12, 15, 5, tzinfo=UTC))
+        assert coordinator_data.dw_entry_actual_soc_pct is None
+        assert coordinator_data.dw_entry_actual_date is None
+
+    # ── Wiring: the capture is reached from the real per-tick entry point ──
+
+    @staticmethod
+    def _full_tick(engine, data, now_dt):
+        """One evaluation through ``compute_derived_values`` — the method the
+        coordinator calls every tick — rather than the capture helper itself."""
+        with patch(
+            "custom_components.localshift.computation_engine.dt_util.now",
+            return_value=now_dt,
+        ):
+            engine.compute_derived_values(data)
+
+    @pytest.mark.parametrize("manual_override", [False, True])
+    def test_compute_derived_values_records_the_entry_across_the_window_start(
+        self, computation_engine, coordinator_data, manual_override
+    ):
+        """The tests above call the capture directly, so none of them would
+        notice the call being dropped from ``compute_derived_values`` or moved
+        below the manual-override early return. This one goes through the
+        orchestrator, block switch off, in automatic and in manual mode."""
+        engine = self._engine(computation_engine, block_on=False)
+        self._set_soc(engine, "64.0")
+        coordinator_data.manual_override = manual_override
+
+        self._full_tick(
+            engine, coordinator_data, datetime(2026, 10, 12, 14, 59, tzinfo=UTC)
+        )
+        assert coordinator_data.dw_entry_actual_soc_pct is None
+        assert coordinator_data.dw_entry_actual_date is None
+
+        at = datetime(2026, 10, 12, 15, 0, tzinfo=UTC)
+        self._full_tick(engine, coordinator_data, at)
+
+        assert coordinator_data.demand_window_active is False
+        assert (coordinator_data.active_mode == BatteryMode.MANUAL) is manual_override
+        assert coordinator_data.dw_entry_actual_soc_pct == 64.0
+        assert coordinator_data.dw_entry_actual_target_pct == 95.0
+        assert coordinator_data.dw_entry_actual_shortfall_pct == pytest.approx(31.0)
+        assert coordinator_data.dw_entry_actual_at == at
+        assert coordinator_data.dw_entry_actual_date == at.date()
+
+    def test_under_target_warning_states_the_measurement_not_a_cause(
+        self, computation_engine, coordinator_data, caplog
+    ):
+        """The warning reports entry SOC, target and gap. It cannot know why the
+        battery arrived low — the plan may have chosen to — so it must not say."""
+        engine = self._engine(computation_engine, block_on=False)
+        self._set_soc(engine, "64.0")
+
+        with caplog.at_level("INFO"):
+            self._tick(
+                engine, coordinator_data, datetime(2026, 10, 12, 15, 0, tzinfo=UTC)
+            )
+
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert message.startswith("DEMAND WINDOW ENTERED UNDER TARGET: ")
+        assert "entry SOC 64.0%" in message
+        assert "target 95%" in message
+        assert "31.0 points short" in message
+        assert "did not execute" not in message
+        assert "Pre-charge" not in message

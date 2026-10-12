@@ -689,18 +689,30 @@ class CoordinatorData:
     # instant today's window starts, which is what erased the 64%-vs-95% miss from the
     # log. These five record what actually happened, captured once at the DW boundary
     # and held for the rest of the day. Reset by _reset_daily_precharge_latch.
+    #
+    # All five are None together in two cases: before today's window opens, and for
+    # the whole day when the entry was not observed — no SOC reading landed within
+    # DW_ENTRY_CAPTURE_GRACE of the window start (restart mid-window, or a SOC outage
+    # across the boundary). None therefore means "no entry reading", not "window not
+    # reached yet"; a mid-window SOC is never recorded in its place.
 
     dw_entry_actual_soc_pct: float | None = None
-    """SOC (%) observed at the first evaluation inside today's demand window."""
+    """SOC (%) read fresh at the first evaluation inside today's demand window that
+    falls within the capture grace. None before the window opens, or when the entry
+    was not observed within the grace."""
 
     dw_entry_actual_at: datetime | None = None
-    """Timestamp of that capture. None before the window opens."""
+    """Timestamp of that capture. None before the window opens, and also when the
+    entry was not observed within the grace."""
 
     dw_entry_actual_target_pct: float | None = None
-    """The battery target the capture is measured against."""
+    """The battery target the capture is measured against. None when there is no
+    capture."""
 
     dw_entry_actual_shortfall_pct: float | None = None
-    """max(0, target - actual) in %-points. 0.0 when the target was met."""
+    """max(0, target - actual) in %-points. 0.0 when the target was met. None when
+    there is no capture (which is not the same as no shortfall)."""
 
     dw_entry_actual_date: date | None = None
-    """Date the capture belongs to — the once-per-day latch."""
+    """Date the capture belongs to — the once-per-day latch. Stays None on a day
+    whose entry was not observed."""
