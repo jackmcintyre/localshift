@@ -281,6 +281,7 @@ DEFAULT_CURRENT_HOUR_RECENT_WEIGHT = (
 )
 RECENT_LOAD_SHORT_WINDOW_SAMPLES = 3  # trailing 5-min stat means for the robust short-window median (~15 min) (Issue #826)
 LOAD_FORECAST_CEILING_FACTOR = 3.0  # per-slot forecast may not exceed this multiple of the home's historical peak hourly average (Issue #826)
+LOAD_FORECAST_CEILING_LOG_QUIET_MIN = 15  # minutes without a clamp for an hour before its next clamp is a new episode and warns again (Issue #1115)
 DEFAULT_MINIMUM_TARGET_SOC = 20  # % minimum SOC for discharge modes
 DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = (
     False  # Allow DW entry under target when solar can reach target
