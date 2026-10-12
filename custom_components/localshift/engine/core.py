@@ -34,7 +34,7 @@ from custom_components.localshift.engine.dp_math import (
 )
 from custom_components.localshift.engine.export_floor import apply_export_floor
 from custom_components.localshift.engine.negative_fit import (
-    derive_negative_fit_avoidance_context,
+    assess_negative_fit_avoidance,
 )
 from custom_components.localshift.engine.penalties import (
     cheap_recovery_charge_relief,
@@ -49,6 +49,9 @@ from custom_components.localshift.engine.solar import (
     projected_solcast_gain_pct,
 )
 from custom_components.localshift.engine.spike_event import find_funding_slots
+from custom_components.localshift.engine.spike_export import (
+    apply_spike_export_admission,
+)
 from custom_components.localshift.engine.transitions import _tapered_stored_kwh
 from custom_components.localshift.engine.transitions import transition as _transition
 from custom_components.localshift.engine.types import (
@@ -457,6 +460,7 @@ class DPPlanner:
 
         try:
             apply_export_floor(inputs.slots, inputs.config)
+            apply_spike_export_admission(inputs.slots, inputs.config)
             result = self._solve_guarded(inputs)
 
         except Exception as exc:  # noqa: BLE001
@@ -704,7 +708,8 @@ class DPPlanner:
 
         # Issue #719: Derive negative-FIT avoidance context before backward induction
 
-        negative_fit_avoidance_context = derive_negative_fit_avoidance_context(inputs)
+        negative_fit_assessment = assess_negative_fit_avoidance(inputs)
+        negative_fit_avoidance_context = negative_fit_assessment.context
 
         states_explored = self._backward_induction(
             dp,
@@ -775,6 +780,17 @@ class DPPlanner:
             accuracy_discount_factor=terminal_diags.get("accuracy_discount_factor"),
             peak_soc_pct=terminal_diags.get("peak_soc_pct"),
             dw_entry_soc_pct=terminal_diags.get("dw_entry_soc_pct"),
+            # Issue #1103: why a negative-FIT window did or did not open.
+            negative_fit_spill_cost=negative_fit_assessment.spill_cost,
+            negative_fit_spill_exposure=negative_fit_assessment.spill_exposure,
+            negative_fit_spill_threshold=negative_fit_assessment.spill_threshold,
+            negative_fit_suppressed=negative_fit_assessment.suppressed,
+            negative_fit_window_open=negative_fit_assessment.context is not None,
+            negative_fit_held_open=negative_fit_assessment.held_open,
+            negative_fit_recovery_solar_factor=(
+                negative_fit_assessment.recovery_solar_factor
+            ),
+            negative_fit_floor_now_pct=negative_fit_assessment.floor_now_pct,
         )
 
     def _empty_result(self) -> OptimizerResult:

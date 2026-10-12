@@ -119,7 +119,11 @@ def _determine_export_actions(
     else:
         if config.optimization_mode == "self_consumption":
             min_profitable_sell = max(0.0, slot.buy_price) + config.export_price_margin
-            if slot.sell_price >= min_profitable_sell:
+            # Issue #1120: Amber's feed-in is always below its general price for
+            # the same interval, so the same-slot test cannot pass on a spike.
+            # A genuine spike is judged against what the energy costs to buy
+            # back later instead (engine/spike_export.py).
+            if slot.sell_price >= min_profitable_sell or slot.spike_export_admitted:
                 actions.append(PlannerAction.EXPORT_PROACTIVE)
         else:
             if slot.sell_price > 0:

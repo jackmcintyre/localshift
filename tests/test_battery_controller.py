@@ -627,6 +627,42 @@ class TestSetProactiveExport:
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("mock_battery_sleep")
+    async def test_set_proactive_export_from_full_battery_writes_80(
+        self, battery_controller, coordinator_data, mock_hass
+    ):
+        """Issue #1118: SOC 97 must not write 92 — Tesla resets 81-99 to 80.
+
+        2026-10-12 15:30: the entry wrote 92.75, Tesla stored 80, and the
+        health check re-ran the transition a minute later.
+        """
+        mock_hass.services.async_call.return_value = None
+        coordinator_data.soc = 97.75
+
+        def mock_get_state(entity_id):
+            if entity_id is None:
+                return None
+            state = MagicMock()
+            if "operation_mode" in entity_id:
+                state.state = "autonomous"
+            elif "backup_reserve" in entity_id:
+                state.state = "80"
+            elif "allow_export" in entity_id:
+                state.state = TESLEMETRY_EXPORT_BATTERY_OK
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        assert await battery_controller.set_proactive_export(coordinator_data)
+
+        reserve_values = [
+            call[0][2]["value"]
+            for call in mock_hass.services.async_call.call_args_list
+            if call[0][0] == "number" and call[0][1] == "set_value"
+        ]
+        assert reserve_values == [80]
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("mock_battery_sleep")
     async def test_set_proactive_export_minimum_reserve(
         self, battery_controller, coordinator_data, mock_hass
     ):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 
 from .utils import get_slot_duration_minutes, parse_slot_time
 
@@ -121,6 +122,39 @@ def _covers_now(
         return False
     origin = _interval_origin(slot_start, duration_minutes)
     return origin <= now_local < origin + timedelta(minutes=duration_minutes)
+
+
+def find_current_entry(
+    forecast: list, now_local: datetime, ha_timezone: str
+) -> tuple[Any, datetime] | None:
+    """Return the forecast entry whose own interval contains now, and its origin.
+
+    Issue #1119: the same "which entry covers now" rule slot 0's buy price is
+    built on (`_covers_now`), exposed so the sell side can ask the feed-in
+    forecast the identical question instead of averaging a fixed window.
+
+    Args:
+        forecast: Raw forecast entries (dicts or ForecastSlot)
+        now_local: Current local time
+        ha_timezone: HA timezone
+
+    Returns:
+        (entry, interval origin) for the covering 5- or 30-minute entry, or
+        None when no entry covers now.
+
+    """
+    for entry in forecast or []:
+        if not hasattr(entry, "get"):
+            continue
+        slot_start = parse_slot_time(entry.get("start_time"), ha_timezone)
+        if slot_start is None:
+            continue
+        duration_minutes = _get_entry_duration(entry, slot_start, ha_timezone)
+        if duration_minutes is None:
+            continue
+        if _covers_now(slot_start, duration_minutes, now_local):
+            return entry, _interval_origin(slot_start, duration_minutes)
+    return None
 
 
 def _floor_to_5min(moment: datetime) -> datetime:

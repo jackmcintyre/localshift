@@ -242,6 +242,9 @@ CONF_STALE_SOLAR_CONFIDENCE_CEILING = "stale_solar_confidence_ceiling"
 CONF_PRECHARGE_RUNWAY_MARGIN_MIN = "precharge_runway_margin_min"
 CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
+# Not an options-flow setting: the key under which the state of
+# switch.localshift_spike_discharge_enabled reaches the planner (issue #1120).
+CONF_SPIKE_EXPORT_ENABLED = "spike_export_enabled"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
 CONF_SWITCHING_PENALTY = "switching_penalty"
 CONF_SWITCHING_PENALTY_PER_KWH = "switching_penalty_per_kwh"
@@ -312,6 +315,18 @@ EXPORT_FLOOR_NORMAL_RUN_MINUTES: Final[int] = 60
 # back later wins even if the load forecast is badly wrong (2026-10-12: the floor
 # sat at 100% through a $24/kWh feed-in price to protect $3/kWh evening load).
 EXPORT_FLOOR_HOLD_PRICE_RATIO: Final[float] = 0.5
+# Spike export in the default mode (issue #1120). A slot's sell price must be at
+# least this multiple of the horizon's median buy price before it can count as a
+# spike rather than the day's ordinary shape. Same value and same reasoning as
+# spike_event._SPIKE_OUTLIER_FACTOR: an ordinary evening peak sells under 2.5x
+# the median, the 2026-10-12 intervals sold at 50x and 120x, so neither class
+# sits near the boundary. Do not lower it to catch "nearly spikes".
+SPIKE_EXPORT_OUTLIER_FACTOR: Final[float] = 4.0
+# How far ahead the rebuy price looks: the dearest buy price in this window,
+# leaving out the rest of the spike being sold into, is what the exported
+# energy is judged against. Twelve hours covers the rest of
+# the evening and the night, by which time solar or pre-charge has refilled.
+SPIKE_EXPORT_REBUY_LOOKAHEAD_HOURS: Final[float] = 12.0
 DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive (flat knob)
 DEFAULT_SWITCHING_PENALTY_PER_KWH = (
     0.40  # $/kWh floor: scales the hurdle to slot energy, damps marginal jitter
@@ -713,6 +728,27 @@ PROACTIVE_EXPORT_SOC_BUFFER_PERCENT = 5.0
 # comparison would never fire.
 PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT = 1.0
 
+# Issue #1118: the same trigger while the retailer's price-spike flag is on
+# (data.price_spike), so ordinary prices keep the tight 1.0 above.
+#
+# Sized from the 2026-10-12 history, not from a taper threshold: there is none
+# to find. The Powerwall set its discharge rate when the reserve was written, at
+# about 0.57 kW per point of headroom (2.40 kW at 4.3 points, 2.89 at 5.0, 2.74
+# at 4.7), then let it sag rather than re-rating. What made the step late is the
+# SOC sensor: it reports every 5 minutes, about 1.5 points apart at that rate
+# (82.0, 80.5, 79.0, 77.5 against a reserve of 77). At 1.0 the 2.0 sample missed
+# and the step waited for the 0.5 one. 3.0 is two samples of headroom, so the
+# step lands on the sample before the reserve is reached.
+#
+# Flapping: a step writes SOC - 5 and only lowers the reserve, so after one SOC
+# has to fall a further (5 - trigger) points before the next, however the spike
+# flag toggles. That alone does not cover a reserve the export floor raised
+# (#1116): SOC can sit within 3 points of it without having drained, and the
+# floor moves both ways. So the 3.0 trigger also requires SOC to be 2 points
+# (buffer - trigger) below where it was at the last reserve write; otherwise the
+# 1.0 trigger applies. With SOC steady the spike flag therefore adds no write.
+PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT = 3.0
+
 # Issue #1097: how far ahead to read Tesla's sell tariff. Covers the planning
 # horizon (~24h) with room for the 30-minute refresh.
 TESLA_TARIFF_LOOKAHEAD_HOURS = 48
@@ -737,9 +773,30 @@ MAX_NEGATIVE_FIT_HEADROOM_PCT: Final[float] = 20.0
 # Conservative buffer factor for overflow estimates (0.8 = use 80% of forecast)
 NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR: Final[float] = 0.8
 
+# Issue #1103: the most forecast net solar the negative-FIT recoverability floor
+# will count on arriving. The share actually used is the smaller of this and the
+# measured forecast accuracy (``OptimizerConfig.solar_forecast_accuracy``, the
+# figure the #816 target-reach checks discount by), so a good or unmeasured
+# forecast keeps the long-standing 80% haircut and a poor one is believed less.
+NEGATIVE_FIT_RECOVERY_SOLAR_FACTOR: Final[float] = 0.8
+
 # Minimum net benefit ($/kWh) required to allow proactive export inside
 # demand window while running negative-FIT avoidance.
 NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH: Final[float] = 0.02
+
+# Issue #1103: dollars of spill a negative-FIT window must cost, over the whole
+# window, before avoidance opens. Deliberately its own figure and not
+# ``min_cycle_saving``: that slider is $/kWh for the grid-charge gate and gets
+# tuned (including to 0) for reasons that have nothing to do with this.
+NEGATIVE_FIT_MIN_SPILL_COST: Final[float] = 0.25
+
+# Once a window is open it stays open until the forecast's own exposure (every
+# kWh of window surplus at its non-positive price, ignoring where the battery
+# is) falls below this fraction of the threshold. Exposure does not move when
+# the battery pre-discharges, so the plan cannot close its own window, and the
+# gap between the two levels stops a forecast revision of a few hundredths of a
+# cent flipping the plan on consecutive cycles.
+NEGATIVE_FIT_SPILL_RELEASE_FRACTION: Final[float] = 0.5
 
 # -----------------------------------------------------------------------------
 # Terminal Salvage Value Constants (Issue #811)
