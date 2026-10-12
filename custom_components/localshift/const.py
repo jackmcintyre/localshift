@@ -717,9 +717,13 @@ PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT = 1.0
 # and the step waited for the 0.5 one. 3.0 is two samples of headroom, so the
 # step lands on the sample before the reserve is reached.
 #
-# Neither value can flap: a step writes SOC - 5 and only ever lowers the
-# reserve, so SOC has to fall a further (5 - trigger) points before the next
-# write, whichever trigger applies and however the spike flag toggles.
+# Flapping: a step writes SOC - 5 and only lowers the reserve, so after one SOC
+# has to fall a further (5 - trigger) points before the next, however the spike
+# flag toggles. That alone does not cover a reserve the export floor raised
+# (#1116): SOC can sit within 3 points of it without having drained, and the
+# floor moves both ways. So the 3.0 trigger also requires SOC to be 2 points
+# (buffer - trigger) below where it was at the last reserve write; otherwise the
+# 1.0 trigger applies. With SOC steady the spike flag therefore adds no write.
 PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT = 3.0
 
 # Issue #1097: how far ahead to read Tesla's sell tariff. Covers the planning
