@@ -958,6 +958,15 @@ class OptimizerResult:
     """True when the spill cost was below the threshold and the window stayed
     open only because it was already open and the forecast is still material."""
 
+    negative_fit_recovery_solar_factor: float | None = None
+    """Share of forecast net solar the negative-FIT recoverability floor counted
+    on: the smaller of the fixed 0.8 haircut and measured forecast accuracy
+    (Issue #1103). None when no floor was computed this cycle."""
+
+    negative_fit_floor_now_pct: float | None = None
+    """Recoverability floor (%) at slot 0 — how low avoidance may sell the
+    battery now. None when no floor was computed this cycle."""
+
 
 # -----------------------------------------------------------------------------
 # Negative FIT avoidance context

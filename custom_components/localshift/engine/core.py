@@ -787,6 +787,10 @@ class DPPlanner:
             negative_fit_suppressed=negative_fit_assessment.suppressed,
             negative_fit_window_open=negative_fit_assessment.context is not None,
             negative_fit_held_open=negative_fit_assessment.held_open,
+            negative_fit_recovery_solar_factor=(
+                negative_fit_assessment.recovery_solar_factor
+            ),
+            negative_fit_floor_now_pct=negative_fit_assessment.floor_now_pct,
         )
 
     def _empty_result(self) -> OptimizerResult:
