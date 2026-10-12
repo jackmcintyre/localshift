@@ -118,6 +118,12 @@ class TestForecastInfoUsesRenamedSensors:
                         "solcast_tomorrow_entries": 48,
                     },
                 }
+            if entity_id == "sensor.localshift_forecast_daily":
+                # Issue #1024: the retired id no longer exists in Home
+                # Assistant. Returning None (as the real client does) is what
+                # makes a read of it land in _missing; a catch-all stub state
+                # left _missing empty whatever the code read.
+                return None
             return {"state": "0", "attributes": {}}
 
         client = MagicMock()
@@ -127,6 +133,7 @@ class TestForecastInfoUsesRenamedSensors:
         result = generator._forecast_info()
 
         assert "sensor.localshift_forecast_daily" not in generator._missing
+        assert generator._missing == set()
         assert "Optimizer Plan Entries" in result
         assert "| 12 |" in result
         assert "| 96 |" in result
