@@ -1630,3 +1630,138 @@ class TestChargeCommitDwell:
 
         assert data.active_mode == BatteryMode.BOOST_CHARGING
         assert data.debug_mode_source == "runway_backstop"
+
+
+class TestRunwayBackstopLogsOncePerHold:
+    """#1115: the runway arm warned on every cycle of a hold — 200 lines in two hours.
+
+    The hold is a held state, so the WARNING marks the cycle that opens it; the
+    cycles that keep it are DEBUG and the cycle that ends it is one INFO line. The
+    ``RUNWAY BACKSTOP`` marker stays on the opening line only, so a grep for it
+    counts holds.
+    """
+
+    FIRING_SLACK = RUNWAY_MARGIN_MIN - 3.0
+    RELEASED_SLACK = RUNWAY_MARGIN_MIN + PRECHARGE_RUNWAY_HYSTERESIS_MIN
+
+    @staticmethod
+    def _cycle(facade: OptimizerFacade, data: CoordinatorData, slack: float) -> None:
+        _run(
+            facade,
+            data,
+            _runway_config(precharge_runway_slack_min=slack),
+            _clean_result(),
+        )
+
+    @staticmethod
+    def _records(caplog: Any, level: str) -> list[str]:
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelname == level
+            and "runway backstop" in record.getMessage().lower()
+        ]
+
+    def test_a_held_backstop_warns_once(self, caplog) -> None:
+        facade = OptimizerFacade()
+        data = _runway_data()
+
+        with caplog.at_level("DEBUG"):
+            for _ in range(5):
+                self._cycle(facade, data, self.FIRING_SLACK)
+                # The forced boost is unchanged on every cycle of the hold.
+                assert data.active_mode == BatteryMode.BOOST_CHARGING
+                assert data.debug_mode_source == "runway_backstop"
+                assert data.optimizer_precharge_backstop_active is True
+
+        warnings = self._records(caplog, "WARNING")
+        assert len(warnings) == 1
+        assert warnings[0].startswith("RUNWAY BACKSTOP: forcing BOOST_CHARGING")
+        # The repeats are still there for anyone who turns DEBUG on.
+        assert len(self._records(caplog, "DEBUG")) == 4
+
+    def test_the_end_of_a_hold_is_logged_once_without_the_marker(self, caplog) -> None:
+        facade = OptimizerFacade()
+        data = _runway_data()
+
+        with caplog.at_level("DEBUG"):
+            self._cycle(facade, data, self.FIRING_SLACK)
+            for _ in range(3):
+                self._cycle(facade, data, self.RELEASED_SLACK)
+
+        infos = self._records(caplog, "INFO")
+        assert len(infos) == 1
+        assert "RUNWAY BACKSTOP" not in infos[0]
+        assert caplog.text.count("RUNWAY BACKSTOP") == 1
+
+    def test_a_hold_ended_by_the_gap_closing_is_logged_once(self, caplog) -> None:
+        """The other exit: the battery reaches target while slack is still short."""
+        facade = OptimizerFacade()
+        data = _runway_data()
+
+        with caplog.at_level("DEBUG"):
+            self._cycle(facade, data, self.FIRING_SLACK)
+            assert data.active_mode == BatteryMode.BOOST_CHARGING
+            data.soc = LIVE_TARGET_PCT
+            for _ in range(3):
+                self._cycle(facade, data, self.FIRING_SLACK)
+                assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+
+            infos = self._records(caplog, "INFO")
+            assert infos == [
+                "Runway backstop hold ended: the gap to target has closed."
+            ]
+            assert caplog.text.count("RUNWAY BACKSTOP") == 1
+
+            # The gap reopens: a new hold, announced with the marker again.
+            data.soc = LIVE_SOC_PCT
+            self._cycle(facade, data, self.FIRING_SLACK)
+            assert data.active_mode == BatteryMode.BOOST_CHARGING
+
+        warnings = self._records(caplog, "WARNING")
+        assert len(warnings) == 2
+        assert all(line.startswith("RUNWAY BACKSTOP: forcing") for line in warnings)
+        assert len(self._records(caplog, "INFO")) == 1
+
+    def test_a_second_hold_warns_again(self, caplog) -> None:
+        facade = OptimizerFacade()
+        data = _runway_data()
+
+        with caplog.at_level("DEBUG"):
+            self._cycle(facade, data, self.FIRING_SLACK)
+            self._cycle(facade, data, self.FIRING_SLACK)
+            self._cycle(facade, data, self.RELEASED_SLACK)
+            assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+            self._cycle(facade, data, self.FIRING_SLACK)
+            assert data.active_mode == BatteryMode.BOOST_CHARGING
+
+        assert len(self._records(caplog, "WARNING")) == 2
+        assert len(self._records(caplog, "INFO")) == 1
+
+    def test_a_transient_block_inside_a_hold_does_not_warn_again(self, caplog) -> None:
+        """A price tick over the ceiling suppresses the charge but keeps the hold, so
+        the cycle that resumes it is a repeat, not a new hold."""
+        facade = OptimizerFacade()
+        data = _runway_data()
+
+        with caplog.at_level("DEBUG"):
+            self._cycle(facade, data, self.FIRING_SLACK)
+            data.general_price = 0.50
+            self._cycle(facade, data, self.FIRING_SLACK)
+            data.general_price = 0.116
+            self._cycle(facade, data, self.FIRING_SLACK)
+
+        assert data.active_mode == BatteryMode.BOOST_CHARGING
+        assert len(self._records(caplog, "WARNING")) == 1
+        assert self._records(caplog, "INFO") == []
+
+    def test_a_fresh_facade_warns_on_its_first_hold(self, caplog) -> None:
+        """A restart builds a new facade, so a hold still running across it is
+        announced again instead of continuing silently."""
+        data = _runway_data()
+
+        with caplog.at_level("WARNING"):
+            self._cycle(OptimizerFacade(), data, self.FIRING_SLACK)
+            self._cycle(OptimizerFacade(), data, self.FIRING_SLACK)
+
+        assert len(self._records(caplog, "WARNING")) == 2
