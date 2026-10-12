@@ -738,7 +738,9 @@ class BatteryController:
                 current_soc,
                 minimum_target,
             )
-            reserve = minimum_target
+            # Through the shared formula (SOC 0 floors it), so a floor in
+            # 81-99 is not written either (#1118).
+            reserve = calculate_proactive_export_reserve(0.0, minimum_target)
         else:
             reserve = calculate_proactive_export_reserve(current_soc, minimum_target)
 

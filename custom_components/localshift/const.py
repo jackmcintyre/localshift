@@ -705,6 +705,27 @@ PROACTIVE_EXPORT_SOC_BUFFER_PERCENT = 5.0
 # comparison would never fire.
 PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT = 1.0
 
+# Issue #1118: the same trigger while the retailer's price-spike flag is on
+# (data.price_spike), so ordinary prices keep the tight 1.0 above.
+#
+# Sized from the 2026-10-12 history, not from a taper threshold: there is none
+# to find. The Powerwall set its discharge rate when the reserve was written, at
+# about 0.57 kW per point of headroom (2.40 kW at 4.3 points, 2.89 at 5.0, 2.74
+# at 4.7), then let it sag rather than re-rating. What made the step late is the
+# SOC sensor: it reports every 5 minutes, about 1.5 points apart at that rate
+# (82.0, 80.5, 79.0, 77.5 against a reserve of 77). At 1.0 the 2.0 sample missed
+# and the step waited for the 0.5 one. 3.0 is two samples of headroom, so the
+# step lands on the sample before the reserve is reached.
+#
+# Flapping: a step writes SOC - 5 and only lowers the reserve, so after one SOC
+# has to fall a further (5 - trigger) points before the next, however the spike
+# flag toggles. That alone does not cover a reserve the export floor raised
+# (#1116): SOC can sit within 3 points of it without having drained, and the
+# floor moves both ways. So the 3.0 trigger also requires SOC to be 2 points
+# (buffer - trigger) below where it was at the last reserve write; otherwise the
+# 1.0 trigger applies. With SOC steady the spike flag therefore adds no write.
+PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT = 3.0
+
 # Issue #1097: how far ahead to read Tesla's sell tariff. Covers the planning
 # horizon (~24h) with room for the 30-minute refresh.
 TESLA_TARIFF_LOOKAHEAD_HOURS = 48

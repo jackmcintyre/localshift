@@ -26,6 +26,8 @@ from ..const import (
     EXPORT_INVERSION_HOLDOFF_MINUTES,
     EXPORT_INVERSION_POWER_KW,
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT,
+    PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT,
+    PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
     STATE_MACHINE_TRANSITION_GRACE_SECONDS,
     TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES,
@@ -129,6 +131,10 @@ class StateMachine:
         self._manual_override_set_at: datetime | None = None
         # Track dynamic reserve for PROACTIVE_EXPORT mode
         self._proactive_export_reserve: float | None = None
+        # Issue #1118: SOC when that reserve was last written (entry or step).
+        # The spike trigger only acts on drain measured from here, so a reserve
+        # the export floor raised is not stepped straight back down.
+        self._proactive_export_reserve_soc: float | None = None
         # Issue #1097: when the battery was first seen charging off the grid
         # during PROACTIVE_EXPORT (export-inversion watchdog).
         self._export_inversion_since: datetime | None = None
@@ -1313,7 +1319,7 @@ class StateMachine:
         return True
 
     async def _step_proactive_export_reserve(self, data: CoordinatorData) -> bool:
-        """Re-step the PROACTIVE_EXPORT reserve once SOC has drained to it.
+        """Re-step the PROACTIVE_EXPORT reserve as SOC drains toward it.
 
         Issue #1081: the reserve is written once on entry. When the planner keeps
         selecting export after SOC reaches it, the Powerwall pins at the reserve —
@@ -1335,15 +1341,44 @@ class StateMachine:
         if soc is None or soc <= 0.0:
             return False
 
+        new_reserve = calculate_proactive_export_reserve(soc, floor)
         if tracked < floor:
             # Away started (or its slider rose) while export stayed selected:
             # lift the reserve to the away floor rather than waiting for a
             # mode change (docs/holiday-away/plan.md item 4).
-            new_reserve = calculate_proactive_export_reserve(soc, floor)
-        else:
-            if soc > tracked + PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT:
+            #
+            # Issue #1118: a floor in 81-99 cannot be written, so the reserve
+            # is already as high as Tesla allows; re-sending 80 every tick is
+            # the rewrite loop this issue removes.
+            if new_reserve <= tracked:
                 return False
-            new_reserve = calculate_proactive_export_reserve(soc, floor)
+        else:
+            # Issue #1118: during a price spike the trigger is wider than one
+            # 5-minute SOC sample of drain, so the step lands before the battery
+            # reaches the reserve.
+            #
+            # The wider trigger also needs SOC to have drained since the last
+            # write by the spacing a SOC - 5 reserve implies (5 - 3 = 2 points).
+            # For a reserve written as SOC - 5 that is the same condition. It
+            # differs when the export floor raised the reserve (branch above):
+            # SOC then sits within 3 points of it without having moved, and
+            # stepping down would undo the raise on every floor change. Without
+            # that drain the ordinary trigger applies, as before #1118.
+            trigger = PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT
+            written_at = self._proactive_export_reserve_soc
+            if (
+                data.price_spike
+                and written_at is not None
+                and soc
+                <= written_at
+                - (
+                    PROACTIVE_EXPORT_SOC_BUFFER_PERCENT
+                    - PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT
+                )
+            ):
+                trigger = PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT
+            if soc > tracked + trigger:
+                return False
             if new_reserve >= tracked:
                 return False
 
@@ -1365,6 +1400,7 @@ class StateMachine:
             soc,
         )
         self._proactive_export_reserve = new_reserve
+        self._proactive_export_reserve_soc = soc
         self._last_reserve_step = dt_util.now()
         return True
 
@@ -1563,6 +1599,11 @@ class StateMachine:
                 )
                 if transition_success:
                     self._update_transition_reserves(config)
+                    self._proactive_export_reserve_soc = (
+                        data.soc
+                        if config.proactive_export_reserve is not None
+                        else None
+                    )
                     _LOGGER.info(
                         "%s mode transition completed (reserve=%s)",
                         target.value,
