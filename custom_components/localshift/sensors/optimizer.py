@@ -165,6 +165,10 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "negative_fit_suppressed": summary.get("negative_fit_suppressed"),
             "negative_fit_window_open": summary.get("negative_fit_window_open"),
             "negative_fit_held_open": summary.get("negative_fit_held_open"),
+            "negative_fit_recovery_solar_factor": summary.get(
+                "negative_fit_recovery_solar_factor"
+            ),
+            "negative_fit_floor_now_pct": summary.get("negative_fit_floor_now_pct"),
             # Projected (above) and actual (below) sit together deliberately. These
             # five read from `d`, not `summary`: the summary is rebuilt every cycle
             # and is empty on a failed cycle — precisely when the real entry SOC
