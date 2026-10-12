@@ -34,6 +34,12 @@ PLATFORM_MODULES = [
 ]
 
 
+def _category_of(entity):
+    """Read a category the way Home Assistant does (Issue #1000): the public
+    property, which also covers one declared through an entity_description."""
+    return entity.entity_category
+
+
 async def _collect() -> list[tuple[str, str, str, str]]:
     """Return (entity_id, unique_id, platform, category) rows, sorted."""
     hass = MagicMock()
@@ -56,7 +62,7 @@ async def _collect() -> list[tuple[str, str, str, str]]:
 
         for entity in entities:
             unique_id = entity._attr_unique_id
-            category = getattr(entity, "_attr_entity_category", None)
+            category = _category_of(entity)
             category_str = category.value if category is not None else "—"
             name = getattr(entity, "_attr_name", None)
             entity_id = (
