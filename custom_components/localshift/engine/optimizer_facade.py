@@ -432,6 +432,11 @@ class OptimizerFacade:
         data.optimizer_summary["precharge_runway_slack_min"] = getattr(
             optimizer_config, "precharge_runway_slack_min", None
         )
+        # Load-sized export floor: published for the operator and for the state
+        # machine, whose PROACTIVE_EXPORT reserve must stop where the plan does.
+        export_floor_pct = float(getattr(optimizer_config, "export_floor_pct_now", 0.0))
+        data.planner_export_floor_pct = export_floor_pct
+        data.optimizer_summary["export_floor_pct"] = round(export_floor_pct, 1)
         data.optimizer_summary["hard_floor_suppressed_by_solar"] = bool(
             getattr(optimizer_config, "hard_floor_suppressed_by_solar", False)
         )
@@ -446,7 +451,7 @@ class OptimizerFacade:
         data.optimizer_summary.update(
             target_block
             if target_block is not None
-            else target_block_telemetry(None, [], optimizer_config)
+            else target_block_telemetry(None, [], optimizer_config or OptimizerConfig())
         )
 
         data.forecast_horizon_hours = slot_metadata.horizon_hours

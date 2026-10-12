@@ -17,6 +17,7 @@ from ..const import (
     DEFAULT_BLOCK_MIN_SPREAD,
     DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
     DEFAULT_PRICE_BLOCK_TARGET,
+    EXPORT_FLOOR_LOAD_MARGIN,
 )
 
 if TYPE_CHECKING:
@@ -146,6 +147,13 @@ class SlotContext:
     """False when selecting export in this slot would not physically export
     (Issue #1097: Tesla's stored tariff is below its top rate, or the
     export-inversion hold-off is active)."""
+
+    export_floor_pct: float = 0.0
+    """Solver-derived (set by ``DPPlanner.plan``): the SOC the EXPORT action may
+    not drain below in this slot. Computed by ``export_floor.apply_export_floor``
+    from forecast load over the rest of the elevated-price period. Only ever
+    raises the floor above ``OptimizerConfig.discharge_floor_pct``; HOLD still
+    serves load beneath it and it never unlocks grid charging."""
 
 
 # -----------------------------------------------------------------------------
@@ -368,6 +376,15 @@ class OptimizerConfig:
 
     False ⇒ ``DPPlanner.plan`` never computes funding slots and the planner behaves
     exactly as it did before the feature existed."""
+
+    export_floor_load_margin: float = EXPORT_FLOOR_LOAD_MARGIN
+    """Multiple of forecast load the export floor holds back for the rest of the
+    elevated-price period. 0 disables the floor."""
+
+    export_floor_pct_now: float = 0.0
+    """Solver-derived (set by ``DPPlanner.plan``): the export floor for the first
+    slot, published so the state machine's PROACTIVE_EXPORT reserve stops there
+    too."""
 
     spike_funding_slots: frozenset[int] | None = None
     """Solver-derived (set by ``DPPlanner.plan``): slots whose grid charge is admitted to
@@ -807,6 +824,10 @@ class PlannedSlotDecision:
 
     is_solar_opportunity: bool = False
     """True if this slot was identified as a solar opportunity wait period (#610)."""
+
+    export_floor_pct: float = 0.0
+    """The slot's load-sized export floor (passthrough of
+    ``SlotContext.export_floor_pct``, for display)."""
 
     # --- Derived compatibility flags (set from action) ---
     @property

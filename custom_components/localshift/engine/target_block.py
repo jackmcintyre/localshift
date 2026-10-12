@@ -218,12 +218,13 @@ def find_target_block(
     detected_entry, end_idx = run
 
     entry_idx = detected_entry
-    held = (
+    held = False
+    if (
         previous_entry_idx is not None
         and previous_entry_idx != detected_entry
         and abs(previous_entry_idx - detected_entry) <= _HYSTERESIS_SLOTS
-    )
-    if held:
+    ):
+        held = True
         entry_idx = previous_entry_idx
 
     reason = (

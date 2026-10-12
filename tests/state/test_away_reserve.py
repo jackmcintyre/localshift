@@ -240,6 +240,45 @@ def test_c4_proactive_export_unaffected_when_not_away(
     assert config.backup_reserve == 27.0  # max(20, 32-5)
 
 
+def test_proactive_export_floors_at_planner_export_floor(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    coordinator_data,
+):
+    """The reserve stops at the planner's load-sized export floor."""
+    machine = _make_machine(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        options={"minimum_target_soc": 5},
+    )
+    coordinator_data.away_active = False
+    coordinator_data.planner_export_floor_pct = 40.0
+    coordinator_data.soc = 42.0  # soc - 5 = 37, below the planner floor of 40
+    config = machine._get_mode_config(BatteryMode.PROACTIVE_EXPORT, coordinator_data)
+    assert config.backup_reserve == 40.0
+
+
+def test_proactive_export_leash_unchanged_above_planner_export_floor(
+    mock_battery_controller,
+    mock_notification_service,
+    mock_entity_validator,
+    coordinator_data,
+):
+    machine = _make_machine(
+        mock_battery_controller,
+        mock_notification_service,
+        mock_entity_validator,
+        options={"minimum_target_soc": 5},
+    )
+    coordinator_data.away_active = False
+    coordinator_data.planner_export_floor_pct = 40.0
+    coordinator_data.soc = 70.0
+    config = machine._get_mode_config(BatteryMode.PROACTIVE_EXPORT, coordinator_data)
+    assert config.backup_reserve == 65.0
+
+
 # ---------------------------------------------------------------------------
 # C5: controller writes
 # ---------------------------------------------------------------------------
@@ -329,6 +368,22 @@ async def test_c4_controller_proactive_export_floors_at_away_reserve(
     assert result is True
     # max(minimum_target=20, away=30) = 30; max(30, 32-5=27) = 30.
     controller._service_client.set_backup_reserve.assert_awaited_with(30.0)
+
+
+@pytest.mark.asyncio
+async def test_controller_proactive_export_floors_at_planner_export_floor(
+    mock_hass, coordinator_data
+):
+    """The controller's own PROACTIVE_EXPORT floor honours the planner's too."""
+    controller = _make_controller(mock_hass, options={"minimum_target_soc": 5})
+    coordinator_data.away_active = False
+    coordinator_data.planner_export_floor_pct = 40.0
+    coordinator_data.soc = 42.0
+
+    result = await controller.set_proactive_export(coordinator_data)
+
+    assert result is True
+    controller._service_client.set_backup_reserve.assert_awaited_with(40.0)
 
 
 @pytest.mark.asyncio

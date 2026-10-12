@@ -186,6 +186,7 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "precharge_runway_slack_min": _resolve_optional(
                 summary, d, "precharge_runway_slack_min", None
             ),
+            "export_floor_pct": _resolve_optional(summary, d, "export_floor_pct", None),
             "hard_floor_suppressed_by_solar": _resolve_optional(
                 summary, d, "hard_floor_suppressed_by_solar", False
             ),

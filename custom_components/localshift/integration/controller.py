@@ -720,6 +720,9 @@ class BatteryController:
         away_reserve_pct = self._resolve_away_reserve_pct(data)
         if away_reserve_pct is not None:
             minimum_target = max(minimum_target, away_reserve_pct)
+        # The planner's load-sized export floor: the hardware reserve stops where
+        # the plan does. Same rule as StateMachine._proactive_export_floor.
+        minimum_target = max(minimum_target, float(data.planner_export_floor_pct))
 
         # Issue #895: when SOC is 0 (unavailable entity, startup, or genuinely
         # empty), the old ``max(4.0, soc - 5.0)`` formula yielded reserve=4.0,

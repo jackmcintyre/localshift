@@ -587,8 +587,9 @@ class StateMachine:
         )
 
     def _proactive_export_floor(self, data: CoordinatorData) -> float:
-        """Return the PROACTIVE_EXPORT reserve floor: minimum_target_soc, or the
-        away reserve while away if that is higher.
+        """Return the PROACTIVE_EXPORT reserve floor: the highest of
+        minimum_target_soc, the planner's export floor, and the away reserve
+        while away.
 
         Shared by the entry builder and the #1082 re-step, so a re-step while away
         can never walk the reserve below the away floor.
@@ -596,10 +597,12 @@ class StateMachine:
         min_target_soc = float(
             self._get_option(CONF_MINIMUM_TARGET_SOC, DEFAULT_MINIMUM_TARGET_SOC)
         )
+        # The planner's load-sized export floor only ever raises this.
+        floor = max(min_target_soc, float(data.planner_export_floor_pct))
         away_reserve_pct = self._resolve_away_reserve_pct(data)
         if away_reserve_pct is None:
-            return min_target_soc
-        return max(min_target_soc, away_reserve_pct)
+            return floor
+        return max(floor, away_reserve_pct)
 
     def _build_proactive_export_config(self, data: CoordinatorData) -> ModeConfig:
         """Build PROACTIVE_EXPORT config."""

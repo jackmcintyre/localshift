@@ -315,6 +315,10 @@ class CoordinatorData:
     # charging off the grid during PROACTIVE_EXPORT; export stays unavailable
     # until this instant.
     export_suppressed_until: datetime | None = None
+    # Planner's load-sized export floor for the current slot (0 = none). The
+    # PROACTIVE_EXPORT reserve stops here so the hardware cannot drain past
+    # what the plan holds back for the rest of the elevated-price period.
+    planner_export_floor_pct: float = 0.0
     target_reached_today: bool = False
     # Local date the target latch was last reset. Drives a date-change reset in the
     # compute cycle that is immune to a missed midnight event (the latch's only other
