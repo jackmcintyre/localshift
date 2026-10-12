@@ -157,6 +157,14 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "spike_funding_slot_count": summary.get("spike_funding_slot_count"),
             "spike_funding_accepted": summary.get("spike_funding_accepted"),
             "spike_funding_net_cost_delta": summary.get("spike_funding_net_cost_delta"),
+            # Negative-FIT avoidance materiality (Issue #1103): the window's
+            # spill cost against the dollar threshold it has to reach.
+            "negative_fit_spill_cost": summary.get("negative_fit_spill_cost"),
+            "negative_fit_spill_exposure": summary.get("negative_fit_spill_exposure"),
+            "negative_fit_spill_threshold": summary.get("negative_fit_spill_threshold"),
+            "negative_fit_suppressed": summary.get("negative_fit_suppressed"),
+            "negative_fit_window_open": summary.get("negative_fit_window_open"),
+            "negative_fit_held_open": summary.get("negative_fit_held_open"),
             # Projected (above) and actual (below) sit together deliberately. These
             # five read from `d`, not `summary`: the summary is rebuilt every cycle
             # and is empty on a failed cycle — precisely when the real entry SOC

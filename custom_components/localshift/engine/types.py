@@ -587,6 +587,14 @@ class OptimizerConfig:
     unaffected; production sets it from ``CONF_MIN_CYCLE_SAVING`` (default 0.25) in
     ``optimizer_runner``."""
 
+    negative_fit_min_spill_cost: float = 0.0
+    """Dollars of spill a negative-FIT window must cost, across the whole window,
+    before the avoidance context is created (Issue #1103). 0.0 disables the gate.
+
+    Dataclass default is 0.0 so the #719 unit tests are unaffected; production
+    sets it from ``NEGATIVE_FIT_MIN_SPILL_COST`` in ``optimizer_runner``. Not
+    ``min_cycle_saving``: that is $/kWh charged and is tuned independently."""
+
     min_hold_saving: float = 0.0
     """Minimum saving over ordinary HOLD ($/kWh held) required to select HOLD_STRICT.
 
@@ -905,6 +913,34 @@ class OptimizerResult:
     dw_entry_soc_pct: float | None = None
     """SOC (%) at demand window entry slot. None if no DW."""
 
+    # Negative-FIT avoidance materiality (Issue #1103)
+    negative_fit_spill_cost: float | None = None
+    """Dollars the negative-FIT risk window would cost if nothing were done
+    (unstorable surplus x magnitude of the non-positive sell price). None when
+    the horizon has no risk window before the recovery deadline."""
+
+    negative_fit_spill_exposure: float | None = None
+    """Dollars of window surplus at its non-positive price, ignoring the
+    battery entirely. A property of the forecast alone, so it does not move
+    when the battery pre-discharges; an open window is held against this."""
+
+    negative_fit_spill_threshold: float = 0.0
+    """Dollar threshold the spill cost must reach for avoidance to open
+    (``OptimizerConfig.negative_fit_min_spill_cost``). 0.0 means the gate is
+    disabled."""
+
+    negative_fit_suppressed: bool = False
+    """True when avoidance would otherwise have opened and was dropped only
+    because the spill cost was below the threshold."""
+
+    negative_fit_window_open: bool = False
+    """True when this cycle produced an avoidance context. The coordinator
+    hands it to the next cycle as ``OptimizerInputs.negative_fit_window_open``."""
+
+    negative_fit_held_open: bool = False
+    """True when the spill cost was below the threshold and the window stayed
+    open only because it was already open and the forecast is still material."""
+
 
 # -----------------------------------------------------------------------------
 # Negative FIT avoidance context
@@ -989,3 +1025,10 @@ class OptimizerInputs:
 
     solar_accuracy_tracker: SolarAccuracyTracker | None = None
     """Tracker for forecast accuracy to apply discount to terminal cost (Issue #785)."""
+
+    negative_fit_window_open: bool = False
+    """The previous cycle ended with a negative-FIT avoidance window open
+    (Issue #1103). An open window is not re-tested against the spill the
+    battery would see now, because that figure falls as the window's own
+    pre-discharge makes room; it is held until the forecast stops being
+    material. See ``negative_fit.assess_negative_fit_avoidance``."""

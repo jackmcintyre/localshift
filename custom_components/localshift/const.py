@@ -754,6 +754,20 @@ NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR: Final[float] = 0.8
 # demand window while running negative-FIT avoidance.
 NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH: Final[float] = 0.02
 
+# Issue #1103: dollars of spill a negative-FIT window must cost, over the whole
+# window, before avoidance opens. Deliberately its own figure and not
+# ``min_cycle_saving``: that slider is $/kWh for the grid-charge gate and gets
+# tuned (including to 0) for reasons that have nothing to do with this.
+NEGATIVE_FIT_MIN_SPILL_COST: Final[float] = 0.25
+
+# Once a window is open it stays open until the forecast's own exposure (every
+# kWh of window surplus at its non-positive price, ignoring where the battery
+# is) falls below this fraction of the threshold. Exposure does not move when
+# the battery pre-discharges, so the plan cannot close its own window, and the
+# gap between the two levels stops a forecast revision of a few hundredths of a
+# cent flipping the plan on consecutive cycles.
+NEGATIVE_FIT_SPILL_RELEASE_FRACTION: Final[float] = 0.5
+
 # -----------------------------------------------------------------------------
 # Terminal Salvage Value Constants (Issue #811)
 # -----------------------------------------------------------------------------

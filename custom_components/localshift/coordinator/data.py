@@ -663,6 +663,13 @@ class CoordinatorData:
     ``coordinator.async_recompute_and_evaluate`` can never force a charge. Default
     False so any path that forgets to set it stays inert."""
 
+    negative_fit_window_open: bool = False
+    """The last successful primary solve ended with a negative-FIT avoidance
+    window open (Issue #1103). Read back into the next cycle's
+    ``OptimizerInputs`` so the materiality gate judges an open window on the
+    forecast and not on the SOC its own pre-discharge produced. In memory only:
+    a restart starts closed and the gate re-tests from cold."""
+
     optimizer_precharge_backstop_active: bool = False
     """True while the pre-charge execution backstop is force-committing BOOST_CHARGING
     this cycle. Surfaced on the optimizer summary sensor."""
