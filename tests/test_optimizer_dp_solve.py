@@ -897,7 +897,6 @@ def test_dp_planner_states_explored():
 
 def test_classify_reason_target_shortfall_uses_future_slots():
     """Grid charging before DW should be tagged shortfall risk when net future solar is insufficient."""
-    DPPlanner()
     config = OptimizerConfig(
         battery_capacity_kwh=13.5, demand_window_target_soc_pct=80.0
     )
@@ -953,7 +952,6 @@ def test_classify_reason_cheap_import_when_target_can_be_met():
     Uses a very cheap price (≤ effective_cheap_price * 0.8) so the blind-horizon guard
     still allows the CHEAP_IMPORT_WINDOW classification (only 3 slots — horizon is short).
     """
-    DPPlanner()
     config = OptimizerConfig(
         battery_capacity_kwh=13.5, demand_window_target_soc_pct=80.0
     )
@@ -2486,7 +2484,6 @@ def test_interpolate_cost_to_soc_linear():
 
 def test_classify_export_reason_negative_fit():
     """Line 1484: EXPORT with sell_price <= 0 returns NEGATIVE_FIT_AVOIDANCE."""
-    DPPlanner()
     slot = SlotContext(
         slot_index=0,
         timestamp_iso="2026-01-03T10:00:00",
@@ -2502,7 +2499,6 @@ def test_classify_export_reason_negative_fit():
 
 def test_classify_charge_reason_solar_opportunity_wait():
     """Line 1523: CHARGE with solar_opportunity_penalty > 0 returns SOLAR_OPPORTUNITY_WAIT."""
-    DPPlanner()
     slot = SlotContext(
         slot_index=0,
         timestamp_iso="2026-01-03T10:00:00",
@@ -2538,7 +2534,6 @@ def test_classify_charge_reason_solar_opportunity_wait():
 
 def test_is_target_shortfall_risk_no_deficit():
     """Line 1543: Returns False when soc >= target (no deficit)."""
-    DPPlanner()
     slots = [
         _make_slot(slot_index=i, solar_kwh=0.0, consumption_kwh=0.3) for i in range(4)
     ]
@@ -2555,7 +2550,6 @@ def test_is_target_shortfall_risk_no_deficit():
 
 def test_is_target_shortfall_risk_with_solcast():
     """Lines 1555-1569: Solcast gain added when inputs.all_solcast present."""
-    DPPlanner()
     slots = [
         SlotContext(
             slot_index=i,
@@ -2596,7 +2590,6 @@ def test_is_target_shortfall_risk_with_solcast():
 
 def test_is_cheap_import_window_expensive_price():
     """Line 1596: Returns False when buy_price > effective_cheap_price."""
-    DPPlanner()
     slot = SlotContext(
         slot_index=0,
         timestamp_iso="2026-01-03T10:00:00",
@@ -2768,7 +2761,6 @@ def test_projected_solcast_gain_pct():
 
 def test_futile_cycling_battery_at_floor():
     """Line 1334: Futile cycling breaks when battery_used <= 0 (SOC at floor)."""
-    DPPlanner()
     slots = [
         _make_slot(slot_index=i, solar_kwh=0.0, consumption_kwh=1.0) for i in range(10)
     ]

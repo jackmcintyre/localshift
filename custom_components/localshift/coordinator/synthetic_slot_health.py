@@ -141,6 +141,16 @@ class SyntheticSlotHealth:
         return len(self.samples)
 
     @property
+    def last_sample_at(self) -> datetime | None:
+        """When the newest sample in the window was recorded, or None if empty.
+
+        Issue #996: the window is only pruned and the hysteresis only
+        re-evaluated inside :meth:`record`, so when sampling stops every other
+        field here freezes. This is what lets a reader see that it has.
+        """
+        return self.samples[-1][0] if self.samples else None
+
+    @property
     def needs_startup_warning(self) -> bool:
         """True once startup has run long enough without ever seeing a real slot."""
         return (
@@ -151,10 +161,12 @@ class SyntheticSlotHealth:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the tracker's current state for a sensor attribute."""
+        last = self.last_sample_at
         return {
             "rate": round(self.rate, 3),
             "degraded": self.degraded,
             "sample_count": self.sample_count,
             "consecutive_above": self.consecutive_above,
             "consecutive_below": self.consecutive_below,
+            "last_sample_at": last.isoformat() if last is not None else None,
         }

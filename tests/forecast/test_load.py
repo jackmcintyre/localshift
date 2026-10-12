@@ -7,6 +7,7 @@ import pytest
 from custom_components.localshift.const import (
     DEFAULT_LOAD_DECAY_FACTOR,
     DEFAULT_LOAD_INITIAL_WEIGHT,
+    HISTORY_WINDOW_DAYS,
     LOAD_FORECAST_CEILING_FACTOR,
     MIN_AWAY_SAMPLES_PER_HOUR,
     MIN_SAMPLES_PER_AGGREGATE_HOUR,
@@ -838,12 +839,12 @@ class TestPerDayOfWeekProfiles:
         assert kw == 3.0
 
     def test_aggregate_below_threshold_falls_back_to_global_average(self):
-        """3 day samples and 7 aggregate samples -> the global average rung."""
+        """Both buckets one sample short -> the global average rung."""
         forecaster = _create_load_forecaster()
         forecaster.set_daily_profiles(
             self._profiles(
                 daily_avg={2: {11: 2.0}},
-                daily_counts={2: {11: 3}},
+                daily_counts={2: {11: MIN_SAMPLES_PER_DAY_HOUR - 1}},
                 weekday_avg={11: 1.2},
                 weekday_counts={11: MIN_SAMPLES_PER_AGGREGATE_HOUR - 1},
             )
@@ -1075,9 +1076,9 @@ class TestPerDayOfWeekProfiles:
             self._profiles(
                 # Both rungs thin at the peak hour -> falls through to global.
                 daily_avg={5: {18: 4.0}},
-                daily_counts={5: {18: 3}},  # < MIN_SAMPLES_PER_DAY_HOUR (4)
+                daily_counts={5: {18: MIN_SAMPLES_PER_DAY_HOUR - 1}},
                 weekend_avg={18: 4.0},
-                weekend_counts={18: 7},  # < MIN_SAMPLES_PER_AGGREGATE_HOUR (8)
+                weekend_counts={18: MIN_SAMPLES_PER_AGGREGATE_HOUR - 1},
             )
         )
         combined = _full_profile(0.5)
@@ -1213,68 +1214,6 @@ class TestPerDayOfWeekProfiles:
             abs=0.001,
         )
 
-    def test_profile_bucket_counts_exposed_for_diagnostics(self):
-        """The forecaster tallies which rung won, per bucket tag."""
-        forecaster = _create_load_forecaster()
-        forecaster.set_daily_profiles(
-            self._profiles(
-                daily_avg={2: {11: 2.0, 12: 2.0}},
-                daily_counts={2: {11: MIN_SAMPLES_PER_DAY_HOUR, 12: 1}},
-                weekday_avg={12: 1.2},
-                weekday_counts={12: MIN_SAMPLES_PER_AGGREGATE_HOUR},
-            )
-        )
-
-        base = dict(
-            hourly_avg_kw=_full_profile(0.5),
-            current_hour=11,
-            current_load_kw=0.0,
-            recent_load_kw=0.0,
-            day_of_week=2,
-        )
-        forecaster.estimate_hourly_consumption_kw(slot_hour=11, **base)
-        forecaster.estimate_hourly_consumption_kw(slot_hour=12, **base)
-
-        counts = forecaster.get_profile_bucket_counts()
-        # Issue #1008: the exact tally. Hour 11 wins on the day bucket, hour 12
-        # (one day sample, too few) falls to the weekday aggregate, and the
-        # other 22 hours backfill from the global average -- whose tag is
-        # "global_avg", so a bare '"global" not in counts' could never fail.
-        assert counts == {
-            "day_2": 1,
-            "aggregate_weekday": 1,
-            "global_avg": 22,
-        }
-
-    def test_profile_bucket_counts_reset_each_call(self):
-        """Counts describe the most recent estimate call, not a cumulative total."""
-        forecaster = _create_load_forecaster()
-        forecaster.set_daily_profiles(
-            self._profiles(
-                daily_avg={2: {11: 2.0}},
-                daily_counts={2: {11: MIN_SAMPLES_PER_DAY_HOUR}},
-            )
-        )
-
-        base = dict(
-            hourly_avg_kw=_full_profile(0.5),
-            slot_hour=11,
-            current_hour=11,
-            current_load_kw=0.0,
-            recent_load_kw=0.0,
-            day_of_week=2,
-        )
-        forecaster.estimate_hourly_consumption_kw(**base)
-        forecaster.estimate_hourly_consumption_kw(**base)
-
-        # Hour 11 resolves via the day bucket; the other 23 hours of the day
-        # have no day-specific or aggregate data at all, so they backfill
-        # from the global average (_full_profile covers all 24 hours).
-        assert forecaster.get_profile_bucket_counts() == {
-            "day_2": 1,
-            "global_avg": 23,
-        }
-
     def test_context_correction_still_applies_after_profile_resolution(self):
         """Ordering is unchanged: profile -> weather -> bias -> context correction."""
         forecaster = _create_load_forecaster()
@@ -1327,6 +1266,73 @@ class TestPerDayOfWeekProfiles:
 
         assert source == "profile_hour"
         assert kw == 0.5
+
+
+class TestHistoryThresholdHeadroom:
+    """Issue #1006: one missing recorder row must not change an hour's rung.
+
+    With hourly statistics, a ``HISTORY_WINDOW_DAYS`` window holds at most
+    ``HISTORY_WINDOW_DAYS // 7`` samples per (day_of_week, hour) cell and
+    twice that per weekend-aggregate hour. Thresholds equal to those ceilings
+    meant a single dropped row (restart, sensor dropout, DST gap, an away
+    hour) silently moved the hour to a coarser rung.
+    """
+
+    _WEEKS = HISTORY_WINDOW_DAYS // 7
+
+    def test_thresholds_sit_below_the_window_ceiling(self):
+        assert self._WEEKS - 1 >= MIN_SAMPLES_PER_DAY_HOUR
+        assert 2 * self._WEEKS - 1 >= MIN_SAMPLES_PER_AGGREGATE_HOUR
+
+    def test_one_missing_row_keeps_the_day_rung(self):
+        forecaster = _create_load_forecaster()
+        forecaster.set_daily_profiles(
+            LoadProfiles(
+                daily_avg={5: {18: 2.0}},
+                daily_counts={5: {18: self._WEEKS - 1}},
+                weekday_avg={},
+                weekday_counts={},
+                weekend_avg={18: 3.0},
+                weekend_counts={18: 2 * self._WEEKS - 1},
+            )
+        )
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(0.5),
+            slot_hour=18,
+            current_hour=None,
+            current_load_kw=0.0,
+            day_of_week=5,
+        )
+
+        assert source.endswith(":day_5")
+        assert kw == 2.0
+
+    def test_one_missing_row_keeps_the_weekend_aggregate_rung(self):
+        """Saturday bucket genuinely thin; the weekend aggregate is one row
+        short of a full window and must still win over the combined average."""
+        forecaster = _create_load_forecaster()
+        forecaster.set_daily_profiles(
+            LoadProfiles(
+                daily_avg={5: {18: 2.0}},
+                daily_counts={5: {18: 1}},
+                weekday_avg={},
+                weekday_counts={},
+                weekend_avg={18: 3.0},
+                weekend_counts={18: 2 * self._WEEKS - 1},
+            )
+        )
+
+        kw, source = forecaster.estimate_hourly_consumption_kw(
+            hourly_avg_kw=_full_profile(0.5),
+            slot_hour=18,
+            current_hour=None,
+            current_load_kw=0.0,
+            day_of_week=5,
+        )
+
+        assert source.endswith(":aggregate_weekend")
+        assert kw == 3.0
 
 
 class TestAwayModeProfile:

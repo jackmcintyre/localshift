@@ -58,6 +58,10 @@ async def _async_options_updated(
     platform code must not also call coordinator.async_recompute_and_evaluate()
     after persisting an option, or the decision fingerprint gets invalidated
     twice per write. Do not re-add a platform-side call here.
+
+    One deliberate platform-side call remains (issue #1029): BatteryModeSelect's
+    "automatic" branch recomputes itself only when the persist changed nothing,
+    because HA does not fire this listener for an unchanged entry.
     """
     coordinator: LocalShiftCoordinator = entry.runtime_data
     # Reschedule daily summary timer in case demand_window_end changed

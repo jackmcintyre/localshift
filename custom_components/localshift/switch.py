@@ -105,7 +105,10 @@ class LocalShiftSwitch(SwitchEntity):
         self._attr_unique_id = f"localshift_{key}"
         self._attr_name = SWITCH_NAMES[key]
         self._attr_icon = SWITCH_ICONS[key]
-        self._attr_entity_category = SWITCH_CATEGORIES.get(key)
+        # Issue #1002: indexed, not .get() -- a key added to SWITCH_KEYS without
+        # a SWITCH_CATEGORIES entry must fail here (as SWITCH_NAMES and
+        # SWITCH_ICONS already do) rather than silently ship uncategorised.
+        self._attr_entity_category = SWITCH_CATEGORIES[key]
 
         # Seed the coordinator's switch state bridge from the persisted
         # option, or the default

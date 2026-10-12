@@ -42,10 +42,15 @@ All of the above release automatically, within one cycle, when the away entity t
 ## Entity Categories
 
 Issue #787: every entity's Home Assistant `entity_category`, kept in sync with
-the integration's code by `tests/test_entity_category.py` — that test fails
-if an entity is added, removed, or recategorised here without a matching code
-change, or vice versa. Regenerate this table with
+the integration's code by `tests/test_entity_category.py`. That test fails
+when this table and the code disagree: an entity added, removed, recategorised
+or moved to another platform on one side only. Regenerate this table with
 `uv run python scripts/dump_entity_categories.py` after any entity change.
+
+The test checks that the table matches the code, not that a category is the
+right one. Changing a category in code and regenerating the table passes, so a
+green suite does not mean anyone reviewed the choice. The review happens on the
+diff to this table in the pull request.
 
 `config` entities appear under the device's Configuration section (and are
 excluded from auto-generated dashboards and default Assist exposure);
@@ -429,6 +434,15 @@ samples, or by the flat overnight floor until then.
 `weather_away_masked_hours` is the away-hour count masked out of the separate
 weather-correlation learning window (item 3).
 
+`load_forecast_profile_rungs` (Issue #1006) names, for each hour in the latest
+load forecast, which historical profile fed it — e.g.
+`{"Fri 23:00": "day_4", "Sat 00:00": "aggregate_weekend"}`. `day_N` is that
+day-of-week's own profile (Mon=0), `aggregate_weekday` / `aggregate_weekend`
+the pooled fallback, `global_avg` the all-days average, and
+`away_profile` / `away_floor` the empty-house forecast. An hour drops a rung
+when its bucket has too few samples in the 28-day window (3 for a day bucket,
+6 for an aggregate); the log line `Load profile rungs` records each change.
+
 ---
 
 ### 12. sensor.localshift_target_soc_minimum
@@ -565,7 +579,7 @@ Attributes:
   last_check: 2026-02-26T09:08:34+11:00
   synthetic_slot_rate: 0.0
   synthetic_slot_degraded: false
-  synthetic_slot_health: {rate: 0.0, degraded: false, sample_count: 12, consecutive_above: 0, consecutive_below: 12}
+  synthetic_slot_health: {rate: 0.0, degraded: false, sample_count: 12, consecutive_above: 0, consecutive_below: 12, last_sample_at: 2026-02-26T09:08:10+11:00}
 ```
 
 **Synthetic slot-0 rate (Issue #956):** `engine/slot_schedule.py` prices slot 0
@@ -585,12 +599,19 @@ optimizer evaluation records whether slot 0 was synthetic onto a rolling
   once the rate drops back below 0.5 for 3 consecutive evaluations. Streaks
   count evaluations, not wall-clock time.
 - `synthetic_slot_health` — the tracker's full state (`rate`, `degraded`,
-  `sample_count`, `consecutive_above`, `consecutive_below`), for diagnostics.
-  Not recorded to history (`_unrecorded_attributes`).
+  `sample_count`, `consecutive_above`, `consecutive_below`, `last_sample_at`),
+  for diagnostics. Not recorded to history (`_unrecorded_attributes`).
+  The window is only aged when a new evaluation is recorded, so if
+  evaluations stop the rate, count and `degraded` flag freeze at their last
+  values; `last_sample_at` (#996) is the time of the newest sample, and a
+  value more than a few minutes old means the rest is stale.
 
 While `synthetic_slot_degraded` is `true`, `state` escalates from `ok` to
-`degraded` (never downgrading an existing `error`) and `message` names the
-rate and the configured forecast entity to check. If the configured forecast
+`degraded` (never downgrading an existing `error`) and `message` reads
+"no price forecast entry covered the current interval in N% of the last
+hour's evaluations", naming the configured forecast entity to check. It
+describes missing coverage rather than synthetic pricing because the count
+also includes evaluations where no slots were built at all (#998). If the configured forecast
 source has *never* produced an entry covering "now" since startup, a single
 loud `WARNING` fires once, naming that entity, independently of the rolling
 rate. This also covers the total-outage case where the configured source
@@ -672,12 +693,15 @@ Attributes:
   decision_timestamp: "2026-02-26T09:05:00"
   implementation_timestamp: "2026-02-26T09:05:45"
   boundary_lag_seconds: 23.4
+  boundary_lag_grant_source: price
   boundary_lag_history: [...last 20 boundary-lag measurements, tagged by grant_source...]
   anticipated_transitions_today: 0
   anticipation_corrections_today: 0
 ```
 
 Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_lag_history`: how far into its 5-minute price interval each transition landed, tagged by `grant_source` (`price`, `spike`, `demand_window`, `soc_floor`, `plan_charge`, `price_confirmed`, `debounce`, `retry`, `backstop`, `unknown`). `debounce` and `retry` (#941) mark a transition that did not land on a fresh price grant — a debounce timer completing, or a retry of a command the controller rejected or the entity validator blocked — and should be excluded from the Amber-latency baseline the same way `backstop` is. Each boundary-lag history entry's `from_mode` (#940) is the previously *commanded* mode, not the transition's own target (`data.active_mode`, which always equals the target); the `from_mode` field of the `history` entries above means the same thing (#967), so both rings agree on its meaning. Internally the boundary-lag ring is partitioned per `grant_source` (200 entries each, #942/#990 — enough per-source samples for #510 slice 3's Amber-latency tail estimate) so a backstop correction burst can never evict the price-tagged samples; the attribute is still the last 20 entries overall, flattened from that per-source ring into one chronologically ordered list. `anticipated_transitions_today` / `anticipation_corrections_today` are declared here and daily-reset but stay at 0 until a later slice implements the anticipatory logic they count. No new entity — these are attributes on this existing sensor.
+
+`history` and `boundary_lag_history` are excluded from the recorder (#945): they are on the live state but not in the entity's stored history. The scalar attributes are still recorded, including `boundary_lag_seconds` and `boundary_lag_grant_source` (the `grant_source` of the latest boundary-lag measurement). Recorded together, those two let the per-source lag distribution be rebuilt from recorder history after a restart, which the in-memory ring does not survive.
 
 ---
 
@@ -926,6 +950,16 @@ Attributes:
   - `buy_estimate`, `sell_estimate` - Amber's `estimate` flag for that entry: true until the interval's price is confirmed, null when the source carries none
   - `export_start_deferred` - true when an unconfirmed sell price kept the current slot from starting an export (first 90 s of the interval; an export already running is not interrupted). If a mode decision was taken while this was true, one further decision, able only to start the export, is granted once it clears
   - `live_buy`, `live_sell` - the price sensors' own states, for comparison
+- `spike_export` - Whether the current slot counted as a genuine price spike, and what it was judged against (Issue #1120):
+  - `enabled` - the state of `switch.localshift_spike_discharge_enabled`. When false the rule is off: `disabled_by` names the switch, `admitted`, `exporting` and `skip_debounce` are all false, and the price fields below are absent because nothing was judged
+  - `admitted` - true when the current slot's sell price reached `min_sell`. In `self_consumption` mode this is what lets the planner consider exporting below the same interval's buy price; the planner still decides
+  - `exporting` - true when the slot was admitted and the plan's current action is export
+  - `sell` - the sell price that was judged ($/kWh)
+  - `later_spike_sell` - the dearest sell price in the rest of the same spike: the unbroken run of slots after the current one whose sell price is at or above `spike_floor`. Null when the next slot is already ordinary. The current slot is not admitted while a later one pays more
+  - `rebuy_price`, `rebuy_at` - the dearest buy price in the next 12 hours of the plan once that run is over, and the slot it falls in: the worst the exported energy could cost to replace
+  - `min_sell` - the sell price needed: the largest of `spike_floor`, `rebuy_price` / round-trip efficiency + `export_price_margin`, and `later_spike_sell`
+  - `spike_floor`, `median_buy` - 4x the horizon's median buy price, and that median
+  - `skip_debounce` - true when `exporting` is true and Amber has confirmed the sell price (`slot0_price.sell_estimate` false). The export start then skips the 2-minute export debounce. An estimate, or a price with no confirmation flag, never sets it
 
 **Icon:** Dynamic (mdi:check-circle-outline for success, mdi:alert-circle-outline for failed, mdi:minus-circle-outline for disabled)
 
@@ -1161,7 +1195,7 @@ State: on
 
 ### 2. switch.localshift_spike_discharge_enabled
 
-**Purpose:** Allow/disallow discharge during price spikes.
+**Purpose:** On/off for automatic spike export (Issue #1120): exporting the current interval on a genuine price spike, and starting that export without the 2-minute debounce.
 
 **Default:** ON
 
@@ -1171,8 +1205,11 @@ State: on
 ```
 
 **Behavior:**
-- ON: Spike discharge allowed when price spike detected
-- OFF: No discharge during spikes (even if spike detected)
+- ON: the current interval can be judged a genuine spike. In `self_consumption` optimisation mode (the default) that is what lets the planner export when the feed-in price is below the same interval's buy price, which on Amber prices is always: the feed-in price must be at least 4x the horizon's median buy price, beat the dearest buy price in the next 12 hours after round-trip losses plus `export_price_margin`, and not be beaten by a later interval of the same spike. A spike that is only forecast is never planned as an export. In either optimisation mode, an export start on such a spike skips the 2-minute export debounce once Amber has confirmed the price.
+- OFF: no interval is ever judged a spike. `self_consumption` mode goes back to the same-interval test alone (feed-in price at least the buy price plus `export_price_margin`), so on Amber prices it holds through a spike. `arbitrage` mode still exports any positive feed-in price, as it always did, but every export start waits out the 2-minute debounce. This is the behaviour from before the spike-export rule existed.
+- Flipping the switch re-runs the planner and grants a fresh mode decision straight away, like any other LocalShift switch or number, so it does not wait for the next price change.
+- `spike_export.enabled` on `sensor.localshift_optimizer_summary` shows the state the planner last ran with.
+- The export itself is the planner's `proactive_export` mode, with the load-sized export floor and reserve leash unchanged. This switch does not control the `spike_discharge` battery mode: automatic operation never selects it, it is only entered by picking it by hand on `select.localshift_battery_mode`, a manual pick ignores this switch, and a manual spike discharge has no price-aware exit (it runs until another mode is picked or the manual override times out).
 
 ---
 

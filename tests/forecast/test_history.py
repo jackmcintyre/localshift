@@ -1184,6 +1184,36 @@ class TestFetchHistoricalDataSyncHappyPath:
             assert "weekend_avg" in result
 
 
+class TestHistoryWindowStart:
+    """Issue #1006: the window must hold a whole number of hourly rows."""
+
+    def test_window_start_is_floored_to_the_hour(self, history_fetcher):
+        """A fetch at 00:01:30 must still include the row that starts 28 days
+        ago at 00:00 — otherwise the current hour's cell for today's
+        day-of-week is structurally one sample short on every fetch."""
+        now = datetime(2026, 10, 10, 0, 1, 30, tzinfo=UTC)
+
+        with (
+            patch.object(
+                history_fetcher, "_import_recorder_statistics", return_value=MagicMock()
+            ),
+            patch.object(history_fetcher, "_list_statistic_ids", return_value=[]),
+            patch.object(
+                history_fetcher, "_resolve_statistic_id", return_value="sensor.test"
+            ),
+            patch.object(
+                history_fetcher, "_get_statistics_fn", return_value=MagicMock()
+            ),
+            patch.object(
+                history_fetcher, "_fetch_statistics_data", return_value={"rows": []}
+            ) as mock_fetch,
+        ):
+            history_fetcher._fetch_historical_data_sync("sensor.test", now)
+
+        start_time = mock_fetch.call_args.args[2]
+        assert start_time == datetime(2026, 9, 12, 0, 0, 0, tzinfo=UTC)
+
+
 class TestAsyncGetHistoricalHourlyAveragesInsufficientData:
     """Tests for insufficient data fallback."""
 

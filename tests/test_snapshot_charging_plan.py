@@ -5,10 +5,17 @@ specifically to read live-looking entity ids — so a missing/renamed entity
 must be caught here rather than silently rendering "unknown" everywhere.
 """
 
-from unittest.mock import MagicMock
+import io
+import urllib.error
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from scripts.snapshot_charging_plan import (
+    HAFetchError,
+    HomeAssistantClient,
     SnapshotGenerator,
+    report_fetch_problems,
     safe_attr,
     safe_state,
 )
@@ -98,6 +105,107 @@ class TestSnapshotGeneratorMissingEntities:
             "sensor.localshift_forecast_daily",
             "sensor.localshift_forecast_grid",
         }
+
+
+def _http_error(code: int, reason: str) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        "http://ha/api/states/x", code, reason, hdrs=None, fp=io.BytesIO(b"")
+    )
+
+
+class TestGetStateSeparatesMissingFromUnreachable:
+    """Issue #1023: only a 404 means the entity is missing."""
+
+    URLOPEN = "scripts.snapshot_charging_plan.urllib.request.urlopen"
+
+    def test_404_is_a_missing_entity(self):
+        client = HomeAssistantClient("http://ha", "token")
+        with patch(self.URLOPEN, side_effect=_http_error(404, "Not Found")):
+            assert client.get_state("sensor.gone") is None
+
+    def test_401_is_a_fetch_failure(self):
+        client = HomeAssistantClient("http://ha", "token")
+        with (
+            patch(self.URLOPEN, side_effect=_http_error(401, "Unauthorized")),
+            pytest.raises(HAFetchError, match="401"),
+        ):
+            client.get_state("sensor.localshift_optimizer_plan")
+
+    def test_network_error_is_a_fetch_failure(self):
+        client = HomeAssistantClient("http://ha", "token")
+        with (
+            patch(self.URLOPEN, side_effect=urllib.error.URLError("timed out")),
+            pytest.raises(HAFetchError, match="timed out"),
+        ):
+            client.get_state("sensor.localshift_optimizer_plan")
+
+    def test_unparseable_reply_is_a_fetch_failure(self):
+        client = HomeAssistantClient("http://ha", "token")
+        with (
+            patch(self.URLOPEN, side_effect=ValueError("bad json")),
+            pytest.raises(HAFetchError, match="bad json"),
+        ):
+            client.get_state("sensor.localshift_optimizer_plan")
+
+    def test_get_states_skips_entities_that_could_not_be_fetched(self):
+        client = HomeAssistantClient("http://ha", "token")
+        with patch(self.URLOPEN, side_effect=urllib.error.URLError("timed out")):
+            assert client.get_states(["sensor.a", "sensor.b"]) == {}
+
+
+class TestSnapshotGeneratorFetchFailures:
+    """Issue #1023: an unreachable HA is not reported as a missing entity."""
+
+    def _generator_with_unreachable_ha(self) -> SnapshotGenerator:
+        client = MagicMock()
+        client.get_state.side_effect = HAFetchError("timed out")
+        return SnapshotGenerator(client)
+
+    def test_fetch_failure_is_not_recorded_as_missing(self):
+        generator = self._generator_with_unreachable_ha()
+
+        assert generator.state("sensor.localshift_optimizer_plan") == "unknown"
+
+        assert generator._missing == set()
+        assert generator._fetch_failed == {
+            "sensor.localshift_optimizer_plan": "timed out"
+        }
+
+    def test_fetch_failure_is_only_attempted_once(self):
+        generator = self._generator_with_unreachable_ha()
+
+        generator.get_entity("sensor.localshift_optimizer_plan")
+        generator.get_entity("sensor.localshift_optimizer_plan")
+
+        assert generator.ha.get_state.call_count == 1
+
+    def test_fetch_failure_exits_2_and_blames_the_connection(self, capsys):
+        generator = self._generator_with_unreachable_ha()
+        generator.get_entity("sensor.localshift_optimizer_plan")
+
+        assert report_fetch_problems(generator) == 2
+
+        err = capsys.readouterr().err
+        assert "connection or auth problem, not a missing entity" in err
+        assert "timed out" in err
+        assert "returned no state" not in err
+
+    def test_missing_entity_still_exits_1(self, capsys):
+        client = MagicMock()
+        client.get_state.return_value = None
+        generator = SnapshotGenerator(client)
+        generator.get_entity("sensor.localshift_does_not_exist")
+
+        assert report_fetch_problems(generator) == 1
+        assert "returned no state" in capsys.readouterr().err
+
+    def test_clean_run_exits_0(self):
+        client = MagicMock()
+        client.get_state.return_value = {"state": "1", "attributes": {}}
+        generator = SnapshotGenerator(client)
+        generator.get_entity("sensor.localshift_optimizer_plan")
+
+        assert report_fetch_problems(generator) == 0
 
 
 class TestForecastInfoUsesRenamedSensors:

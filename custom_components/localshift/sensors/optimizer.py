@@ -165,6 +165,10 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "negative_fit_suppressed": summary.get("negative_fit_suppressed"),
             "negative_fit_window_open": summary.get("negative_fit_window_open"),
             "negative_fit_held_open": summary.get("negative_fit_held_open"),
+            "negative_fit_recovery_solar_factor": summary.get(
+                "negative_fit_recovery_solar_factor"
+            ),
+            "negative_fit_floor_now_pct": summary.get("negative_fit_floor_now_pct"),
             # Projected (above) and actual (below) sit together deliberately. These
             # five read from `d`, not `summary`: the summary is rebuilt every cycle
             # and is empty on a failed cycle — precisely when the real entry SOC
@@ -198,6 +202,9 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             # Issue #1119: the price slot 0 was committed on, its source and
             # Amber's estimate flag, beside the live sensor readings.
             "slot0_price": summary.get("slot0_price") or {},
+            # Issue #1120: whether slot 0 counted as a genuine price spike, the
+            # rebuy price it was judged against and the sell price it needed.
+            "spike_export": summary.get("spike_export") or {},
             "hard_floor_suppressed_by_solar": _resolve_optional(
                 summary, d, "hard_floor_suppressed_by_solar", False
             ),

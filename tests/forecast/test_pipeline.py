@@ -121,6 +121,94 @@ def test_compute_load_forecast_slots_tallies_source_counts():
     assert counts == {"statistics": 3, "blended_live": 3, "weather_heating": 3}
 
 
+class _RungLoadForecaster:
+    """Tags each slot's source with a rung chosen by (day_of_week, hour)."""
+
+    def __init__(self, rungs: dict[tuple[int, int], str]) -> None:
+        self.rungs = rungs
+
+    def estimate_hourly_consumption_kw(self, **kwargs):
+        rung = self.rungs.get((kwargs["day_of_week"], kwargs["slot_hour"]))
+        return 1.0, f"profile_hour:{rung}" if rung else "profile_hour"
+
+    def reset_weather_adjustment_applied(self) -> None:
+        pass
+
+    def get_weather_adjustment_applied(self) -> bool:
+        return False
+
+
+def _rung_pipeline(forecaster) -> ForecastPipeline:
+    return ForecastPipeline(
+        load_forecaster=forecaster,
+        price_signals=_StubPriceSignals(),
+        forecast_history_store=_StubForecastHistoryStore(),
+        get_switch_state=lambda _key: False,
+        excess_solar_signals=MagicMock(),
+    )
+
+
+def _run_rung_forecast(pipeline, now_dt, total_slots=12) -> CoordinatorData:
+    data = CoordinatorData()
+    data.weather_temperature_forecast = {}
+    pipeline.compute_load_forecast_slots(
+        data=data,
+        now_dt=now_dt,
+        historical_avg_kw={10: 0.5},
+        recent_load_kw=0.5,
+        total_slots=total_slots,
+    )
+    return data
+
+
+def test_load_forecast_records_profile_rung_per_hour():
+    """Issue #1006: every forecast run records which rung fed each hour."""
+    # Friday 2026-10-09 22:00 -> three hours: Fri 22, Fri 23, Sat 00.
+    forecaster = _RungLoadForecaster({(4, 22): "day_4", (4, 23): "aggregate_weekday"})
+    data = _run_rung_forecast(
+        _rung_pipeline(forecaster), datetime(2026, 10, 9, 22, 0, tzinfo=UTC)
+    )
+
+    assert data.load_forecast_profile_rungs == {
+        "Fri 22:00": "day_4",
+        "Fri 23:00": "aggregate_weekday",
+        "Sat 00:00": "global_avg",
+    }
+
+
+def test_load_forecast_rung_trace_logged_once_until_it_changes(caplog):
+    """The trace is logged at INFO when the fallback hours change, not every run."""
+    forecaster = _RungLoadForecaster({
+        (4, 22): "day_4",
+        (4, 23): "day_4",
+        (5, 0): "day_5",
+    })
+    pipeline = _rung_pipeline(forecaster)
+    now_dt = datetime(2026, 10, 9, 22, 0, tzinfo=UTC)
+
+    def rung_lines() -> list[str]:
+        return [
+            r.getMessage() for r in caplog.records if "profile rungs" in r.getMessage()
+        ]
+
+    with caplog.at_level(
+        "INFO", logger="custom_components.localshift.forecast.pipeline"
+    ):
+        _run_rung_forecast(pipeline, now_dt)
+        _run_rung_forecast(pipeline, now_dt)
+        assert len(rung_lines()) == 1
+        assert "day=3" in rung_lines()[0]
+
+        # One recorder row goes missing: Fri 23:00 drops a rung.
+        forecaster.rungs[(4, 23)] = "aggregate_weekday"
+        _run_rung_forecast(pipeline, now_dt)
+        _run_rung_forecast(pipeline, now_dt)
+
+    assert len(rung_lines()) == 2
+    assert "aggregate_weekday=1" in rung_lines()[1]
+    assert "Fri 23:00=aggregate_weekday" in rung_lines()[1]
+
+
 def test_compute_load_forecast_slots_passes_context():
     data = CoordinatorData()
     data.weather_temperature_forecast = {}

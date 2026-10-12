@@ -29,6 +29,7 @@ from .const import (
     CONF_OPTIMIZATION_MODE,
     CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
     CONF_PRICING_DATA_SOURCE,
+    CONF_SPIKE_EXPORT_ENABLED,
     CONF_STALE_SOLAR_CONFIDENCE_CEILING,
     CONF_STALE_SOLAR_CONSERVATIVE,
     CONF_SWITCHING_PENALTY,
@@ -59,6 +60,7 @@ from .const import (
     DEFAULT_TARGET_PENALTY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
+    SWITCH_SPIKE_DISCHARGE_ENABLED,
     SWITCH_STALE_SOLAR_CONSERVATIVE,
 )
 from .const import (
@@ -931,6 +933,13 @@ class ComputationEngine:
             CONF_STALE_SOLAR_CONFIDENCE_CEILING: self.entry.options.get(
                 CONF_STALE_SOLAR_CONFIDENCE_CEILING,
                 DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
+            ),
+            # Issue #1120: switch.localshift_spike_discharge_enabled is the kill
+            # switch for spike export. It had no reader at all until this line;
+            # without it the planner keeps its default (enabled) whatever the
+            # switch says.
+            CONF_SPIKE_EXPORT_ENABLED: self._get_switch_state(
+                SWITCH_SPIKE_DISCHARGE_ENABLED
             ),
             CONF_OPTIMIZATION_MODE: self.entry.options.get(
                 CONF_OPTIMIZATION_MODE, DEFAULT_OPTIMIZATION_MODE

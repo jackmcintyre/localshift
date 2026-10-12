@@ -267,6 +267,9 @@ class ForecastDiagnosticsSensor(LocalShiftSensorBase):
             "consumption_source": self.coordinator.data.consumption_source,
             "consumption_profile_hours": self.coordinator.data.consumption_profile_hours,
             "forecast_consumption_source_counts": dict(source_counts),
+            "load_forecast_profile_rungs": dict(
+                self.coordinator.data.load_forecast_profile_rungs
+            ),
             "consumption_hourly_sample_counts": {
                 str(hour): count for hour, count in sorted(sample_counts.items())
             },

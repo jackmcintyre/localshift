@@ -20,18 +20,19 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from homeassistant.util import slugify  # noqa: E402
+# The entity_id derivation lives in ONE place, shared with the anti-drift
+# tests, so this script and tests/test_referenced_entities_exist.py cannot
+# disagree about what Home Assistant names an entity (issue #1022).
+from tests.helpers.entity_ids import (  # noqa: E402
+    PLATFORM_MODULES,
+    derive_entity_id,
+)
 
-DEVICE_NAME = "LocalShift"
 
-PLATFORM_MODULES = [
-    ("switch", "switch"),
-    ("select", "select"),
-    ("sensor", "sensor"),
-    ("binary_sensor", "binary_sensor"),
-    ("number", "number"),
-    ("button", "button"),
-]
+def _category_of(entity):
+    """Read a category the way Home Assistant does (Issue #1000): the public
+    property, which also covers one declared through an entity_description."""
+    return entity.entity_category
 
 
 async def _collect() -> list[tuple[str, str, str, str]]:
@@ -56,14 +57,10 @@ async def _collect() -> list[tuple[str, str, str, str]]:
 
         for entity in entities:
             unique_id = entity._attr_unique_id
-            category = getattr(entity, "_attr_entity_category", None)
+            category = _category_of(entity)
             category_str = category.value if category is not None else "—"
             name = getattr(entity, "_attr_name", None)
-            entity_id = (
-                f"{platform}.{slugify(f'{DEVICE_NAME} {name}')}"
-                if name
-                else f"{platform}.{unique_id}"
-            )
+            entity_id = derive_entity_id(platform, unique_id, name)
             rows.append((entity_id, unique_id, platform, category_str))
 
     rows.sort(key=lambda r: (r[2], r[1]))
