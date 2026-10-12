@@ -306,8 +306,15 @@ class OptimizerFacade:
                 ),
                 solar_absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
                 solar_accuracy_tracker=self._solar_accuracy_tracker,
+                negative_fit_window_open=data.negative_fit_window_open,
             )
             result = self._planner.plan(inputs)
+
+            # Issue #1103: carry the window's open/closed state to the next
+            # cycle. A failed solve says nothing about the window, so it leaves
+            # the carried state alone.
+            if result.success:
+                data.negative_fit_window_open = result.negative_fit_window_open
 
             self._write_optimizer_fields(
                 data,
@@ -1306,6 +1313,9 @@ class OptimizerFacade:
                     data, "solcast_analysis_tomorrow", None
                 ),
                 solar_absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
+                # Same carried state as the primary solve, so the comparison is
+                # like for like. The shadow run never writes it back.
+                negative_fit_window_open=data.negative_fit_window_open,
             )
             result = self._planner.plan(inputs)
 

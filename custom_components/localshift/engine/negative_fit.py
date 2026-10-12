@@ -28,13 +28,24 @@ class NegativeFitAssessment:
     that cannot be stored, times the magnitude of the non-positive sell price.
     None when the horizon has no risk window to cost."""
 
+    spill_exposure: float | None = None
+    """Dollars of window surplus at its non-positive price with the battery
+    left out of it altogether. Depends on the forecast alone, so it is what an
+    already-open window is held against. None when there is no risk window."""
+
     spill_threshold: float = 0.0
-    """Dollar threshold the spill cost must reach (``min_cycle_saving``).
-    0.0 means the gate is disabled."""
+    """Dollar threshold the spill cost must reach
+    (``OptimizerConfig.negative_fit_min_spill_cost``). 0.0 means the gate is
+    disabled."""
 
     suppressed: bool = False
     """True when a context would have been created and the materiality gate
     alone removed it."""
+
+    held_open: bool = False
+    """True when the spill cost is below the threshold and the context exists
+    only because the window was already open and the forecast is still
+    material."""
 
 
 def find_risk_window(
@@ -141,15 +152,58 @@ def compute_spill_cost(
     return spill_cost
 
 
-def _spill_cost_is_immaterial(spill_cost: float, threshold: float) -> bool:
-    """True when the window is not worth cycling the battery for.
+def compute_spill_exposure(
+    slots: list, risk_start_idx: int, risk_end_idx: int
+) -> float:
+    """Dollars of surplus the risk window carries at non-positive prices.
 
-    ``threshold`` is ``min_cycle_saving`` read as dollars for the whole window:
-    the same "not worth cycling the battery for less than this" judgement the
-    grid-charge gate makes, without a second knob. 0 disables the gate, as it
-    does there.
+    ``compute_spill_cost`` with the battery taken out: every kWh of net surplus
+    in a non-positive slot, at that slot's price, whether or not there would be
+    room to store it. It is therefore an upper bound on the spill cost, and it
+    is a property of the forecast alone — exporting the battery does not change
+    it. That is what makes it the right measure for an open window, where the
+    spill cost has already been driven down by the exports the gate approved.
     """
-    return threshold > 0.0 and spill_cost < threshold
+    exposure = 0.0
+    for idx in range(risk_start_idx, min(risk_end_idx, len(slots) - 1) + 1):
+        slot = slots[idx]
+        net_kwh = slot.solar_kwh - slot.consumption_kwh
+        if net_kwh > 0.0 and slot.sell_price <= 0:
+            exposure += net_kwh * -slot.sell_price
+    return exposure
+
+
+def _materiality(
+    spill_cost: float,
+    spill_exposure: float,
+    threshold: float,
+    window_open: bool,
+) -> tuple[bool, bool]:
+    """Decide the materiality gate. Returns ``(suppressed, held_open)``.
+
+    ``threshold`` is dollars for the whole window
+    (``OptimizerConfig.negative_fit_min_spill_cost``); 0 disables the gate.
+
+    A window opens when the spill it would cost reaches the threshold. That
+    figure cannot also decide when it closes: it is costed from the present SOC,
+    and the first thing an open window does is export the battery, so the cost
+    falls under the threshold because of the plan the gate just approved and
+    the rest of that plan is dropped. An open window is therefore held against
+    the forecast's exposure instead, which the battery cannot move, and against
+    a lower level, so a revision of a fraction of a cent across the threshold
+    does not flip the plan either. It still closes when the negative prices are
+    revised away, and near the end of a window once what is left is small.
+    """
+    from custom_components.localshift.const import (
+        NEGATIVE_FIT_SPILL_RELEASE_FRACTION,
+    )
+
+    if threshold <= 0.0 or spill_cost >= threshold:
+        return False, False
+    release = threshold * NEGATIVE_FIT_SPILL_RELEASE_FRACTION
+    if window_open and spill_exposure >= release:
+        return False, True
+    return True, False
 
 
 def compute_recovery_by_slot(
@@ -262,14 +316,16 @@ def assess_negative_fit_avoidance(inputs: OptimizerInputs) -> NegativeFitAssessm
     - No positive-FIT slot to sell into at or before the window ends
     - No recovery path to target (cannot safely pre-discharge)
     - Projected load drain already leaves room to absorb the spill
-    - The spill the window would cost is below ``min_cycle_saving`` dollars
-      (Issue #1103) — the one case reported as ``suppressed``
+    - The spill the window would cost is below
+      ``config.negative_fit_min_spill_cost`` dollars and the window is not
+      already open on a still-material forecast (Issue #1103) — the one case
+      reported as ``suppressed``
     """
     slots = inputs.slots
     config = inputs.config
     battery_capacity_kwh = config.battery_capacity_kwh
     n_slots = len(slots)
-    spill_threshold = max(0.0, config.min_cycle_saving)
+    spill_threshold = max(0.0, config.negative_fit_min_spill_cost)
     none = NegativeFitAssessment(spill_threshold=spill_threshold)
 
     if n_slots == 0:
@@ -291,7 +347,12 @@ def assess_negative_fit_avoidance(inputs: OptimizerInputs) -> NegativeFitAssessm
     spill_cost = compute_spill_cost(
         slots, risk_start_idx, risk_end_idx, inputs.initial_soc_pct, config
     )
-    none = NegativeFitAssessment(spill_cost=spill_cost, spill_threshold=spill_threshold)
+    spill_exposure = compute_spill_exposure(slots, risk_start_idx, risk_end_idx)
+    none = NegativeFitAssessment(
+        spill_cost=spill_cost,
+        spill_exposure=spill_exposure,
+        spill_threshold=spill_threshold,
+    )
 
     # An export opportunity is any positive-FIT slot at or before the end of the
     # risk window. Requiring one strictly *before* ``risk_start_idx`` made the
@@ -344,9 +405,13 @@ def assess_negative_fit_avoidance(inputs: OptimizerInputs) -> NegativeFitAssessm
     # -0.04c was enough to license exporting the battery all morning at 1-7c.
     # Checked last so ``suppressed`` means exactly "this gate, and only this
     # gate, removed the context".
-    if _spill_cost_is_immaterial(spill_cost, spill_threshold):
+    suppressed, held_open = _materiality(
+        spill_cost, spill_exposure, spill_threshold, inputs.negative_fit_window_open
+    )
+    if suppressed:
         return NegativeFitAssessment(
             spill_cost=spill_cost,
+            spill_exposure=spill_exposure,
             spill_threshold=spill_threshold,
             suppressed=True,
         )
@@ -361,7 +426,9 @@ def assess_negative_fit_avoidance(inputs: OptimizerInputs) -> NegativeFitAssessm
             recoverability_floor_pct_by_slot=tuple(floor_by_slot),
         ),
         spill_cost=spill_cost,
+        spill_exposure=spill_exposure,
         spill_threshold=spill_threshold,
+        held_open=held_open,
     )
 
 

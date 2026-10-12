@@ -778,8 +778,11 @@ class DPPlanner:
             dw_entry_soc_pct=terminal_diags.get("dw_entry_soc_pct"),
             # Issue #1103: why a negative-FIT window did or did not open.
             negative_fit_spill_cost=negative_fit_assessment.spill_cost,
+            negative_fit_spill_exposure=negative_fit_assessment.spill_exposure,
             negative_fit_spill_threshold=negative_fit_assessment.spill_threshold,
             negative_fit_suppressed=negative_fit_assessment.suppressed,
+            negative_fit_window_open=negative_fit_assessment.context is not None,
+            negative_fit_held_open=negative_fit_assessment.held_open,
         )
 
     def _empty_result(self) -> OptimizerResult:

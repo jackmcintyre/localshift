@@ -278,6 +278,7 @@ def _build_optimizer_config(
         DEFAULT_SWITCHING_PENALTY,
         DEFAULT_SWITCHING_PENALTY_PER_KWH,
         DEFAULT_TARGET_PENALTY,
+        NEGATIVE_FIT_MIN_SPILL_COST,
     )
     from custom_components.localshift.state.mode_configs import (
         resolve_away_reserve_pct,
@@ -442,6 +443,8 @@ def _build_optimizer_config(
         # Issue #779: Previously auto-computed from tariff, now user-configurable
         target_shortfall_penalty_per_pct=target_penalty,
         min_cycle_saving=min_cycle_saving,
+        # Issue #1103: a constant, not the slider above. See const.py.
+        negative_fit_min_spill_cost=NEGATIVE_FIT_MIN_SPILL_COST,
         min_hold_saving=min_hold_saving,
         # --- Charge curve (Issue #905: configurable to match hardware) ---
         charge_taper_start_pct=charge_taper_start_pct,
@@ -711,8 +714,14 @@ def _build_summary(
     summary["negative_fit_spill_cost"] = (
         round(spill_cost, 4) if spill_cost is not None else None
     )
+    spill_exposure = result.negative_fit_spill_exposure
+    summary["negative_fit_spill_exposure"] = (
+        round(spill_exposure, 4) if spill_exposure is not None else None
+    )
     summary["negative_fit_spill_threshold"] = result.negative_fit_spill_threshold
     summary["negative_fit_suppressed"] = result.negative_fit_suppressed
+    summary["negative_fit_window_open"] = result.negative_fit_window_open
+    summary["negative_fit_held_open"] = result.negative_fit_held_open
 
     return summary
 
