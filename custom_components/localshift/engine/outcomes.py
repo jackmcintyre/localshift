@@ -803,7 +803,8 @@ class DecisionOutcomeTracker:
               (SOC-delta based) — 0.0 when grid_to_battery < 0.1 kWh.
             - export_loss_ratio: energy exported while the battery had room /
               total energy exported, clamped [0, 1]. 0.0 when total export < 0.1 kWh.
-              This is the value the export-leak gate (Rule 2) reads.
+              Recorded on the outcome only; nothing reads it back to gate
+              a decision.
             - unnecessary_grid_charge_kwh: a conservative lower bound on grid energy
               charged into the battery while also exporting — min(grid_to_battery,
               grid_export) — rounded to 2 dp.

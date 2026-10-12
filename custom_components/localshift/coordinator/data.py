@@ -289,7 +289,8 @@ class CoordinatorData:
 
     # Daily energy accumulators (Issue #868) — real per-minute kWh accounting used
     # to compute grid_charge_efficiency / export_loss_ratio / unnecessary_grid_charge_kwh.
-    # In-memory only (no persistence), matching the daily cost accumulators above.
+    # Snapshotted across a restart with the daily cost accumulators above
+    # (Issue #1102, utils/costs.py DAILY_ACCUMULATOR_FIELDS).
     grid_import_kwh_today: float = 0.0  # Total grid energy imported today
     grid_export_kwh_today: float = 0.0  # Total grid energy exported today
     grid_to_battery_kwh_today: float = 0.0  # Grid energy charged into the battery
