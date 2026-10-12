@@ -151,7 +151,9 @@ class TestBatteryModeSelect:
         mock_coordinator.async_recompute_and_evaluate = AsyncMock()
         mock_hass = MagicMock()
         mock_hass.config_entries = MagicMock()
-        mock_hass.config_entries.async_update_entry = MagicMock()
+        # A real options change: HA returns True and fires the entry update
+        # listener, which owns the recompute (issue #1029).
+        mock_hass.config_entries.async_update_entry = MagicMock(return_value=True)
         select = BatteryModeSelect(mock_coordinator, mock_entry)
         select.hass = mock_hass
         select._attr_entity_id = "select.localshift_battery_mode"
@@ -166,6 +168,25 @@ class TestBatteryModeSelect:
         mock_hass.config_entries.async_update_entry.assert_called_once()
         update_call_kwargs = mock_hass.config_entries.async_update_entry.call_args[1]
         assert update_call_kwargs["options"]["switch_state_automation_enabled"] is True
+        mock_coordinator.async_recompute_and_evaluate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_select_automatic_recomputes_itself_when_options_unchanged(
+        self, mock_coordinator, mock_entry
+    ):
+        """No options change means no update listener, so the select must run
+        the one recompute itself (issue #1029)."""
+        mock_entry.options = {"switch_state_automation_enabled": True}
+        mock_coordinator.async_recompute_and_evaluate = AsyncMock()
+        mock_hass = MagicMock()
+        mock_hass.config_entries.async_update_entry = MagicMock(return_value=False)
+        select = BatteryModeSelect(mock_coordinator, mock_entry)
+        select.hass = mock_hass
+        select._attr_entity_id = "select.localshift_battery_mode"
+
+        with patch.object(select, "async_write_ha_state"):
+            await select.async_select_option("automatic")
+
         mock_coordinator.async_recompute_and_evaluate.assert_awaited_once()
 
     @pytest.mark.asyncio

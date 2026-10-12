@@ -10,8 +10,10 @@ it twice.
 The fix makes the entry update listener (`_async_options_updated` in
 `custom_components/localshift/__init__.py`) the SOLE recompute trigger and
 removes the platform-side calls from number.py, switch.py, and the
-`OptimizationModeSelect` half of select.py (`BatteryModeSelect` is
-deliberately untouched — see the issue #975 implementation plan).
+`OptimizationModeSelect` half of select.py. `BatteryModeSelect`'s hand-back
+to "automatic" was left double-firing by #975 and is covered here since issue
+#1029: the listener owns the recompute whenever the options really change,
+and the select recomputes itself only when they do not (no listener fires).
 
 `FakeConfigEntries` below mirrors the two behaviours of HA's real
 `ConfigEntries.async_update_entry` that matter here: a write that does not
@@ -42,7 +44,10 @@ from custom_components.localshift.const import (
 )
 from custom_components.localshift.coordinator import LocalShiftCoordinator
 from custom_components.localshift.number import LocalShiftNumber
-from custom_components.localshift.select import OptimizationModeSelect
+from custom_components.localshift.select import (
+    BatteryModeSelect,
+    OptimizationModeSelect,
+)
 from custom_components.localshift.switch import LocalShiftSwitch
 
 
@@ -260,8 +265,7 @@ class TestSwitchToggleRecomputeOwnership:
 
 class TestOptimizationModeSelectRecomputeOwnership:
     """select.py: OptimizationModeSelect.async_select_option must not
-    double-fire the recompute. BatteryModeSelect is out of scope for #975
-    (see the implementation plan) and is not touched or tested here."""
+    double-fire the recompute."""
 
     async def test_optimization_mode_select_recomputes_exactly_once(
         self, fake_hass, entry, real_coordinator
@@ -277,6 +281,90 @@ class TestOptimizationModeSelectRecomputeOwnership:
 
         assert real_coordinator._compute_derived_values.call_count == 1
         assert fake_hass.config_entries.dispatched == 1
+        assert (
+            real_coordinator._state_machine.invalidate_decision_fingerprint.call_count
+            == 1
+        )
+
+
+class TestBatteryModeSelectHandBackRecomputeOwnership:
+    """select.py: BatteryModeSelect's hand-back from a manual mode to
+    "automatic" must run exactly one recompute-and-evaluate cycle (issue
+    #1029) — it used to persist the option (listener recompute) AND await the
+    coordinator explicitly (second recompute)."""
+
+    AUTOMATION_OPTION = f"switch_state_{SWITCH_AUTOMATION_ENABLED}"
+
+    def _make_select(self, fake_hass, entry, real_coordinator):
+        select = BatteryModeSelect(real_coordinator, entry)
+        select.hass = fake_hass
+        select._attr_entity_id = "select.localshift_battery_mode"
+        return select
+
+    async def test_hand_back_from_manual_recomputes_exactly_once(
+        self, fake_hass, entry, real_coordinator
+    ):
+        entry.options = {self.AUTOMATION_OPTION: False, "manual_battery_mode": "hold"}
+        real_coordinator.set_switch_state(SWITCH_AUTOMATION_ENABLED, False)
+        real_coordinator.set_manual_override(True, reason="test")
+        select = self._make_select(fake_hass, entry, real_coordinator)
+
+        with patch.object(select, "async_write_ha_state"):
+            await select.async_select_option("automatic")
+        await fake_hass.config_entries.async_flush(entry)
+
+        assert entry.options[self.AUTOMATION_OPTION] is True
+        assert fake_hass.config_entries.dispatched == 1
+        assert real_coordinator._compute_derived_values.call_count == 1
+        assert real_coordinator.async_evaluate_state_machine.await_count == 1
+        assert (
+            real_coordinator._state_machine.invalidate_decision_fingerprint.call_count
+            == 1
+        )
+
+    async def test_hand_back_recompute_sees_automation_on_and_override_cleared(
+        self, fake_hass, entry, real_coordinator
+    ):
+        """The one cycle now lands via the listener, an event-loop turn after
+        the select returns. It must still evaluate against the handed-back
+        state — automation ON, manual override cleared — never the manual
+        state the user just left."""
+        entry.options = {self.AUTOMATION_OPTION: False, "manual_battery_mode": "hold"}
+        real_coordinator.set_switch_state(SWITCH_AUTOMATION_ENABLED, False)
+        real_coordinator.set_manual_override(True, reason="test")
+        select = self._make_select(fake_hass, entry, real_coordinator)
+
+        seen: list[tuple[bool, bool, object]] = []
+        real_coordinator.async_evaluate_state_machine = AsyncMock(
+            side_effect=lambda: seen.append((
+                real_coordinator.get_switch_state(SWITCH_AUTOMATION_ENABLED),
+                real_coordinator.data.manual_override,
+                real_coordinator.data.manual_override_set_at,
+            ))
+        )
+
+        with patch.object(select, "async_write_ha_state"):
+            await select.async_select_option("automatic")
+        await fake_hass.config_entries.async_flush(entry)
+
+        assert seen == [(True, False, None)]
+
+    async def test_automatic_with_unchanged_options_still_recomputes_once(
+        self, fake_hass, entry, real_coordinator
+    ):
+        """Automation already persisted ON: `async_update_entry` changes
+        nothing, HA fires no listener, so the select's own recompute is the
+        only one — one cycle, not zero."""
+        entry.options = {self.AUTOMATION_OPTION: True}
+        select = self._make_select(fake_hass, entry, real_coordinator)
+
+        with patch.object(select, "async_write_ha_state"):
+            await select.async_select_option("automatic")
+        await fake_hass.config_entries.async_flush(entry)
+
+        assert fake_hass.config_entries.dispatched == 0
+        assert real_coordinator._compute_derived_values.call_count == 1
+        assert real_coordinator.async_evaluate_state_machine.await_count == 1
         assert (
             real_coordinator._state_machine.invalidate_decision_fingerprint.call_count
             == 1

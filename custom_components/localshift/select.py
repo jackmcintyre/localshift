@@ -167,10 +167,20 @@ class BatteryModeSelect(SelectEntity):
             self.coordinator.set_manual_override(
                 False, reason="user_selected_automatic"
             )
-            self.hass.config_entries.async_update_entry(
+            # The switch state and the override are both cleared above, before
+            # the options are persisted, so whichever recompute runs below
+            # already sees automation ON and no manual override.
+            options_changed = self.hass.config_entries.async_update_entry(
                 self._entry, options=new_options
             )
-            await self.coordinator.async_recompute_and_evaluate()
+            # A real options change fires the entry update listener
+            # (_async_options_updated in __init__.py), the single recompute
+            # trigger for entity writes (issue #975) — do not recompute here
+            # as well (issue #1029). HA fires no listener when the options are
+            # unchanged (automation was already persisted ON), so that case
+            # alone still needs its one recompute from here.
+            if not options_changed:
+                await self.coordinator.async_recompute_and_evaluate()
             self.async_write_ha_state()
             return
 
