@@ -27,7 +27,6 @@ from custom_components.localshift.const import (
     CONF_SWITCHING_PENALTY_PER_KWH,
     CONF_TARGET_PENALTY,
     CONF_TESLEMETRY_BACKUP_RESERVE,
-    CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
     CONF_TESLEMETRY_LOAD_POWER,
@@ -743,8 +742,12 @@ class TestOptionsFlow:
         )
         defaults = {key.schema: key.default() for key in schema.schema}
 
-        assert defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.my_site_general_forecast"
-        assert defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.my_site_feed_in_forecast"
+        assert (
+            defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.my_site_general_forecast"
+        )
+        assert (
+            defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.my_site_feed_in_forecast"
+        )
 
         # The pre-filled form must validate — this is what the frontend submits.
         schema(defaults)
@@ -793,8 +796,12 @@ class TestOptionsFlow:
 
         schema = result["data_schema"]
         defaults = {key.schema: key.default() for key in schema.schema}
-        assert defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.my_site_general_forecast"
-        assert defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.my_site_feed_in_forecast"
+        assert (
+            defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.my_site_general_forecast"
+        )
+        assert (
+            defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.my_site_feed_in_forecast"
+        )
         schema(defaults)
 
 
