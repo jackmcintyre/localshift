@@ -1,8 +1,9 @@
 """Save/load coverage for DecisionTelemetry (learning/telemetry.py).
 
-The decision records are the only thing this class persists. The fake Store
-below stands in for HA storage and remembers every key that was opened, so the
-tests can also pin that the retired forecast-corrections store (#970) is
+The decision records are the only thing this class persists. The ``fake_store``
+fixture replaces the methods of HA's ``Store`` class with an in-memory ledger
+that remembers every key constructed, loaded or saved from any import site, so
+the tests can also pin that the retired forecast-corrections store (#970) is
 neither read nor written.
 """
 
@@ -14,6 +15,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.engine.outcomes import DecisionRecord
@@ -25,30 +27,61 @@ DECISIONS_KEY = f"localshift.decision_outcomes.{ENTRY_ID}"
 RETIRED_CORRECTIONS_KEY = f"localshift.forecast_corrections.{ENTRY_ID}"
 
 
-class _FakeStore:
-    """In-memory stand-in for homeassistant.helpers.storage.Store."""
+class _StoreLedger:
+    """In-memory disk plus a record of every Store construction, load and save."""
 
-    disk: dict[str, Any] = {}
-    opened: list[str] = []
+    def __init__(self) -> None:
+        self.disk: dict[str, Any] = {}
+        self.opened: list[str] = []
+        self.loaded: list[str] = []
+        self.saved: list[str] = []
 
-    def __init__(self, hass, version, key) -> None:
-        _ = (hass, version)
-        self._key = key
-        _FakeStore.opened.append(key)
-
-    async def async_load(self) -> Any:
-        return _FakeStore.disk.get(self._key)
-
-    async def async_save(self, data: Any) -> None:
-        _FakeStore.disk[self._key] = data
+    @property
+    def touched(self) -> set[str]:
+        return {*self.opened, *self.loaded, *self.saved}
 
 
 @pytest.fixture
 def fake_store():
-    _FakeStore.disk = {}
-    _FakeStore.opened = []
-    with patch("custom_components.localshift.engine.outcomes.Store", _FakeStore):
-        yield _FakeStore
+    """Replace the behaviour of HA's ``Store`` class itself, not one import of it.
+
+    Patching ``engine.outcomes.Store`` only covers that module's name binding: a
+    ``Store`` imported anywhere else (``learning/telemetry.py`` included) would be
+    the real class and never show up in the ledger. Patching the methods on the
+    class records every construction, load and save whatever the import site.
+    """
+    ledger = _StoreLedger()
+
+    def _init(self, hass, version, key, *args, **kwargs) -> None:
+        _ = (hass, version, args, kwargs)
+        self.key = key
+        ledger.opened.append(key)
+
+    async def _load(self) -> Any:
+        ledger.loaded.append(self.key)
+        return ledger.disk.get(self.key)
+
+    async def _save(self, data: Any) -> None:
+        ledger.saved.append(self.key)
+        ledger.disk[self.key] = data
+
+    def _delay_save(self, data_func, delay: float = 0) -> None:
+        _ = delay
+        ledger.saved.append(self.key)
+        ledger.disk[self.key] = data_func()
+
+    async def _remove(self) -> None:
+        ledger.saved.append(self.key)
+        ledger.disk.pop(self.key, None)
+
+    with (
+        patch.object(Store, "__init__", _init),
+        patch.object(Store, "async_load", _load),
+        patch.object(Store, "async_save", _save),
+        patch.object(Store, "async_delay_save", _delay_save),
+        patch.object(Store, "async_remove", _remove),
+    ):
+        yield ledger
 
 
 def _telemetry() -> DecisionTelemetry:
@@ -102,9 +135,32 @@ async def test_only_the_decision_store_is_touched(fake_store) -> None:
     await telemetry.async_initialize()
     await telemetry.async_save_all()
 
-    assert set(fake_store.opened) == {DECISIONS_KEY}
+    # The decision store really went through the ledger, so an empty result
+    # below means "not touched", not "not observed".
+    assert fake_store.opened == [DECISIONS_KEY]
+    assert fake_store.loaded == [DECISIONS_KEY]
+    assert fake_store.saved == [DECISIONS_KEY]
+
+    assert [key for key in fake_store.touched if "forecast_corrections" in key] == []
+    assert fake_store.touched == {DECISIONS_KEY}
     assert fake_store.disk[RETIRED_CORRECTIONS_KEY] is stale
     assert not hasattr(telemetry, "forecast_corrections")
+
+
+async def test_the_ledger_sees_a_store_built_outside_the_decision_tracker(
+    fake_store,
+) -> None:
+    """Guard on the guard: a Store imported at any other site is recorded too,
+    which is what makes the "never opened" assertion above mean something."""
+    from homeassistant.helpers import storage
+
+    store = storage.Store(MagicMock(), 1, RETIRED_CORRECTIONS_KEY)
+    await store.async_load()
+    await store.async_save({"stats": {}})
+
+    assert fake_store.opened == [RETIRED_CORRECTIONS_KEY]
+    assert fake_store.loaded == [RETIRED_CORRECTIONS_KEY]
+    assert fake_store.saved == [RETIRED_CORRECTIONS_KEY]
 
 
 async def test_initialize_with_nothing_stored_starts_empty(fake_store) -> None:

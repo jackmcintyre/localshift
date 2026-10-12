@@ -81,7 +81,9 @@ class LoadForecaster:
         self._weather_correlation = weather_correlation
         self._adaptive_params = None  # Issue #170 Phase 2: Adaptive parameters
         # True if ≥1 slot was weather-adjusted in the most recent forecast run;
-        # reset every run at pipeline.py:53, published at pipeline.py:77-79.
+        # ForecastPipeline.compute_load_forecast_slots resets it at the start of
+        # each run (reset_weather_adjustment_applied) and publishes it at the end
+        # as data.weather_adjustment_applied (get_weather_adjustment_applied).
         self._weather_adjustment_applied = False
         # Issue #679: per-day-of-week load profiles, injected via
         # set_daily_profiles(). None means "not wired up" — every call then
