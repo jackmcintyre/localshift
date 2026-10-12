@@ -45,12 +45,20 @@ _BOUNDARY_OFFSET_TOLERANCE_S = 60
 # regardless of whether anything changed. It now logs at INFO only when the
 # horizon signature (slot count, first slot start, last slot start) differs
 # from the previous cycle's — a genuine shape change worth surfacing — and at
-# DEBUG otherwise. This signature is process-global, not per-config-entry:
-# with two config entries running concurrently, their signatures could
-# alternate and produce more INFO logging than either running alone would.
-# That failure mode only ever produces *more* logging, never less, so it is
-# an accepted tradeoff rather than a correctness bug.
-_LAST_HORIZON_SIGNATURE: tuple | None = None
+# DEBUG otherwise.
+#
+# Issue #1036: the previous signature is remembered per ``log_scope``, not in
+# one slot. With comparison mode enabled the shadow optimizer builds a second
+# schedule in the SAME cycle from a different price series; through a single
+# slot the primary and shadow signatures overwrote each other, so both calls
+# logged at INFO every cycle and the #976 demotion was undone. The scopes are
+# "primary" and "shadow" (see SlotBuilder.build_slots).
+#
+# The store is still process-global, not per-config-entry: two config entries
+# running concurrently share a scope and could alternate. That failure mode
+# only ever produces *more* logging, never less, so it is an accepted tradeoff
+# rather than a correctness bug.
+_LAST_HORIZON_SIGNATURES: dict[str, tuple] = {}
 
 
 def _boundary_offset_tolerance_s(duration_minutes: int) -> float:
@@ -181,6 +189,7 @@ def compute_hybrid_slot_schedule(
     general_forecast: list[dict],
     ha_timezone: str,
     max_forecast_hours: int = 24,
+    log_scope: str = "primary",
 ) -> tuple[list[dict], dict]:
     """Build hybrid slot schedule: ALL 5-min slots, then 30-min.
 
@@ -196,6 +205,9 @@ def compute_hybrid_slot_schedule(
         general_forecast: List of Amber price forecast entries with start_time, end_time, duration
         ha_timezone: HA configured timezone (e.g., "Australia/Sydney")
         max_forecast_hours: Maximum hours to forecast (default 24)
+        log_scope: Which caller this schedule is for. Only selects the
+            remembered horizon signature that decides the "Hybrid slot
+            schedule:" log level (issue #1036); it never changes the slots.
 
     Returns:
         Tuple of (slots, metadata) where:
@@ -259,7 +271,7 @@ def compute_hybrid_slot_schedule(
             slots[0].get("estimate"),
         )
 
-    _compute_slot_metadata(slots, metadata, transition_boundary)
+    _compute_slot_metadata(slots, metadata, transition_boundary, log_scope)
 
     return slots, metadata
 
@@ -748,7 +760,10 @@ def _ensure_current_slot_coverage(slots: list[dict], now_local: datetime) -> Non
 
 
 def _compute_slot_metadata(
-    slots: list[dict], metadata: dict, transition_boundary: datetime | None
+    slots: list[dict],
+    metadata: dict,
+    transition_boundary: datetime | None,
+    log_scope: str = "primary",
 ) -> None:
     """Compute and store slot metadata.
 
@@ -756,6 +771,7 @@ def _compute_slot_metadata(
         slots: Final slot list
         metadata: Metadata dict (modified in place)
         transition_boundary: Transition boundary time
+        log_scope: Key for the remembered horizon signature (issue #1036)
 
     """
     five_min_count = len([s for s in slots if s["interval_minutes"] == 5])
@@ -777,14 +793,14 @@ def _compute_slot_metadata(
 
         _log_slot_details(slots)
 
-    global _LAST_HORIZON_SIGNATURE
     signature = (
         len(slots),
         slots[0]["start"] if slots else None,
         slots[-1]["start"] if slots else None,
     )
-    level = logging.INFO if signature != _LAST_HORIZON_SIGNATURE else logging.DEBUG
-    _LAST_HORIZON_SIGNATURE = signature
+    unchanged = _LAST_HORIZON_SIGNATURES.get(log_scope) == signature
+    level = logging.DEBUG if unchanged else logging.INFO
+    _LAST_HORIZON_SIGNATURES[log_scope] = signature
 
     _LOGGER.log(
         level,

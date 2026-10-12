@@ -30,7 +30,7 @@ def _entry(start_time: str, duration: int, price: float) -> dict:
 @pytest.fixture(autouse=True)
 def _reset_horizon_signature(monkeypatch):
     """Each test starts as if no cycle has run yet -- the first call is INFO."""
-    monkeypatch.setattr(slot_schedule, "_LAST_HORIZON_SIGNATURE", None)
+    monkeypatch.setattr(slot_schedule, "_LAST_HORIZON_SIGNATURES", {})
 
 
 def test_first_cycle_after_reset_logs_at_info(caplog):
@@ -101,3 +101,66 @@ def test_changed_horizon_on_third_call_returns_to_info(caplog):
     ]
     assert records, "expected a 'Hybrid slot schedule:' log record"
     assert records[-1].levelno == logging.INFO
+
+
+def _levels(caplog) -> list[int]:
+    return [
+        r.levelno for r in caplog.records if "Hybrid slot schedule:" in r.getMessage()
+    ]
+
+
+def test_shadow_build_does_not_reset_the_primary_signature(caplog):
+    """Issue #1036: primary and shadow schedules alternate within one cycle.
+
+    With comparison mode on, the shadow optimizer builds a second schedule
+    from a different price series every cycle. Sharing one remembered
+    signature made the two overwrite each other, so both logged INFO on every
+    cycle. Each scope now remembers its own, so an unchanged second cycle is
+    DEBUG for both.
+    """
+    primary = [
+        _entry("2026-03-16T12:30:01+11:00", 5, 0.10),
+        _entry("2026-03-16T12:35:01+11:00", 5, 0.11),
+    ]
+    shadow = primary + [_entry("2026-03-16T12:40:01+11:00", 5, 0.12)]
+    now = datetime(2026, 3, 16, 12, 33, 0, tzinfo=AEDT)
+
+    def cycle() -> None:
+        compute_hybrid_slot_schedule(now, primary, "Australia/Sydney")
+        compute_hybrid_slot_schedule(
+            now, shadow, "Australia/Sydney", log_scope="shadow"
+        )
+
+    with caplog.at_level(logging.DEBUG):
+        cycle()
+        assert _levels(caplog) == [logging.INFO, logging.INFO]
+        caplog.clear()
+        cycle()
+
+    assert _levels(caplog) == [logging.DEBUG, logging.DEBUG]
+
+
+def test_slot_builder_scopes_a_shadow_build_separately(monkeypatch):
+    """SlotBuilder marks an override (shadow) build with its own log scope."""
+    from custom_components.localshift.engine import slots as slots_module
+
+    class _StopAfterSchedule(Exception):
+        """Ends build_slots once the schedule call has been observed."""
+
+    seen: list[str] = []
+
+    def fake_schedule(**kwargs):
+        seen.append(kwargs["log_scope"])
+        raise _StopAfterSchedule
+
+    monkeypatch.setattr(slots_module, "compute_hybrid_slot_schedule", fake_schedule)
+    builder = slots_module.SlotBuilder(
+        config_options={}, ha_timezone="Australia/Sydney"
+    )
+    data = type("Data", (), {"general_forecast": [], "feed_in_forecast": []})()
+
+    for override in (None, []):
+        with pytest.raises(_StopAfterSchedule):
+            builder.build_slots(data, None, override_general_forecast=override)
+
+    assert seen == ["primary", "shadow"]
