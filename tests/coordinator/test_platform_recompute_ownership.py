@@ -13,18 +13,22 @@ removes the platform-side calls from number.py, switch.py, and the
 `OptimizationModeSelect` half of select.py (`BatteryModeSelect` is
 deliberately untouched — see the issue #975 implementation plan).
 
-`FakeConfigEntries` below mirrors the two behaviours of HA's real
+`FakeConfigEntries` below mirrors the three behaviours of HA's real
 `ConfigEntries.async_update_entry` that matter here: a write that does not
-actually change `entry.options` fires no listener at all, and a write that
-does change it queues every registered listener for later execution (HA
-schedules these as tasks; here `async_flush` runs and awaits them
-explicitly, so nothing is ever left as a stray un-awaited coroutine). This
-is what lets these tests reach the production listener wiring rather than
-asserting on a mock of themselves.
+actually change `entry.options` fires no listener at all; a write that does
+change it starts every registered listener as an eager task, so the listener
+body runs synchronously INSIDE `async_update_entry` up to its first real
+suspension (HA: `_async_save_and_notify` -> `hass.async_create_task`, whose
+`eager_start` defaults to True); and whatever is left of each listener
+finishes later (`async_flush` awaits the tasks, so nothing is left as a stray
+un-awaited coroutine). The eager start is what makes "set the coordinator
+state before persisting" a real ordering requirement on the platforms rather
+than a nicety, and what lets these tests pin it.
 """
 
 from __future__ import annotations
 
+import asyncio
 from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -53,25 +57,32 @@ class FakeConfigEntries:
 
     def __init__(self, hass):
         self.hass = hass
-        self._pending: list = []
+        self._pending: list[asyncio.Task] = []
         self.dispatched = 0
 
     def async_update_entry(self, entry, *, options=None, **_kwargs) -> bool:
-        """Set entry.options and queue listeners — but only on a real change,
-        matching HA: `if not changed: return False` before anything fires."""
+        """Set entry.options and start listeners — but only on a real change,
+        matching HA: `if not changed: return False` before anything fires.
+
+        Each listener is started as an eager task, as HA does: it runs right
+        here, before this method returns, up to its first real suspension."""
         if options is None or dict(entry.options) == dict(options):
             return False
         entry.options = MappingProxyType(dict(options))
-        self._pending.extend(entry.update_listeners)
+        loop = asyncio.get_running_loop()
+        for listener in list(entry.update_listeners):
+            self.dispatched += 1
+            self._pending.append(
+                asyncio.Task(listener(self.hass, entry), loop=loop, eager_start=True)
+            )
         return True
 
     async def async_flush(self, entry) -> None:
-        """Run every listener queued so far, awaited (as HA's task runner
-        would await it), against the given entry."""
+        """Await every listener task started so far (as HA's task runner
+        would), surfacing any exception a listener raised."""
         pending, self._pending = self._pending, []
-        for listener in pending:
-            self.dispatched += 1
-            await listener(self.hass, entry)
+        for task in pending:
+            await task
 
 
 @pytest.fixture
@@ -224,18 +235,15 @@ class TestSwitchToggleRecomputeOwnership:
     async def test_switch_turn_off_automation_still_commands_self_consumption(
         self, fake_hass, entry, real_coordinator
     ):
-        """The real safety argument for deferring the recompute: the switch
-        sets `automation_enabled` False in the coordinator's switch-state
-        bridge synchronously, before persisting, so the listener's evaluation
-        sees the new switch state even when it interleaves with the rest of
-        the turn-off.
+        """The switch must set `automation_enabled` False in the coordinator's
+        switch-state bridge BEFORE it persists the option.
 
-        Issue #1030: HA runs update listeners as tasks, so the listener
-        starts at the first await inside `async_turn_off` -- while the
-        self-consumption command is still in flight -- not after the method
-        returns. The flush therefore happens inside that command here. A
-        flush after the method returned could not tell 'set before
-        persisting' from 'set at the end'.
+        Issue #1030: HA starts update listeners as eager tasks, so the
+        listener's recompute runs inside `async_update_entry` itself -- before
+        `async_turn_off` reaches the self-consumption command, not after the
+        method returns. A switch that persisted first would have the recompute
+        evaluate with automation still reading ON. The fake dispatches the
+        same way, so the listener here observes exactly what it would in HA.
         """
         entry.options = {f"switch_state_{SWITCH_AUTOMATION_ENABLED}": True}
         real_coordinator._notification_service = None
@@ -255,15 +263,13 @@ class TestSwitchToggleRecomputeOwnership:
         entry.update_listeners.clear()
         entry.add_update_listener(spy_listener)
 
-        async def hardware_call_with_listener_interleaved():
-            # The deferred listener runs while this command is in flight.
-            await fake_hass.config_entries.async_flush(entry)
-            seen["recomputes_before_command_returned"] = (
+        async def record_recomputes_at_command_time():
+            seen["recomputes_when_command_started"] = (
                 real_coordinator._compute_derived_values.call_count
             )
 
         real_coordinator.async_set_self_consumption = AsyncMock(
-            side_effect=hardware_call_with_listener_interleaved
+            side_effect=record_recomputes_at_command_time
         )
 
         with patch.object(switch, "async_write_ha_state"):
@@ -271,11 +277,11 @@ class TestSwitchToggleRecomputeOwnership:
         await fake_hass.config_entries.async_flush(entry)
 
         real_coordinator.async_set_self_consumption.assert_awaited_once()
-        # The listener really did interleave with the in-flight command...
-        assert seen["recomputes_before_command_returned"] == 1
-        # ...and still saw the switch already off.
+        # The listener's recompute ran inside the persist, ahead of the command...
+        assert seen["recomputes_when_command_started"] == 1
+        # ...and it saw the switch already off.
         assert seen["automation_enabled_during_listener"] is False
-        # Nothing was left to run afterwards: one recompute in total.
+        # One recompute in total.
         assert real_coordinator._compute_derived_values.call_count == 1
         assert fake_hass.config_entries.dispatched == 1
 
