@@ -3351,6 +3351,50 @@ class TestConvergeWhileFrozen:
         mock_battery_controller.set_force_discharge.assert_not_called()
 
 
+class TestDecisionTokenUsesFingerprintMethod:
+    """#1070: the token calls ``_get_decision_fingerprint``, not an inline copy.
+
+    The method had test references and no production caller, the shape that hid
+    #959 and #968: tests exercising a method the running code never reached.
+    """
+
+    def test_token_stores_what_the_method_returns(
+        self, state_machine, coordinator_data
+    ):
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+
+        with patch.object(
+            state_machine, "_get_decision_fingerprint", return_value="sentinel"
+        ) as fingerprint:
+            state_machine._apply_decision_token(coordinator_data)
+
+        fingerprint.assert_called_once_with(coordinator_data)
+        assert state_machine._last_evaluated_fingerprint == "sentinel"
+        assert coordinator_data.mode_decision_allowed is True
+
+    def test_token_fingerprint_carries_the_epoch_advanced_by_the_same_evaluation(
+        self, state_machine, coordinator_data
+    ):
+        """The method is called after the epoch updates, so a plan-charge grant
+        is fingerprinted with the epoch it was granted on."""
+        coordinator_data.general_price = 0.25
+        coordinator_data.feed_in_price = 0.08
+        coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
+        coordinator_data.soc = 50.0
+        state_machine._apply_decision_token(coordinator_data)
+        assert state_machine._last_evaluated_fingerprint.endswith("|0|0")
+
+        # Same prices, and the plan now wants to start charging.
+        coordinator_data.debug_plan_mode_pending = BatteryMode.GRID_CHARGING.value
+        state_machine._apply_decision_token(coordinator_data)
+
+        assert state_machine._plan_charge_epoch == 1
+        assert state_machine._last_evaluated_fingerprint.endswith("|1|0")
+        assert coordinator_data.mode_decision_allowed is True
+        assert coordinator_data.mode_decision_plan_charge_only is True
+
+
 class TestInvalidateDecisionFingerprint:
     """Deliberate re-decision points (#622 gate replacement)."""
 

@@ -1134,11 +1134,9 @@ class StateMachine:
         plan_epoch_moved = self._plan_charge_epoch != plan_epoch_before
         export_epoch_moved = self._update_export_start_epoch(data, context)
 
-        fingerprint = (
-            None
-            if context is None
-            else f"{context}|{self._plan_charge_epoch}|{self._export_start_epoch}"
-        )
+        # After both epoch updates: the fingerprint reads the epochs, it does
+        # not advance them.
+        fingerprint = self._get_decision_fingerprint(data)
         decision_allowed = (
             fingerprint is not None and fingerprint != self._last_evaluated_fingerprint
         )
