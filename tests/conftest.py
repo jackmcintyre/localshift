@@ -708,15 +708,9 @@ def mock_storage():
     mock_store.async_save = AsyncMock()
 
     # Patch Store at all locations where it's imported
-    with (
-        patch(
-            "custom_components.localshift.engine.outcomes.Store",
-            return_value=mock_store,
-        ),
-        patch(
-            "custom_components.localshift.learning.telemetry.Store",
-            return_value=mock_store,
-        ),
+    with patch(
+        "custom_components.localshift.engine.outcomes.Store",
+        return_value=mock_store,
     ):
         yield mock_store
 

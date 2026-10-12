@@ -101,11 +101,11 @@ The architecture was designed to solve several problems from the original YAML-b
 │  │     │  │  │ forecast │  │ forecast │  │ accuracy │ │        │ ││  │  │
 │  │     │  │  └──────────┘  └──────────┘  └──────────┘  └────────┘ ││  │  │
 │  │     │  │                                                          ││  │  │
-│  │     │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ││  │  │
-│  │     │  │  │load_deviation│  │ solar_events │  │ corrections │  ││  │  │
-│  │     │  │  │  (1-min tick)│  │ (mid-day     │  │ (cloud      │  ││  │  │
-│  │     │  │  │              │  │  re-opt)     │  │  bias)      │  ││  │  │
-│  │     │  │  └──────────────┘  └──────────────┘  └──────────────┘  ││  │  │
+│  │     │  │  ┌──────────────┐  ┌──────────────┐                    ││  │  │
+│  │     │  │  │load_deviation│  │ solar_events │                    ││  │  │
+│  │     │  │  │  (1-min tick)│  │ (mid-day     │                    ││  │  │
+│  │     │  │  │              │  │  re-opt)     │                    ││  │  │
+│  │     │  │  └──────────────┘  └──────────────┘                    ││  │  │
 │  │     │  └─────────────────────────────────────────────────────────┘│  │  │
 │  │     │                                                               │  │  │
 │  │     │  ┌─────────────────────────────────────────────────────────┐│  │  │
@@ -185,15 +185,14 @@ custom_components/localshift/
 │   ├── history_store.py      # Forecast history storage
 │   ├── bootstrapper.py       # Forecast initialization
 │   ├── load_deviation.py     # Real-time load deviation detection (1-min tick)
-│   ├── solar_events.py       # Mid-day solar re-optimization detection
-│   └── corrections.py        # Cloud bias corrections
+│   └── solar_events.py       # Mid-day solar re-optimization detection
 │
 ├── integration/              # External integrations
 │   ├── controller.py         # Battery controller (Teslemetry)
 │   └── client.py             # Powerwall service client
 │
 ├── learning/                 # Decision telemetry + weather correlation
-│   ├── telemetry.py          # Decision record set + forecast-correction storage
+│   ├── telemetry.py          # Decision record set storage
 │   ├── correlation.py        # Weather correlation regression + storage facade
 │   ├── temperature.py        # Weather forecast fetching/parsing/caching
 │   └── anomaly.py            # Weather anomaly detection
