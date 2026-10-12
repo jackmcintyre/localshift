@@ -11,6 +11,9 @@ from custom_components.localshift.config_flow import (
     LocalShiftOptionsFlow,
 )
 from custom_components.localshift.const import (
+    CONF_AWAY_ENTITY,
+    CONF_BATTERY_TARGET,
+    CONF_CHEAP_PRICE_PERCENTILE,
     CONF_COMPARISON_MODE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
@@ -34,6 +37,7 @@ from custom_components.localshift.const import (
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
     CONF_WEATHER_ENTITY,
+    DEFAULT_CHEAP_PRICE_PERCENTILE,
     DOMAIN,
     PRICING_SOURCE_AMBER,
     PRICING_SOURCE_AMBER_EXPRESS,
@@ -1496,3 +1500,118 @@ class TestErrorMessages:
         assert "mode_select" in result
         # Error message should mention expected vs actual domain
         assert "select" in result["mode_select"].lower()
+
+
+# =============================================================================
+# OPTIONS FLOW: FORM RENDERS, ADVANCED STEP, AWAY ENTITY (Issue #994)
+# =============================================================================
+
+
+class TestOptionsFlowFormsAndAwayEntity:
+    """Branches of config_flow/__init__.py no other test reached (#994)."""
+
+    @pytest.mark.asyncio
+    async def test_pricing_source_form_defaults_to_stored_source(
+        self, mock_hass, mock_config_entry
+    ):
+        """Opening the Pricing Source step pre-selects what is stored, not the default."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_config_entry.data = {
+            # Neither value is the default (amber / disabled).
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
+            CONF_COMPARISON_MODE: "enabled",
+        }
+
+        result = await flow.async_step_options_pricing_source(None)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "options_pricing_source"
+        defaults = {key.schema: key.default() for key in result["data_schema"].schema}
+        assert defaults[CONF_PRICING_DATA_SOURCE] == PRICING_SOURCE_AMBER_EXPRESS
+        assert defaults[CONF_COMPARISON_MODE] == "enabled"
+        mock_hass.config_entries.async_update_entry.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_settings_rejects_missing_away_entity(
+        self, mock_hass, mock_config_entry
+    ):
+        """An away entity that does not exist re-shows Settings with an error."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_hass.states.get = MagicMock(return_value=None)
+
+        result = await flow.async_step_settings({
+            CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
+            CONF_DEMAND_WINDOW_START: "18:00:00",
+            CONF_DEMAND_WINDOW_END: "22:00:00",
+            CONF_MANUAL_OVERRIDE_TIMEOUT: 24,
+            CONF_AWAY_ENTITY: "input_boolean.gone",
+        })
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "settings"
+        assert result["errors"] == {
+            CONF_AWAY_ENTITY: "Entity 'input_boolean.gone' does not exist"
+        }
+
+    @pytest.mark.asyncio
+    async def test_solcast_step_rejects_missing_away_entity(self, mock_hass):
+        """Initial setup refuses an away entity that does not exist."""
+        flow = LocalShiftConfigFlow()
+        flow.hass = mock_hass
+        flow._teslemetry_data = {}
+        flow._pricing_data = {}
+
+        def mock_get_state(entity_id):
+            if entity_id == "input_boolean.gone":
+                return None
+            return create_mock_state(entity_id, "10", "sensor")
+
+        mock_hass.states.get = mock_get_state
+
+        result = await flow.async_step_solcast({
+            CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_today",
+            CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_tomorrow",
+            CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
+            CONF_AWAY_ENTITY: "input_boolean.gone",
+        })
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "solcast"
+        assert result["errors"] == {
+            CONF_AWAY_ENTITY: "Entity 'input_boolean.gone' does not exist"
+        }
+
+    @pytest.mark.asyncio
+    async def test_advanced_form_defaults_to_stored_options(
+        self, mock_hass, mock_config_entry
+    ):
+        """Opening Advanced shows stored values, and defaults for the rest."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_config_entry.options = {CONF_BATTERY_TARGET: 87}
+
+        result = await flow.async_step_advanced(None)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "advanced"
+        defaults = {key.schema: key.default() for key in result["data_schema"].schema}
+        assert defaults[CONF_BATTERY_TARGET] == 87
+        assert defaults[CONF_CHEAP_PRICE_PERCENTILE] == DEFAULT_CHEAP_PRICE_PERCENTILE
+
+    @pytest.mark.asyncio
+    async def test_advanced_submit_merges_into_existing_options(
+        self, mock_hass, mock_config_entry
+    ):
+        """Saving Advanced keeps options that step does not own."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_config_entry.options = {
+            CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
+            CONF_BATTERY_TARGET: 100,
+        }
+
+        result = await flow.async_step_advanced({CONF_BATTERY_TARGET: 87})
+
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["data"] == {
+            CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
+            CONF_BATTERY_TARGET: 87,
+        }
