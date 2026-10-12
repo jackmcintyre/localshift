@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import math
+from datetime import date
+from typing import TYPE_CHECKING, Any
+
+from homeassistant.util import dt as dt_util
 
 from ..const import BATTERY_CAPACITY_KWH
 
@@ -22,6 +26,24 @@ _POWER_DEADBAND_KW = 0.1
 # of the export-leak metric. Exporting while above this is not counted as a leak.
 _BATTERY_FULL_SOC_PCT = 99.0
 
+# Day-to-date totals on CoordinatorData that are snapshotted across a restart
+# (Issue #1102). Every one is reporting only and is cleared by
+# reset_daily_accumulators. target_reached_today is deliberately absent: it
+# feeds the pre-charge price calculation, so restoring it would change control
+# behaviour after a restart.
+DAILY_ACCUMULATOR_FIELDS: tuple[str, ...] = (
+    "grid_import_cost",
+    "grid_export_revenue",
+    "battery_savings",
+    "battery_charge_cost",
+    "grid_import_kwh_today",
+    "grid_export_kwh_today",
+    "solar_kwh_today",
+    "grid_to_battery_kwh_today",
+    "soc_gain_during_grid_charge_kwh_today",
+    "export_while_battery_not_full_kwh_today",
+)
+
 
 class CostTracker:
     """Tracks energy costs and savings over time."""
@@ -33,6 +55,77 @@ class CostTracker:
         # grid-charge-efficiency metric (Issue #868). None until the first
         # sample is seen, so the first interval's gain is skipped (no baseline).
         self._last_soc_pct: float | None = None
+        # Local date the in-memory totals belong to (Issue #1102). The saved
+        # snapshot is stamped with this rather than the wall clock, so a save
+        # that lands just after midnight but ahead of the reset is still dated
+        # yesterday and is discarded on restore.
+        self._totals_date: date = dt_util.now().date()
+
+    @property
+    def totals_date(self) -> date:
+        """Local date the day-to-date totals belong to."""
+        return self._totals_date
+
+    def snapshot_daily_totals(self, data: CoordinatorData) -> dict[str, Any]:
+        """Return the day's totals, dated, for persistence (Issue #1102)."""
+        return {
+            "date": self._totals_date.isoformat(),
+            "totals": {
+                key: float(getattr(data, key)) for key in DAILY_ACCUMULATOR_FIELDS
+            },
+        }
+
+    def restore_daily_totals(self, data: CoordinatorData, snapshot: Any) -> bool:
+        """Restore the day's totals from a snapshot taken before a restart.
+
+        Applied only when the snapshot is dated today (local date); otherwise
+        the totals stay at zero, so a previous day's figures can never leak
+        into today. The snapshot is validated whole before any field is
+        written, so a bad one cannot leave a partial restore behind.
+
+        Returns:
+            True if the totals were restored, False if the snapshot belongs to
+            another day.
+
+        Raises:
+            ValueError: the snapshot is malformed.
+
+        """
+        if not isinstance(snapshot, dict):
+            raise ValueError(f"expected a dict, got {type(snapshot).__name__}")
+        saved_date = snapshot.get("date")
+        if not isinstance(saved_date, str):
+            raise ValueError(f"missing or non-string date: {saved_date!r}")
+        snapshot_date = date.fromisoformat(saved_date)
+        totals = snapshot.get("totals")
+        if not isinstance(totals, dict):
+            raise ValueError("missing totals")
+
+        # A total introduced after the snapshot was written restores as zero.
+        values: dict[str, float] = {}
+        for key in DAILY_ACCUMULATOR_FIELDS:
+            value = totals.get(key, 0.0)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(f"invalid {key}: {value!r}")
+            values[key] = float(value)
+
+        today = dt_util.now().date()
+        if snapshot_date != today:
+            return False
+
+        for key, value in values.items():
+            setattr(data, key, value)
+        self._totals_date = today
+        # Same reasoning as the midnight reset (Issue #899): the first sample
+        # after a restart sets a fresh SOC baseline, so SOC that moved while
+        # Home Assistant was down is not booked to one tick.
+        self._last_soc_pct = None
+        return True
 
     def accumulate_costs(self, data: CoordinatorData) -> None:
         """Accumulate per-minute energy costs from current power and price.
@@ -40,6 +133,12 @@ class CostTracker:
         Replaces YAML A16 (localshift_cost_accumulator).
         Formula: power_kW × price_$/kWh / 60 = $/min
         """
+        # Issue #1102: totals restored seconds before midnight would outlive
+        # the day if the midnight timer was armed too late to fire. Start the
+        # new day from zero here rather than keep adding to yesterday's.
+        if dt_util.now().date() != self._totals_date:
+            self.reset_daily_accumulators(data)
+
         # Grid import cost: positive grid power × buy price
         import_cost = max(data.grid_power_kw, 0.0) * data.general_price / 60
         data.grid_import_cost += import_cost
@@ -138,6 +237,7 @@ class CostTracker:
         # pre-midnight value, and the next sample attributes the entire
         # overnight gain to the new day's grid-charge-efficiency metric.
         self._last_soc_pct = None
+        self._totals_date = dt_util.now().date()
 
     def _reset_energy_accumulators(self, data: CoordinatorData) -> None:
         """Reset the Issue #868 daily energy accumulators."""
