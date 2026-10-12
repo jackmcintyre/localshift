@@ -250,7 +250,9 @@ class TestRecordTransitionMetrics:
         assert entry["from_mode"] == "self_consumption"
         assert entry["to_mode"] == "grid_charging"
         # The two rings must agree on the field's meaning.
-        assert data.boundary_lag_history["unknown"][-1]["from_mode"] == "self_consumption"
+        assert (
+            data.boundary_lag_history["unknown"][-1]["from_mode"] == "self_consumption"
+        )
 
     def test_history_entry_shape_and_cap(self, state_machine, data):
         self._prime(data)

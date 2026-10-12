@@ -1043,7 +1043,9 @@ class TestBoundaryLagPartition:
         # The price bucket still holds exactly its one original sample.
         assert data.boundary_lag_history["price"] == [price_entry]
         # The backstop bucket is capped at its own per-source window.
-        assert len(data.boundary_lag_history["backstop"]) == _BOUNDARY_LAG_PER_SOURCE_CAP
+        assert (
+            len(data.boundary_lag_history["backstop"]) == _BOUNDARY_LAG_PER_SOURCE_CAP
+        )
         assert set(data.boundary_lag_history) == {"price", "backstop"}
 
     def test_per_source_cap_keeps_newest(self, state_machine, data):
@@ -1060,16 +1062,18 @@ class TestBoundaryLagPartition:
         # rather than hard-coded against a specific cap size.
         newest_hour, newest_minute = divmod(total - 1, 60)
         oldest_hour, oldest_minute = divmod(total - _BOUNDARY_LAG_PER_SOURCE_CAP, 60)
-        assert bucket[-1]["interval_start_utc"] == dt_util.as_utc(
-            dt_aware(
-                2026, 8, 27, 6 + newest_hour, (newest_minute // 5) * 5, 0
-            )
-        ).isoformat()
-        assert bucket[0]["interval_start_utc"] == dt_util.as_utc(
-            dt_aware(
-                2026, 8, 27, 6 + oldest_hour, (oldest_minute // 5) * 5, 0
-            )
-        ).isoformat()
+        assert (
+            bucket[-1]["interval_start_utc"]
+            == dt_util.as_utc(
+                dt_aware(2026, 8, 27, 6 + newest_hour, (newest_minute // 5) * 5, 0)
+            ).isoformat()
+        )
+        assert (
+            bucket[0]["interval_start_utc"]
+            == dt_util.as_utc(
+                dt_aware(2026, 8, 27, 6 + oldest_hour, (oldest_minute // 5) * 5, 0)
+            ).isoformat()
+        )
 
     def test_unknown_bucket_on_fresh_machine(self, state_machine, data):
         # No prior grant and no override -> the "unknown" bucket.
