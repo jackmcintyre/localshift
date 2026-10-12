@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import time
 from typing import TYPE_CHECKING, Any
@@ -92,9 +91,6 @@ class LoadForecaster:
         # set_daily_profiles(). None means "not wired up" — every call then
         # behaves exactly as it did before this feature existed.
         self._daily_profiles: LoadProfiles | None = None
-        # Diagnostics: which resolution bucket won for each qualifying hour
-        # in the profile resolved during the most recent estimate call.
-        self._profile_bucket_counts: dict[str, int] = {}
         # Away-mode consumption profile (docs/holiday-away/plan.md item 2),
         # injected via set_away_profiles(). None means "at home" — every
         # call then behaves exactly as it did before this feature existed.
@@ -178,17 +174,6 @@ class LoadForecaster:
         call resolved — ``"away_profile"``, ``"away_floor"`` or ``"at_home"``.
         """
         return self._away_profile_source
-
-    def get_profile_bucket_counts(self) -> dict[str, int]:
-        """Diagnostics: bucket tag -> qualifying-hour count for the most
-        recently resolved day-of-week profile (Issue #679).
-
-        Recomputed on every ``estimate_hourly_consumption_kw`` call that has
-        both injected profiles and a ``day_of_week``; reflects the full
-        resolution for that day (every qualifying hour), not just the single
-        ``slot_hour`` that call happened to ask about.
-        """
-        return dict(self._profile_bucket_counts)
 
     def _resolve_daily_profile(
         self, day_of_week: int, hourly_avg_kw: dict[int, float]
@@ -341,7 +326,6 @@ class LoadForecaster:
         # behaviour in all of those cases.
         effective_hourly_avg_kw = hourly_avg_kw
         bucket_tag: str | None = None
-        self._profile_bucket_counts = {}
         if self._away_profile is not None:
             # Away mode (plan item 2): the empty-house profile replaces the
             # at-home one outright, and the #679 day-of-week resolution
@@ -359,7 +343,6 @@ class LoadForecaster:
                 # diagnostic sensor's value set doesn't grow unbounded.
                 resolved_tag = tags.get(slot_hour)
                 bucket_tag = resolved_tag if resolved_tag != "global_avg" else None
-                self._profile_bucket_counts = dict(Counter(tags.values()))
 
         historical_kw = self._get_historical(effective_hourly_avg_kw, slot_hour)
         base_load_kw, base_source = self._calculate_base_load(
