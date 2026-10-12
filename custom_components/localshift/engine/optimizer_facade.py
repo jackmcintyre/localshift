@@ -25,6 +25,7 @@ from .optimizer_runner import (
     _serialize_result,
 )
 from .slots import SlotBuilder
+from .types import PlannerAction
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -344,6 +345,42 @@ class OptimizerFacade:
             )
             self._mark_mode_debug_fallback(data)
 
+    @staticmethod
+    def _spike_export_summary(
+        result: Any, optimizer_config: Any | None, slot0_price: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Slot 0's spike-export verdict, for the sensor and the state machine.
+
+        Issue #1120. ``rebuy_price`` is what the export was judged against and
+        ``min_sell`` the sell price it had to reach, so a spike export (or a
+        spike that was not exported) can be explained afterwards.
+
+        ``skip_debounce`` tells the state machine this export start is a genuine
+        spike on a CONFIRMED price and need not wait out the 2-minute export
+        debounce. An estimate, or a price with no confirmation flag at all,
+        never sets it. Nor does anything while the rule is switched off
+        (``enabled`` False, ``switch.localshift_spike_discharge_enabled``):
+        the verdict is then never ``admitted``, in either optimisation mode.
+        """
+        verdict = getattr(optimizer_config, "spike_export_now", None)
+        summary: dict[str, Any] = dict(verdict) if isinstance(verdict, dict) else {}
+        admitted = summary.get("admitted") is True
+        decisions = getattr(result, "decisions", None) or []
+        exporting = bool(
+            admitted
+            and decisions
+            and decisions[0].action == PlannerAction.EXPORT_PROACTIVE
+        )
+        summary["enabled"] = bool(
+            getattr(optimizer_config, "spike_export_enabled", True)
+        )
+        summary["admitted"] = admitted
+        summary["exporting"] = exporting
+        summary["skip_debounce"] = bool(
+            exporting and slot0_price.get("sell_estimate") is False
+        )
+        return summary
+
     def _write_optimizer_fields(
         self,
         data: CoordinatorData,
@@ -437,6 +474,10 @@ class OptimizerFacade:
         slot0_price = getattr(slot_metadata, "slot0_price", None)
         data.optimizer_summary["slot0_price"] = (
             dict(slot0_price) if isinstance(slot0_price, dict) else {}
+        )
+
+        data.optimizer_summary["spike_export"] = self._spike_export_summary(
+            result, optimizer_config, data.optimizer_summary["slot0_price"]
         )
 
         data.forecast_horizon_hours = slot_metadata.horizon_hours

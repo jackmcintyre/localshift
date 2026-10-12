@@ -201,6 +201,7 @@ def run(
         "sell": d0.get("sell_price"),
         "action": d0.get("action"),
         "slot0_price": summary.get("slot0_price"),
+        "spike_export": summary.get("spike_export"),
     }
 
 

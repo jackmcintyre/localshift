@@ -234,6 +234,9 @@ CONF_STALE_SOLAR_CONFIDENCE_CEILING = "stale_solar_confidence_ceiling"
 CONF_PRECHARGE_RUNWAY_MARGIN_MIN = "precharge_runway_margin_min"
 CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
+# Not an options-flow setting: the key under which the state of
+# switch.localshift_spike_discharge_enabled reaches the planner (issue #1120).
+CONF_SPIKE_EXPORT_ENABLED = "spike_export_enabled"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
 CONF_SWITCHING_PENALTY = "switching_penalty"
 CONF_SWITCHING_PENALTY_PER_KWH = "switching_penalty_per_kwh"
@@ -304,6 +307,18 @@ EXPORT_FLOOR_NORMAL_RUN_MINUTES: Final[int] = 60
 # back later wins even if the load forecast is badly wrong (2026-10-12: the floor
 # sat at 100% through a $24/kWh feed-in price to protect $3/kWh evening load).
 EXPORT_FLOOR_HOLD_PRICE_RATIO: Final[float] = 0.5
+# Spike export in the default mode (issue #1120). A slot's sell price must be at
+# least this multiple of the horizon's median buy price before it can count as a
+# spike rather than the day's ordinary shape. Same value and same reasoning as
+# spike_event._SPIKE_OUTLIER_FACTOR: an ordinary evening peak sells under 2.5x
+# the median, the 2026-10-12 intervals sold at 50x and 120x, so neither class
+# sits near the boundary. Do not lower it to catch "nearly spikes".
+SPIKE_EXPORT_OUTLIER_FACTOR: Final[float] = 4.0
+# How far ahead the rebuy price looks: the dearest buy price in this window,
+# leaving out the rest of the spike being sold into, is what the exported
+# energy is judged against. Twelve hours covers the rest of
+# the evening and the night, by which time solar or pre-charge has refilled.
+SPIKE_EXPORT_REBUY_LOOKAHEAD_HOURS: Final[float] = 12.0
 DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive (flat knob)
 DEFAULT_SWITCHING_PENALTY_PER_KWH = (
     0.40  # $/kWh floor: scales the hurdle to slot energy, damps marginal jitter

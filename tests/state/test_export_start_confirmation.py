@@ -62,7 +62,12 @@ def _wall_clock(at: datetime) -> type:
 class _Rig:
     """Real state machine + real computation engine on one captured instant."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        capture: Path = CAPTURE,
+        optimization_mode: str | None = None,
+        switches: dict[str, bool] | None = None,
+    ) -> None:
         sys.path.insert(0, str(REPO_ROOT / "scripts"))
         from replay_no_dw import LIVE_OVERRIDES, LIVE_SWITCHES, _seed_horizon
 
@@ -76,7 +81,7 @@ class _Rig:
             setup_mock_hass,
         )
 
-        scenario = json.loads(CAPTURE.read_text())
+        scenario = json.loads(capture.read_text())
         self.payload = copy.deepcopy(scenario["input"])
         self.payload["adaptive_params"] = {}
         self.now = datetime.fromisoformat(self.payload["test_time"])
@@ -91,13 +96,16 @@ class _Rig:
 
         overrides = dict(scenario.get("config_overrides", {}))
         overrides.update(LIVE_OVERRIDES)
-        switches = dict(scenario.get("switch_states", {}))
-        switches.update(LIVE_SWITCHES)
+        if optimization_mode is not None:
+            overrides["optimization_mode"] = optimization_mode
+        switch_states = dict(scenario.get("switch_states", {}))
+        switch_states.update(LIVE_SWITCHES)
+        switch_states.update(switches or {})
         self.engine = ComputationEngine(
             setup_mock_hass(self.payload),
             create_mock_entry(overrides),
             create_mock_get_entity_id(),
-            create_mock_get_switch_state(switches),
+            create_mock_get_switch_state(switch_states),
         )
 
         self.controller = MagicMock()
@@ -110,6 +118,7 @@ class _Rig:
             "verify_current_state",
         ):
             setattr(self.controller, name, AsyncMock(return_value=True))
+        self.controller.read_fresh_soc = MagicMock(return_value=None)
         notifications = MagicMock()
         for name in (
             "send_transition_notification",
@@ -231,10 +240,8 @@ class TestDeferredExportStartIsReDecidedOnConfirmation:
         assert rig.slot0["sell_estimate"] is False
         assert rig.plan_action == "export_proactive"
         assert rig.data.active_mode == BatteryMode.PROACTIVE_EXPORT
-        rig.controller.set_proactive_export.assert_not_awaited()  # debouncing
-
-        rig.tick(170)  # past the 2-minute export debounce
-
+        # Issue #1120: a confirmed $24.23 is a genuine spike, so the start does
+        # not wait out the 2-minute export debounce.
         rig.controller.set_proactive_export.assert_awaited_once()
 
     def test_estimate_that_never_confirms_starts_the_export_after_the_grace(self, rig):
@@ -246,6 +253,12 @@ class TestDeferredExportStartIsReDecidedOnConfirmation:
         assert rig.slot0["sell_estimate"] is True
         assert rig.slot0["export_start_deferred"] is False
         assert rig.data.active_mode == BatteryMode.PROACTIVE_EXPORT
+        # Still an estimate, so the 2-minute export debounce applies (#1120).
+        rig.controller.set_proactive_export.assert_not_awaited()
+
+        rig.tick(250)
+
+        rig.controller.set_proactive_export.assert_awaited_once()
 
     def test_exactly_one_extra_decision_is_granted(self, rig):
         """One-shot: the confirmation grants once, not on every later tick."""

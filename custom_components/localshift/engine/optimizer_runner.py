@@ -256,6 +256,7 @@ def _build_optimizer_config(
         CONF_MINIMUM_TARGET_SOC,
         CONF_OPTIMIZATION_MODE,
         CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
+        CONF_SPIKE_EXPORT_ENABLED,
         CONF_STALE_SOLAR_CONFIDENCE_CEILING,
         CONF_STALE_SOLAR_CONSERVATIVE,
         CONF_SWITCHING_PENALTY,
@@ -279,6 +280,8 @@ def _build_optimizer_config(
         DEFAULT_SWITCHING_PENALTY_PER_KWH,
         DEFAULT_TARGET_PENALTY,
         NEGATIVE_FIT_MIN_SPILL_COST,
+        SWITCH_DEFAULTS,
+        SWITCH_SPIKE_DISCHARGE_ENABLED,
     )
     from custom_components.localshift.state.mode_configs import (
         resolve_away_reserve_pct,
@@ -305,6 +308,14 @@ def _build_optimizer_config(
     stale_solar_confidence_ceiling = float(
         config_options.get(
             CONF_STALE_SOLAR_CONFIDENCE_CEILING, DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING
+        )
+    )
+
+    # Issue #1120: the state of switch.localshift_spike_discharge_enabled. The
+    # fallback is the switch's own default, so the two cannot drift apart.
+    spike_export_enabled = bool(
+        config_options.get(
+            CONF_SPIKE_EXPORT_ENABLED, SWITCH_DEFAULTS[SWITCH_SPIKE_DISCHARGE_ENABLED]
         )
     )
 
@@ -438,6 +449,7 @@ def _build_optimizer_config(
         allow_dw_entry_under_target=allow_dw_entry_under_target,
         stale_solar_conservative=stale_solar_conservative,
         stale_solar_confidence_ceiling=stale_solar_confidence_ceiling,
+        spike_export_enabled=spike_export_enabled,
         precharge_runway_margin_min=precharge_runway_margin_min,
         # --- Objective weights (user-configurable via Number entities or Options Flow) ---
         # Issue #779: Previously auto-computed from tariff, now user-configurable
