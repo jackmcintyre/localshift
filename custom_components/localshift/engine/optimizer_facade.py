@@ -308,6 +308,9 @@ class OptimizerFacade:
                 solar_absent_confidence=getattr(data, "solar_absent_confidence", 1.0),
                 solar_accuracy_tracker=self._solar_accuracy_tracker,
                 negative_fit_window_open=data.negative_fit_window_open,
+                next_demand_window_gap_min=getattr(
+                    slot_metadata, "next_demand_window_gap_min", None
+                ),
             )
             result = self._planner.plan(inputs)
 
@@ -1346,7 +1349,7 @@ class OptimizerFacade:
             # whichever comparison_mode happens to be enabled; the shadow
             # build's own success/failure is already surfaced separately via
             # comparison_match / shadow_decision.
-            shadow_slots, _ = slot_builder.build_slots(
+            shadow_slots, shadow_metadata = slot_builder.build_slots(
                 data,
                 data.adaptive_params,
                 now_dt=now_dt,
@@ -1379,6 +1382,10 @@ class OptimizerFacade:
                 # Same carried state as the primary solve, so the comparison is
                 # like for like. The shadow run never writes it back.
                 negative_fit_window_open=data.negative_fit_window_open,
+                # From the shadow build: its feed can end at a different time.
+                next_demand_window_gap_min=getattr(
+                    shadow_metadata, "next_demand_window_gap_min", None
+                ),
             )
             result = self._planner.plan(inputs)
 

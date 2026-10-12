@@ -197,6 +197,9 @@ def _run(
         current_action=_map_mode_to_action(data.active_mode),
         slots=slots,
         config=optimizer_config,
+        next_demand_window_gap_min=getattr(
+            slot_metadata, "next_demand_window_gap_min", None
+        ),
     )
 
     # 2. Run DP optimizer (shadow — pure computation, no side effects)
@@ -707,6 +710,20 @@ def _build_summary(
     summary["accuracy_discount_factor"] = result.accuracy_discount_factor
     summary["peak_soc_pct"] = result.peak_soc_pct
     summary["dw_entry_soc_pct"] = result.dw_entry_soc_pct
+
+    # Next-window tail (issue #1033). A start index means decisions from there on
+    # were planned for the demand window that opens after the horizon ends, and
+    # every field above still describes the window before it. None on a plan
+    # whose tail was left alone.
+    summary["next_window_tail_start_idx"] = result.next_window_tail_start_idx
+    required_soc = result.next_window_required_soc_pct
+    summary["next_window_required_soc_pct"] = (
+        round(required_soc, 1) if required_soc is not None else None
+    )
+    entry_soc = result.next_window_entry_soc_pct
+    summary["next_window_entry_soc_pct"] = (
+        round(entry_soc, 1) if entry_soc is not None else None
+    )
 
     # Spike-event pre-charge funding. Read the count and the delta together: a zero
     # count means nothing qualified (the ordinary day), while a non-zero count with

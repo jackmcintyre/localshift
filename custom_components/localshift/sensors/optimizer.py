@@ -151,6 +151,11 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "initial_soc_pct": summary.get("initial_soc_pct"),
             "peak_soc_pct": summary.get("peak_soc_pct"),
             "dw_entry_soc_pct": summary.get("dw_entry_soc_pct"),
+            # Next-window tail (issue #1033): where the plan switches to the
+            # window after the horizon, and the SOC it holds for it there.
+            "next_window_tail_start_idx": summary.get("next_window_tail_start_idx"),
+            "next_window_required_soc_pct": summary.get("next_window_required_soc_pct"),
+            "next_window_entry_soc_pct": summary.get("next_window_entry_soc_pct"),
             # Spike-event pre-charge. slot_count == 0 is the ordinary day (nothing
             # qualified); a non-zero count with accepted False is usually a benign
             # tie — the delta is what separates that from a real guard rejection.

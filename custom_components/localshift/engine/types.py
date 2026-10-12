@@ -252,6 +252,11 @@ class OptimizerConfig:
     for unit tests and standalone use.
     """
 
+    next_window_tail_enabled: bool = True
+    """If True, re-plan the tail of the horizon for a demand window that starts
+    just past it (issue #1033). Decisions up to the end of the window the main
+    solve handled are never changed. See ``DPPlanner._plan_next_window_tail``."""
+
     terminal_salvage_enabled: bool = True
     """If True, credit a bounded salvage value for residual energy at the horizon
     boundary (Issue #811).
@@ -930,6 +935,20 @@ class OptimizerResult:
     dw_entry_soc_pct: float | None = None
     """SOC (%) at demand window entry slot. None if no DW."""
 
+    # Next-window tail (issue #1033)
+    next_window_tail_start_idx: int | None = None
+    """Index of the first decision planned for the demand window that starts
+    past the horizon. None when the tail was not re-planned. Every decision
+    before this index, and every other field on this result, comes from the
+    main solve."""
+
+    next_window_required_soc_pct: float | None = None
+    """SOC (%) the tail had to hold at the end of the horizon: the target less
+    what normal-rate charging can add in the gap before the window opens."""
+
+    next_window_entry_soc_pct: float | None = None
+    """SOC (%) the re-planned tail reaches at the end of the horizon."""
+
     # Negative-FIT avoidance materiality (Issue #1103)
     negative_fit_spill_cost: float | None = None
     """Dollars the negative-FIT risk window would cost if nothing were done
@@ -1058,3 +1077,10 @@ class OptimizerInputs:
     battery would see now, because that figure falls as the window's own
     pre-discharge makes room; it is held until the forecast stops being
     material. See ``negative_fit.assess_negative_fit_avoidance``."""
+
+    next_demand_window_gap_min: float | None = None
+    """Minutes from the end of the last slot to the next demand-window start
+    (issue #1033). 0 when the price feed ends as the window opens. None when
+    unknown or when the last slot is itself inside a window; the plan tail is
+    then left as the main solve produced it. Measured by ``SlotBuilder``,
+    because the planner has no clock and cannot see past its last slot."""

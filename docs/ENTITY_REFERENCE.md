@@ -942,6 +942,9 @@ Attributes:
 **Attributes (new):**
 - `peak_soc_pct` - Maximum SOC projected in the plan
 - `dw_entry_soc_pct` - SOC at demand window entry (null if no DW)
+- `next_window_tail_start_idx` - Index of the first plan slot that was planned for the demand window opening after the horizon ends (Issue #1033). Null when the tail was not re-planned; `terminal_shortfall_pct` and `dw_entry_soc_pct` always describe the window before it
+- `next_window_required_soc_pct` - SOC the tail has to hold at the end of the horizon: the target less what normal-rate charging can add before the window opens
+- `next_window_entry_soc_pct` - SOC the re-planned tail reaches at the end of the horizon
 - `forecast_accuracy` - Current forecast accuracy (0-1)
 - `accuracy_discount_factor` - Applied discount (0.5-1.0)
 - `slot0_price` - What the current slot was priced on (Issue #1119):
