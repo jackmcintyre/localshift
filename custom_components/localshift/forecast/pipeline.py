@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -16,8 +15,6 @@ from ..const import (
 from ..coordinator.data import CoordinatorData
 from .solar import sum_solar_before_target
 from .solar_accuracy import SolarAccuracyTracker
-
-_LOGGER = logging.getLogger(__name__)
 
 
 class ForecastPipeline:
