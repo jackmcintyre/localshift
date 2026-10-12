@@ -6,37 +6,19 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.components.sensor import SensorStateClass
 from homeassistant.helpers.entity import EntityCategory
 
-from ..coordinator.synthetic_slot_health import SyntheticSlotHealth
 from .base import LocalShiftSensorBase
 
 if TYPE_CHECKING:
     pass
 
-_SYNTHETIC_SLOT_HEALTH_FALLBACK: dict[str, Any] = {
-    "rate": 0.0,
-    "degraded": False,
-    "sample_count": 0,
-    "consecutive_above": 0,
-    "consecutive_below": 0,
-    "last_sample_at": None,
-}
-
-
 def _synthetic_slot_attrs(data: Any) -> dict[str, Any]:
     """Build the synthetic-slot-0 attribute trio (Issue #956).
 
-    Falls back to safe defaults when ``data.synthetic_slot_health`` is
-    missing or not a real :class:`SyntheticSlotHealth` -- e.g. a bare
-    ``MagicMock`` coordinator in tests, which would otherwise auto-vivify a
-    truthy Mock attribute and leak it into the sensor's attributes.
+    Issue #997: reads the tracker directly. ``CoordinatorData`` always carries
+    one, so there is no fallback branch that could report a healthy rate from
+    a tracker this code failed to recognise.
     """
-    health = getattr(data, "synthetic_slot_health", None)
-    if not isinstance(health, SyntheticSlotHealth):
-        return {
-            "synthetic_slot_rate": 0.0,
-            "synthetic_slot_degraded": False,
-            "synthetic_slot_health": dict(_SYNTHETIC_SLOT_HEALTH_FALLBACK),
-        }
+    health = data.synthetic_slot_health
     return {
         "synthetic_slot_rate": round(health.rate, 3),
         "synthetic_slot_degraded": health.degraded,

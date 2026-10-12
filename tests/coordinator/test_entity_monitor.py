@@ -6,6 +6,9 @@ import pytest
 from unittest.mock import MagicMock
 
 from custom_components.localshift.coordinator.entity_monitor import EntityMonitor
+from custom_components.localshift.coordinator.synthetic_slot_health import (
+    SyntheticSlotHealth,
+)
 
 
 class TestEntityMonitorInitialization:
@@ -67,6 +70,7 @@ class TestCheckEntityHealth:
         mock_coordinator = MagicMock()
         mock_coordinator.hass = MagicMock()
         mock_coordinator._entity_validator = None
+        mock_coordinator.data.synthetic_slot_health = SyntheticSlotHealth()
         monitor = EntityMonitor(mock_coordinator)
 
         # ACT
@@ -103,6 +107,7 @@ class TestCheckEntityHealth:
         mock_coordinator._entity_validator = mock_validator
         mock_coordinator.entry.entry_id = "cfg_abc"
         mock_data = MagicMock()
+        mock_data.synthetic_slot_health = SyntheticSlotHealth()
         mock_data.entity_warnings = []
         mock_coordinator.data = mock_data
         monitor = EntityMonitor(mock_coordinator)
@@ -155,6 +160,7 @@ class TestCheckEntityHealth:
 
         mock_coordinator._entity_validator = mock_validator
         mock_data = MagicMock()
+        mock_data.synthetic_slot_health = SyntheticSlotHealth()
         mock_coordinator.data = mock_data
         monitor = EntityMonitor(mock_coordinator)
 
@@ -192,6 +198,7 @@ class TestCheckEntityHealth:
 
         mock_coordinator._entity_validator = mock_validator
         mock_data = MagicMock()
+        mock_data.synthetic_slot_health = SyntheticSlotHealth()
         mock_data.entity_warnings = []
         mock_coordinator.data = mock_data
         monitor = EntityMonitor(mock_coordinator)
@@ -231,6 +238,7 @@ class TestCheckEntityHealth:
 
         mock_coordinator._entity_validator = mock_validator
         mock_data = MagicMock()
+        mock_data.synthetic_slot_health = SyntheticSlotHealth()
         mock_coordinator.data = mock_data
         monitor = EntityMonitor(mock_coordinator)
 
@@ -271,6 +279,7 @@ class TestOrphanDetection:
         mock_coordinator._entity_validator = mock_validator
 
         mock_data = MagicMock()
+        mock_data.synthetic_slot_health = SyntheticSlotHealth()
         mock_data.entity_warnings = []
         mock_coordinator.data = mock_data
         return mock_coordinator

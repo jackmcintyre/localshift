@@ -257,18 +257,26 @@ class TestSyntheticPathRunsWithoutValidator:
 
         assert coordinator.data.entity_warnings == []
 
-    def test_no_crash_when_synthetic_slot_health_is_a_plain_mock(self):
-        """A coordinator.data built from a bare MagicMock (as in the existing
-        TestCheckEntityHealth suite) must not crash or leak Mock truthiness
-        into integration_status. ``synthetic_slot_health`` is left unset so
-        ``mock_data.synthetic_slot_health`` is itself an auto-generated
-        MagicMock -- the isinstance(SyntheticSlotHealth) guard must reject it."""
-        monitor, coordinator = _monitor_with_data(validator_status=None)
+    def test_tracker_is_read_by_shape_not_by_class(self):
+        """Issue #997: a degraded tracker must escalate even when it is not an
+        instance of this module's SyntheticSlotHealth (e.g. the module was
+        loaded twice). A type check here skipped it silently and left
+        integration_status reading "ok"."""
+
+        class _ReloadedTracker:
+            rate = 1.0
+            sample_count = 60
+            degraded = True
+            needs_startup_warning = False
+
+        monitor, coordinator = _monitor_with_data(
+            synthetic_slot_health=_ReloadedTracker()
+        )
 
         monitor.check_entity_health()
 
-        assert coordinator.data.integration_status == "ok"
-        assert coordinator.data.entity_warnings == []
+        assert coordinator.data.integration_status == "degraded"
+        assert len(coordinator.data.entity_warnings) == 1
 
 
 class TestStartupWarning:

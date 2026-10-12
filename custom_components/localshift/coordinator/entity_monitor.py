@@ -24,7 +24,6 @@ from ..const import (
     TESLA_TARIFF_LOOKAHEAD_HOURS,
 )
 from ..utils.export_availability import export_blocked_periods
-from .synthetic_slot_health import SyntheticSlotHealth
 
 if TYPE_CHECKING:  # pragma: no cover
     from .coordinator import LocalShiftCoordinator
@@ -136,12 +135,9 @@ class EntityMonitor:
         this cycle.
         """
         data = self._coordinator.data
-        health = getattr(data, "synthetic_slot_health", None)
-        # Guard against a bare MagicMock (unit tests that build coordinator
-        # data from a generic mock, not a real CoordinatorData) leaking a
-        # truthy Mock into integration_status.
-        if not isinstance(health, SyntheticSlotHealth):
-            return
+        # Issue #997: read the tracker directly. CoordinatorData always carries
+        # one; a type check here could only ever skip the escalation silently.
+        health = data.synthetic_slot_health
 
         # Issue #995: withdraw last cycle's warning before deciding on this
         # cycle's. With a validator the list was rebuilt above and this is a

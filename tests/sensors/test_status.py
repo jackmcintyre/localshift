@@ -89,24 +89,34 @@ class TestIntegrationStatusSensorSyntheticSlotHealth:
         assert attrs["synthetic_slot_degraded"] is True
         assert attrs["synthetic_slot_health"] == health.to_dict()
 
-    def test_missing_tracker_falls_back_to_safe_defaults(self):
-        """A coordinator built from a bare MagicMock (no synthetic_slot_health
-        explicitly set) must not leak a Mock object into the attribute dict."""
+    def test_tracker_is_read_by_shape_not_by_class(self):
+        """Issue #997: a degraded tracker must be reported as degraded even
+        when it is not an instance of this module's SyntheticSlotHealth (e.g.
+        the module was loaded twice). A type check here fell back to a
+        healthy-looking 0.0 / False with no log line."""
+
+        class _ReloadedTracker:
+            rate = 1.0
+            degraded = True
+
+            def to_dict(self):
+                return {"rate": 1.0, "degraded": True}
+
         sensor = _sensor(
             IntegrationStatusSensor,
-            integration_status="ok",
-            integration_status_message="All good",
+            integration_status="degraded",
+            integration_status_message="degraded",
             entity_errors=[],
             entity_warnings=[],
             required_entities_healthy=True,
             last_entity_check="2026-03-12T12:00:00",
+            synthetic_slot_health=_ReloadedTracker(),
         )
         attrs = sensor.extra_state_attributes
 
-        assert attrs["synthetic_slot_rate"] == 0.0
-        assert attrs["synthetic_slot_degraded"] is False
-        assert isinstance(attrs["synthetic_slot_health"], dict)
-        assert attrs["synthetic_slot_health"]["last_sample_at"] is None
+        assert attrs["synthetic_slot_rate"] == 1.0
+        assert attrs["synthetic_slot_degraded"] is True
+        assert attrs["synthetic_slot_health"] == {"rate": 1.0, "degraded": True}
 
     def test_synthetic_slot_health_is_unrecorded(self):
         assert "synthetic_slot_health" in IntegrationStatusSensor._unrecorded_attributes
