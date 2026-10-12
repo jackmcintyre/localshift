@@ -261,7 +261,7 @@
       },
       "spike_discharge_enabled": {
         "name": "Spike Discharge Enabled",
-        "description": "Allow battery discharge during price spike events. Export energy when prices are highest."
+        "description": "Currently has no effect. Automatic spike export is handled by the planner (proactive export); the spike discharge mode is only entered by hand."
       },
       "spike_discharge_conservative": {
         "name": "Conservative Spike Discharge",

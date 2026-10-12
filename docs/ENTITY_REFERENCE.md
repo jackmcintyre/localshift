@@ -926,6 +926,14 @@ Attributes:
   - `buy_estimate`, `sell_estimate` - Amber's `estimate` flag for that entry: true until the interval's price is confirmed, null when the source carries none
   - `export_start_deferred` - true when an unconfirmed sell price kept the current slot from starting an export (first 90 s of the interval; an export already running is not interrupted). If a mode decision was taken while this was true, one further decision, able only to start the export, is granted once it clears
   - `live_buy`, `live_sell` - the price sensors' own states, for comparison
+- `spike_export` - Whether the current slot counted as a genuine price spike, and what it was judged against (Issue #1120):
+  - `admitted` - true when the current slot's sell price reached `min_sell`. In `self_consumption` mode this is what lets the planner consider exporting below the same interval's buy price; the planner still decides
+  - `exporting` - true when the slot was admitted and the plan's current action is export
+  - `sell` - the sell price that was judged ($/kWh)
+  - `rebuy_price`, `rebuy_at` - the dearest buy price in the next 12 hours of the plan and the slot it falls in: the worst the exported energy could cost to replace
+  - `min_sell` - the sell price needed: the larger of `spike_floor` and `rebuy_price` / round-trip efficiency + `export_price_margin`
+  - `spike_floor`, `median_buy` - 4x the horizon's median buy price, and that median
+  - `skip_debounce` - true when `exporting` is true and Amber has confirmed the sell price (`slot0_price.sell_estimate` false). The export start then skips the 2-minute export debounce. An estimate, or a price with no confirmation flag, never sets it
 
 **Icon:** Dynamic (mdi:check-circle-outline for success, mdi:alert-circle-outline for failed, mdi:minus-circle-outline for disabled)
 
@@ -1161,7 +1169,7 @@ State: on
 
 ### 2. switch.localshift_spike_discharge_enabled
 
-**Purpose:** Allow/disallow discharge during price spikes.
+**Purpose:** None at present. The switch has no effect.
 
 **Default:** ON
 
@@ -1171,8 +1179,10 @@ State: on
 ```
 
 **Behavior:**
-- ON: Spike discharge allowed when price spike detected
-- OFF: No discharge during spikes (even if spike detected)
+- Nothing in LocalShift reads this switch (Issue #1120). Turning it ON or OFF changes no decision.
+- Automatic operation never selects the `spike_discharge` battery mode. That mode is only entered by picking it by hand on `select.localshift_battery_mode`, and a manual pick ignores this switch too. A manual spike discharge has no price-aware exit: it runs until another mode is picked or the manual override times out.
+- What exports on a price spike automatically is the planner's `proactive_export` mode. In `arbitrage` optimisation mode any positive feed-in price can be exported. In `self_consumption` (the default) an export is admitted when the feed-in price beats the same interval's buy price plus `export_price_margin`, which Amber's prices never do, or when the current interval is a genuine spike (a spike that is only forecast is never planned as an export): the feed-in price is at least 4x the horizon's median buy price and beats the dearest buy price in the next 12 hours after round-trip losses, plus `export_price_margin`. See `spike_export` on `sensor.localshift_optimizer_summary`.
+- The entity is kept so dashboards and entity-health checks that reference it keep working.
 
 ---
 

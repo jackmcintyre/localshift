@@ -149,6 +149,12 @@ class SlotContext:
     raises the floor above ``OptimizerConfig.discharge_floor_pct``; HOLD still
     serves load beneath it and it never unlocks grid charging."""
 
+    spike_export_admitted: bool = False
+    """Solver-derived (set by ``DPPlanner.plan``): this slot's sell price is a
+    genuine spike, so EXPORT is feasible in self_consumption mode even though
+    it is below the same interval's buy price. Only ever True on slot 0. See
+    ``engine/spike_export.py`` (issue #1120)."""
+
 
 # -----------------------------------------------------------------------------
 # Optimizer configuration
@@ -379,6 +385,11 @@ class OptimizerConfig:
     """Solver-derived (set by ``DPPlanner.plan``): the export floor for the first
     slot, published so the state machine's PROACTIVE_EXPORT reserve stops there
     too."""
+
+    spike_export_now: dict[str, Any] = field(default_factory=dict)
+    """Solver-derived (set by ``DPPlanner.plan``): slot 0's spike-export verdict
+    and the rebuy price it was judged against, for the summary sensor and the
+    state machine's debounce (issue #1120)."""
 
     spike_funding_slots: frozenset[int] | None = None
     """Solver-derived (set by ``DPPlanner.plan``): slots whose grid charge is admitted to

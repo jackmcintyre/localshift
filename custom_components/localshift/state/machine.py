@@ -949,14 +949,53 @@ class StateMachine:
         )
         return False
 
-    def _get_debounce_duration(self, desired: BatteryMode) -> timedelta:
+    def _get_debounce_duration(
+        self, desired: BatteryMode, data: CoordinatorData | None = None
+    ) -> timedelta:
         """Get debounce duration for a desired transition."""
         if self._skip_next_debounce:
             self._skip_next_debounce = False
             _LOGGER.info("Skipping debounce (first transition after startup)")
             return timedelta(0)
 
+        if desired == BatteryMode.PROACTIVE_EXPORT and self._spike_export_confirmed(
+            data
+        ):
+            return timedelta(0)
+
         return self.get_debounce_for_transition(self._commanded_mode, desired)
+
+    @staticmethod
+    def _spike_export_confirmed(data: CoordinatorData | None) -> bool:
+        """Whether the plan's export start is a genuine spike on a confirmed price.
+
+        Issue #1120. A price spike lasts one 5-minute interval, and the
+        2-minute export debounce (on top of the #1119 confirmation wait) left
+        about two of those minutes to export in.
+
+        The debounce exists to stop rapid cycling "when forecast oscillates
+        near the export threshold". This exemption cannot bring that back:
+
+        - It is only set for a slot the planner admitted as a spike: a sell
+          price at least four times the horizon's median buy price that also
+          beats the dearest later buy price after round-trip losses
+          (engine/spike_export.py). An export near the ordinary threshold
+          fails that by a wide factor and keeps the full debounce.
+        - It needs Amber's ``estimate`` flag to be False. A price carried over
+          from the previous interval, or one with no flag, keeps the debounce,
+          so a stale $24 cannot start an export in the seconds before the real
+          price lands.
+        - It adds no decisions. ``desired`` only changes on a decision token
+          (once per price change), so this can move an export start earlier
+          but cannot create a transition the debounce would not also have
+          made, unless a second token inside the same two minutes takes the
+          export away again, which needs the confirmed price itself to change.
+
+        Read from the summary the optimizer facade wrote on its last run.
+        """
+        summary = getattr(data, "optimizer_summary", None)
+        spike = summary.get("spike_export") if isinstance(summary, dict) else None
+        return isinstance(spike, dict) and spike.get("skip_debounce") is True
 
     def _handle_debounce_timing(
         self, desired: BatteryMode, now: datetime, debounce: timedelta
@@ -1410,7 +1449,7 @@ class StateMachine:
         """Handle mode transition with debounce logic."""
         self._clear_stale_debounce_timers(desired)
 
-        debounce = self._get_debounce_duration(desired)
+        debounce = self._get_debounce_duration(desired, data)
         debounce_in_progress = desired in self._mode_desired_since
 
         # #622 gate replacement: the "decide only on context change" gate now

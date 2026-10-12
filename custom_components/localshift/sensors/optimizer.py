@@ -198,6 +198,9 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             # Issue #1119: the price slot 0 was committed on, its source and
             # Amber's estimate flag, beside the live sensor readings.
             "slot0_price": summary.get("slot0_price") or {},
+            # Issue #1120: whether slot 0 counted as a genuine price spike, the
+            # rebuy price it was judged against and the sell price it needed.
+            "spike_export": summary.get("spike_export") or {},
             "hard_floor_suppressed_by_solar": _resolve_optional(
                 summary, d, "hard_floor_suppressed_by_solar", False
             ),

@@ -49,6 +49,9 @@ from custom_components.localshift.engine.solar import (
     projected_solcast_gain_pct,
 )
 from custom_components.localshift.engine.spike_event import find_funding_slots
+from custom_components.localshift.engine.spike_export import (
+    apply_spike_export_admission,
+)
 from custom_components.localshift.engine.transitions import _tapered_stored_kwh
 from custom_components.localshift.engine.transitions import transition as _transition
 from custom_components.localshift.engine.types import (
@@ -457,6 +460,7 @@ class DPPlanner:
 
         try:
             apply_export_floor(inputs.slots, inputs.config)
+            apply_spike_export_admission(inputs.slots, inputs.config)
             result = self._solve_guarded(inputs)
 
         except Exception as exc:  # noqa: BLE001
