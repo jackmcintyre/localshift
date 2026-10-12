@@ -234,6 +234,9 @@ CONF_STALE_SOLAR_CONFIDENCE_CEILING = "stale_solar_confidence_ceiling"
 CONF_PRECHARGE_RUNWAY_MARGIN_MIN = "precharge_runway_margin_min"
 CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
+# Not an options-flow setting: the key under which the state of
+# switch.localshift_spike_discharge_enabled reaches the planner (issue #1120).
+CONF_SPIKE_EXPORT_ENABLED = "spike_export_enabled"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
 CONF_SWITCHING_PENALTY = "switching_penalty"
 CONF_SWITCHING_PENALTY_PER_KWH = "switching_penalty_per_kwh"

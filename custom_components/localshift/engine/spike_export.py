@@ -75,12 +75,30 @@ pre-charge path landing it.
 It does nothing in ``arbitrage`` mode, where every positive sell price is
 already admitted. The verdict is still computed there, because the state
 machine uses it to tell a genuine spike from an ordinary export.
+
+THE KILL SWITCH
+---------------
+``switch.localshift_spike_discharge_enabled`` turns the whole rule on and off
+(``OptimizerConfig.spike_export_enabled``; default ON). OFF means no verdict is
+computed: no slot is admitted, and because the debounce exemption is derived
+from the verdict, no export start skips the debounce either, in ``arbitrage``
+as well as ``self_consumption``. That is the planner and state machine exactly
+as they were before this module existed. The published verdict then carries
+only ``enabled: False`` and the entity that disabled it.
 """
 
 from __future__ import annotations
 
-from ..const import SPIKE_EXPORT_OUTLIER_FACTOR, SPIKE_EXPORT_REBUY_LOOKAHEAD_HOURS
+from ..const import (
+    SPIKE_EXPORT_OUTLIER_FACTOR,
+    SPIKE_EXPORT_REBUY_LOOKAHEAD_HOURS,
+    SWITCH_SPIKE_DISCHARGE_ENABLED,
+)
 from .types import OptimizerConfig, SlotContext
+
+# The owner's on/off for this rule, named in the published verdict so a spike
+# that was not exported can be traced to the switch.
+SPIKE_EXPORT_SWITCH_ENTITY_ID = f"switch.localshift_{SWITCH_SPIKE_DISCHARGE_ENABLED}"
 
 
 def _median_buy_price(slots: list[SlotContext]) -> float | None:
@@ -140,7 +158,15 @@ def apply_spike_export_admission(
     for slot in slots:
         slot.spike_export_admitted = False
     config.spike_export_now = {}
+    if not config.spike_export_enabled:
+        config.spike_export_now = {
+            "enabled": False,
+            "disabled_by": SPIKE_EXPORT_SWITCH_ENTITY_ID,
+            "admitted": False,
+        }
+        return
     if not slots:
+        config.spike_export_now = {"enabled": True, "admitted": False}
         return
 
     slot = slots[0]
@@ -166,6 +192,7 @@ def apply_spike_export_admission(
         return round(value, 4) if value is not None else None
 
     config.spike_export_now = {
+        "enabled": True,
         "admitted": admitted,
         "sell": round(slot.sell_price, 4),
         "rebuy_price": _rounded(rebuy[0] if rebuy is not None else None),

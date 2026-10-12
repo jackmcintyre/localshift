@@ -386,6 +386,12 @@ class OptimizerConfig:
     slot, published so the state machine's PROACTIVE_EXPORT reserve stops there
     too."""
 
+    spike_export_enabled: bool = True
+    """Whether slot 0 may be judged a spike at all (issue #1120): the state of
+    ``switch.localshift_spike_discharge_enabled``. False means no slot is ever
+    admitted and no export start skips the debounce, in either optimisation
+    mode: the behaviour before the spike-export rule existed."""
+
     spike_export_now: dict[str, Any] = field(default_factory=dict)
     """Solver-derived (set by ``DPPlanner.plan``): slot 0's spike-export verdict
     and the rebuy price it was judged against, for the summary sensor and the

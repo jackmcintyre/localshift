@@ -450,3 +450,168 @@ class TestOrdinaryDaysAreUnchanged:
         assert branch["mode"] == base["mode"]
         assert branch["spike_export"]["admitted"] is False
         assert branch["spike_export"]["skip_debounce"] is False
+
+
+# --------------------------------------------------------------------------
+# The kill switch: switch.localshift_spike_discharge_enabled
+# --------------------------------------------------------------------------
+
+
+def _arm(instant: str, arm: str, optimization_mode: str = "self_consumption") -> dict:
+    """A 2026-10-12 capture through the real engine under one arm.
+
+    ``base`` is the base branch (the admission code removed), ``branch`` is the
+    switch at its default ON, ``switch_off`` is the switch turned OFF through
+    the same switch-state resolver production uses.
+    """
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    from replay_spike_export import run
+
+    scenario = json.loads((CAPTURES / f"2026-10-12T{instant}.json").read_text())
+    return run(scenario, arm, optimization_mode)
+
+
+ALL_INSTANTS = ["151530", "152010", "153040", "161040", "162550", "163010", "163040"]
+CONFIRMED_SPIKES = ["151530", "153040", "163040"]
+
+
+class TestKillSwitch:
+    """ON = the rule is live. OFF = the base branch, decision for decision."""
+
+    @pytest.mark.parametrize("instant", CONFIRMED_SPIKES)
+    def test_switch_on_exports_the_confirmed_spike(self, instant):
+        result = _arm(instant, "branch")
+
+        assert result["actions"][0] == "export_proactive"
+        spike = result["spike_export"]
+        assert spike["enabled"] is True
+        assert spike["admitted"] is True
+        assert spike["skip_debounce"] is True
+
+    @pytest.mark.parametrize("instant", ALL_INSTANTS)
+    def test_switch_off_gives_exactly_the_base_branch_plan(self, instant):
+        base = _arm(instant, "base")
+        off = _arm(instant, "switch_off")
+
+        # Every slot of the plan, and the mode it resolves to.
+        assert off["actions"] == base["actions"]
+        assert off["mode"] == base["mode"]
+        assert off["dw_entry_soc_pct"] == base["dw_entry_soc_pct"]
+
+    @pytest.mark.parametrize("instant", CONFIRMED_SPIKES)
+    def test_switch_off_holds_through_the_confirmed_spike(self, instant):
+        """The switch must change something: ON exported these three."""
+        off = _arm(instant, "switch_off")
+
+        assert off["actions"][0] == "hold"
+        spike = off["spike_export"]
+        assert spike["enabled"] is False
+        assert spike["admitted"] is False
+        assert spike["exporting"] is False
+        assert spike["skip_debounce"] is False
+
+    @pytest.mark.parametrize("instant", CONFIRMED_SPIKES)
+    def test_switch_off_removes_the_debounce_exemption_in_arbitrage_too(self, instant):
+        """Arbitrage exports any positive sell price whatever the switch says,
+        but with the switch OFF it is an ordinary export, debounce and all."""
+        on = _arm(instant, "branch", "arbitrage")
+        off = _arm(instant, "switch_off", "arbitrage")
+        base = _arm(instant, "base", "arbitrage")
+
+        assert on["spike_export"]["skip_debounce"] is True
+        assert off["actions"] == base["actions"] == on["actions"]
+        assert off["actions"][0] == "export_proactive"
+        assert off["spike_export"]["enabled"] is False
+        assert off["spike_export"]["skip_debounce"] is False
+
+    def test_summary_sensor_says_the_rule_is_disabled(self):
+        off = _arm("151530", "switch_off")
+        coordinator = MagicMock()
+        coordinator.data.solcast_analysis_today = None
+        coordinator.data.solcast_analysis_tomorrow = None
+        coordinator.data.solar_absent_confidence = 1.0
+        coordinator.data.dw_entry_actual_at = None
+        coordinator.data.optimizer_summary = {
+            "success": True,
+            "enabled": True,
+            "spike_export": off["spike_export"],
+        }
+        sensor = OptimizerSummarySensor.__new__(OptimizerSummarySensor)
+        sensor.coordinator = coordinator
+
+        attrs = sensor.extra_state_attributes["spike_export"]
+
+        assert attrs["enabled"] is False
+        assert attrs["disabled_by"] == "switch.localshift_spike_discharge_enabled"
+        assert attrs["admitted"] is False
+        assert attrs["skip_debounce"] is False
+
+    def test_planner_ignores_a_spike_when_the_rule_is_disabled(self):
+        prices = [(26.71, 24.23), (2.55, 2.26)] + [(0.20, 0.10)] * 30
+        config = OptimizerConfig(
+            optimization_mode="self_consumption",
+            export_price_margin=0.10,
+            spike_export_enabled=False,
+        )
+        inputs = OptimizerInputs(
+            cycle_id="test-1120-off",
+            initial_soc_pct=90.0,
+            slots=_slots(prices),
+            config=config,
+        )
+
+        result = DPPlanner().plan(inputs)
+
+        assert result.success, result.error_message
+        assert not any(s.spike_export_admitted for s in inputs.slots)
+        assert result.decisions[0].action != PlannerAction.EXPORT_PROACTIVE
+        assert config.spike_export_now["enabled"] is False
+
+    @pytest.mark.parametrize(("switch_on", "expected"), [(True, True), (False, False)])
+    def test_switch_state_reaches_the_planner_config(self, switch_on, expected):
+        """The live route: switch bridge -> config_options -> OptimizerConfig.
+        A key missing from that dict leaves the entity decorative (#965, #969)."""
+        from types import SimpleNamespace
+
+        from custom_components.localshift.computation_engine import ComputationEngine
+        from custom_components.localshift.const import (
+            CONF_SPIKE_EXPORT_ENABLED,
+            SWITCH_SPIKE_DISCHARGE_ENABLED,
+        )
+        from custom_components.localshift.engine.optimizer_runner import (
+            _build_optimizer_config,
+        )
+
+        asked: list[str] = []
+
+        def switch_state(key: str) -> bool:
+            asked.append(key)
+            return switch_on if key == SWITCH_SPIKE_DISCHARGE_ENABLED else False
+
+        engine = ComputationEngine.__new__(ComputationEngine)
+        engine.entry = SimpleNamespace(options={})
+        engine._get_switch_state = switch_state
+
+        options = engine._build_optimizer_config_options()
+
+        assert SWITCH_SPIKE_DISCHARGE_ENABLED in asked
+        assert options[CONF_SPIKE_EXPORT_ENABLED] is expected
+        config = _build_optimizer_config(SimpleNamespace(), options)
+        assert config.spike_export_enabled is expected
+
+    def test_default_is_on(self):
+        """Read, not chosen here: the rule ships enabled because the switch
+        already defaulted ON. Changing either default is an owner decision."""
+        from types import SimpleNamespace
+
+        from custom_components.localshift.const import (
+            SWITCH_DEFAULTS,
+            SWITCH_SPIKE_DISCHARGE_ENABLED,
+        )
+        from custom_components.localshift.engine.optimizer_runner import (
+            _build_optimizer_config,
+        )
+
+        assert SWITCH_DEFAULTS[SWITCH_SPIKE_DISCHARGE_ENABLED] is True
+        assert OptimizerConfig().spike_export_enabled is True
+        assert _build_optimizer_config(SimpleNamespace(), {}).spike_export_enabled

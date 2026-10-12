@@ -109,3 +109,73 @@ class TestDebounceExemptionIsNarrow:
         assert rig.machine._get_debounce_duration(
             BatteryMode.PROACTIVE_EXPORT
         ) == timedelta(minutes=2)
+
+
+# --------------------------------------------------------------------------
+# The kill switch: switch.localshift_spike_discharge_enabled
+# --------------------------------------------------------------------------
+
+SWITCH_OFF = {"spike_discharge_enabled": False}
+TWO_MINUTES = timedelta(minutes=2)
+
+
+class TestKillSwitchOnTheCommitPath:
+    @pytest.mark.parametrize("instant", ["151530", "153040", "163040"])
+    def test_switch_on_exports_and_skips_the_debounce(self, instant):
+        rig = _Rig(
+            CAPTURES / f"2026-10-12T{instant}.json",
+            "self_consumption",
+            {"spike_discharge_enabled": True},
+        )
+
+        _settle(rig)
+
+        assert rig.data.optimizer_summary["spike_export"]["enabled"] is True
+        assert rig.machine._commanded_mode == BatteryMode.PROACTIVE_EXPORT
+        rig.controller.set_proactive_export.assert_awaited_once()
+
+    @pytest.mark.parametrize("instant", ["151530", "153040", "163040"])
+    def test_switch_off_never_exports_the_spike_in_the_default_mode(self, instant):
+        """What the base branch did: hold through $24.23 and $10.5."""
+        rig = _Rig(
+            CAPTURES / f"2026-10-12T{instant}.json", "self_consumption", SWITCH_OFF
+        )
+
+        _settle(rig)
+        for seconds in (30, 90, 130, 200):
+            rig.tick(seconds)
+
+        spike = rig.data.optimizer_summary["spike_export"]
+        assert spike["enabled"] is False
+        assert spike["admitted"] is False
+        assert spike["skip_debounce"] is False
+        assert rig.plan_action == "hold"
+        assert rig.data.active_mode != BatteryMode.PROACTIVE_EXPORT
+        assert rig.machine._commanded_mode != BatteryMode.PROACTIVE_EXPORT
+        rig.controller.set_proactive_export.assert_not_awaited()
+
+    @pytest.mark.parametrize("instant", ["151530", "163040"])
+    def test_switch_off_keeps_the_debounce_in_arbitrage(self, instant):
+        """Arbitrage still wants the export; OFF only takes away the head start."""
+        on = _Rig(CAPTURES / f"2026-10-12T{instant}.json", "arbitrage")
+        off = _Rig(CAPTURES / f"2026-10-12T{instant}.json", "arbitrage", SWITCH_OFF)
+
+        _settle(on)
+        _settle(off)
+
+        # ON: confirmed spike, command sent at once.
+        on.controller.set_proactive_export.assert_awaited_once()
+        # OFF: same plan, same desired mode, but the 2-minute debounce stands.
+        assert off.plan_action == on.plan_action == "export_proactive"
+        assert off.data.active_mode == BatteryMode.PROACTIVE_EXPORT
+        assert off.data.optimizer_summary["spike_export"]["skip_debounce"] is False
+        assert (
+            off.machine._get_debounce_duration(BatteryMode.PROACTIVE_EXPORT, off.data)
+            == TWO_MINUTES
+        )
+        off.controller.set_proactive_export.assert_not_awaited()
+        off.tick(60)
+        off.controller.set_proactive_export.assert_not_awaited()
+        # ...and once it has run out the ordinary export goes ahead.
+        off.tick(130)
+        off.controller.set_proactive_export.assert_awaited_once()

@@ -261,7 +261,7 @@
       },
       "spike_discharge_enabled": {
         "name": "Spike Discharge Enabled",
-        "description": "Currently has no effect. Automatic spike export is handled by the planner (proactive export); the spike discharge mode is only entered by hand."
+        "description": "Allow automatic export on a genuine price spike. On: the current interval can be exported when its feed-in price is a spike, and a confirmed spike starts without the 2-minute export debounce. Off: no spike export in self-consumption mode, and every export start waits out the debounce."
       },
       "spike_discharge_conservative": {
         "name": "Conservative Spike Discharge",

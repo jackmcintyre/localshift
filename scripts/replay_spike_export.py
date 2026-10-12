@@ -17,6 +17,11 @@ Each instant runs twice through ``ComputationEngine.compute_derived_values``:
   base     the base branch: spike admission switched off
   branch   this branch
 
+``run`` also takes a third arm, ``switch_off``: this branch with
+``switch.localshift_spike_discharge_enabled`` OFF. That is the owner's kill
+switch for the rule and must reproduce ``base`` exactly (the tests hold it to
+that); ``base`` removes the code, ``switch_off`` goes through the switch.
+
 Inputs are byte-identical across the two arms. Read the solar caveat in
 export_replay_days.py before quoting absolute numbers; the comparison between
 arms is what this is for.
@@ -83,8 +88,10 @@ def capture(days: int, out_dir: Path) -> int:
 # --------------------------------------------------------------------------
 
 
-def run(scenario: dict[str, Any], arm: str) -> dict[str, Any]:
-    """Run one captured instant in self_consumption mode under one arm."""
+def run(
+    scenario: dict[str, Any], arm: str, optimization_mode: str = "self_consumption"
+) -> dict[str, Any]:
+    """Run one captured instant under one arm (self_consumption by default)."""
     from replay_no_dw import LIVE_OVERRIDES, LIVE_SWITCHES, _seed_horizon
 
     from custom_components.localshift.computation_engine import ComputationEngine
@@ -110,9 +117,12 @@ def run(scenario: dict[str, Any], arm: str) -> dict[str, Any]:
 
     overrides = dict(scenario.get("config_overrides", {}))
     overrides.update(LIVE_OVERRIDES)
-    overrides["optimization_mode"] = "self_consumption"
+    overrides["optimization_mode"] = optimization_mode
     switches = dict(scenario.get("switch_states", {}))
     switches.update(LIVE_SWITCHES)
+    if arm == "switch_off":
+        # The kill switch, through the same resolver production uses.
+        switches["spike_discharge_enabled"] = False
 
     engine = ComputationEngine(
         hass,

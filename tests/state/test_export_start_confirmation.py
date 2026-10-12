@@ -63,7 +63,10 @@ class _Rig:
     """Real state machine + real computation engine on one captured instant."""
 
     def __init__(
-        self, capture: Path = CAPTURE, optimization_mode: str | None = None
+        self,
+        capture: Path = CAPTURE,
+        optimization_mode: str | None = None,
+        switches: dict[str, bool] | None = None,
     ) -> None:
         sys.path.insert(0, str(REPO_ROOT / "scripts"))
         from replay_no_dw import LIVE_OVERRIDES, LIVE_SWITCHES, _seed_horizon
@@ -95,13 +98,14 @@ class _Rig:
         overrides.update(LIVE_OVERRIDES)
         if optimization_mode is not None:
             overrides["optimization_mode"] = optimization_mode
-        switches = dict(scenario.get("switch_states", {}))
-        switches.update(LIVE_SWITCHES)
+        switch_states = dict(scenario.get("switch_states", {}))
+        switch_states.update(LIVE_SWITCHES)
+        switch_states.update(switches or {})
         self.engine = ComputationEngine(
             setup_mock_hass(self.payload),
             create_mock_entry(overrides),
             create_mock_get_entity_id(),
-            create_mock_get_switch_state(switches),
+            create_mock_get_switch_state(switch_states),
         )
 
         self.controller = MagicMock()

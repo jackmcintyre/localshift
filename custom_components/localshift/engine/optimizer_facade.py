@@ -358,7 +358,9 @@ class OptimizerFacade:
         ``skip_debounce`` tells the state machine this export start is a genuine
         spike on a CONFIRMED price and need not wait out the 2-minute export
         debounce. An estimate, or a price with no confirmation flag at all,
-        never sets it.
+        never sets it. Nor does anything while the rule is switched off
+        (``enabled`` False, ``switch.localshift_spike_discharge_enabled``):
+        the verdict is then never ``admitted``, in either optimisation mode.
         """
         verdict = getattr(optimizer_config, "spike_export_now", None)
         summary: dict[str, Any] = dict(verdict) if isinstance(verdict, dict) else {}
@@ -368,6 +370,9 @@ class OptimizerFacade:
             admitted
             and decisions
             and decisions[0].action == PlannerAction.EXPORT_PROACTIVE
+        )
+        summary["enabled"] = bool(
+            getattr(optimizer_config, "spike_export_enabled", True)
         )
         summary["admitted"] = admitted
         summary["exporting"] = exporting

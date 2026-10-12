@@ -218,7 +218,7 @@ Devices & Services. Full canonical reference:
 | Entity ID | Default | Description |
 |---|---|---|
 | `switch.localshift_automation_enabled` | ON | Master toggle for all automation |
-| `switch.localshift_spike_discharge_enabled` | ON | Allow discharge during price spikes |
+| `switch.localshift_spike_discharge_enabled` | ON | Allow automatic export on a genuine price spike (OFF: no spike export, every export start keeps the 2-minute debounce) |
 | `switch.localshift_spike_discharge_conservative` | OFF | Conservative spike discharge with dynamic reserve |
 | `switch.localshift_dry_run` | OFF | Log decisions without sending commands |
 | `switch.localshift_demand_window_block` | ON | Block grid charging during the demand window |
