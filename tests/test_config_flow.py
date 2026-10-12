@@ -729,8 +729,10 @@ class TestOptionsFlow:
             CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
             CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
             CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
-            CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
-            CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+            # Issue #992: deliberately NOT the id the '100h' prefix would
+            # derive, so a preserved mapping and a substituted guess differ.
+            CONF_PRICING_GENERAL_FORECAST: "sensor.my_site_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.my_site_feed_in_forecast",
             CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
@@ -741,8 +743,8 @@ class TestOptionsFlow:
         )
         defaults = {key.schema: key.default() for key in schema.schema}
 
-        assert defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.100h_general_forecast"
-        assert defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.100h_feed_in_forecast"
+        assert defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.my_site_general_forecast"
+        assert defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.my_site_feed_in_forecast"
 
         # The pre-filled form must validate — this is what the frontend submits.
         schema(defaults)
@@ -775,8 +777,10 @@ class TestOptionsFlow:
             CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
             CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
             CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
-            CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
-            CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+            # Issue #992: deliberately NOT the id the '100h' prefix would
+            # derive, so a preserved mapping and a substituted guess differ.
+            CONF_PRICING_GENERAL_FORECAST: "sensor.my_site_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.my_site_feed_in_forecast",
             CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
@@ -789,8 +793,8 @@ class TestOptionsFlow:
 
         schema = result["data_schema"]
         defaults = {key.schema: key.default() for key in schema.schema}
-        assert defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.100h_general_forecast"
-        assert defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.100h_feed_in_forecast"
+        assert defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.my_site_general_forecast"
+        assert defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.my_site_feed_in_forecast"
         schema(defaults)
 
 
@@ -901,8 +905,10 @@ class TestEntityMappingsStep:
             CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
             CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
             CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
-            CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
-            CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+            # Issue #992: deliberately NOT the id the '100h' prefix would
+            # derive, so a preserved mapping and a substituted guess differ.
+            CONF_PRICING_GENERAL_FORECAST: "sensor.my_site_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.my_site_feed_in_forecast",
             CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
@@ -931,8 +937,10 @@ class TestEntityMappingsStep:
             CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
             CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
             CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
-            CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
-            CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+            # Issue #992: deliberately NOT the id the '100h' prefix would
+            # derive, so a preserved mapping and a substituted guess differ.
+            CONF_PRICING_GENERAL_FORECAST: "sensor.my_site_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.my_site_feed_in_forecast",
             CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
