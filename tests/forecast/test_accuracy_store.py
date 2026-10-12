@@ -1,5 +1,6 @@
 """Tests for AccuracyMetricsStore (Issue #706, TDD RED phase)."""
 
+import logging
 from unittest.mock import MagicMock, AsyncMock, patch
 import pytest
 
@@ -178,12 +179,14 @@ class TestAsyncSave:
     """Tests for async_save method."""
 
     @pytest.mark.asyncio
-    async def test_save_no_store(self, store, data):
-        """_store=None → noop, no exception."""
+    async def test_save_no_store(self, store, data, caplog):
+        """_store=None → noop: nothing is reported as saved or failed."""
         store._store = None
 
-        # Should not raise
-        await store.async_save(data)
+        with caplog.at_level(logging.DEBUG):
+            await store.async_save(data)
+
+        assert "forecast accuracy metrics" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_save_writes_scalars(self, store, data):
@@ -228,10 +231,12 @@ class TestAsyncSave:
         assert "extended_accuracy_metrics" not in saved
 
     @pytest.mark.asyncio
-    async def test_save_exception(self, store, data):
-        """Exception during async_save → noop, no propagation."""
+    async def test_save_exception(self, store, data, caplog):
+        """Exception during async_save → logged, no propagation."""
         store._store = MagicMock()
         store._store.async_save = AsyncMock(side_effect=Exception("Save error"))
 
-        # Should not raise
         await store.async_save(data)
+
+        store._store.async_save.assert_awaited_once()
+        assert "Failed to save forecast accuracy metrics: Save error" in caplog.text

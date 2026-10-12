@@ -601,6 +601,9 @@ def test_compute_solar_weighted_avg_fit_delegates_to_price_signals():
     pipeline.compute_solar_weighted_avg_fit(
         data, now_dt, target_hour=18, after_dw=False
     )
+    price_signals.compute_solar_weighted_avg_fit.assert_called_once_with(
+        data=data, now_dt=now_dt, target_hour=18, after_dw=False
+    )
 
 
 def test_get_dp_decision_when_target_hour_already_passed():

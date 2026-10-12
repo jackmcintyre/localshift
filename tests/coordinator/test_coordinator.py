@@ -352,6 +352,8 @@ class TestHandleStateChange:
         coordinator._evaluation_dispatcher = None
 
         coordinator._handle_state_change(MagicMock())
+        # No dispatcher means no evaluation is scheduled.
+        coordinator.hass.async_create_task.assert_not_called()
 
 
 # =============================================================================
@@ -815,9 +817,15 @@ class TestHandleMediumTick:
         from datetime import UTC, datetime
 
         coordinator.data = coordinator_data
+        coordinator.data.solcast_mape = None
+        coordinator.data.solar_forecast_accuracy = 77.0
+        coordinator.data.hybrid_solar_accuracy = None
         coordinator._tick_scheduler = None
 
         coordinator._handle_medium_tick(datetime.now(UTC))
+
+        # The coordinator-owned hybrid accuracy step still runs.
+        assert coordinator.data.hybrid_solar_accuracy == 77.0
 
     def test_medium_tick_skips_hybrid_accuracy_without_data(self, coordinator):
         """Before the first refresh ``data`` is None; the tick must stay safe."""
@@ -984,10 +992,21 @@ class TestCoordinatorHealthAndValidation:
     """Tests for entity health checking and validation."""
 
     def test_check_entity_health_when_validator_is_none(self, coordinator):
-        """Test _check_entity_health returns early when validator is None."""
+        """Test _check_entity_health leaves status alone when validator is None."""
+        from custom_components.localshift.coordinator.entity_monitor import (
+            EntityMonitor,
+        )
+
         coordinator._entity_validator = None
-        # Should not raise, just return
+        coordinator._entity_monitor = EntityMonitor(coordinator)
+        coordinator.data.integration_status = "sentinel"
+        coordinator.data.entity_errors = ["sentinel"]
+
         coordinator._check_entity_health()
+
+        # Nothing validated, so the previous status is not overwritten.
+        assert coordinator.data.integration_status == "sentinel"
+        assert coordinator.data.entity_errors == ["sentinel"]
 
     def test_check_entity_health_updates_data_when_validator_present(self, coordinator):
         """Test _check_entity_health updates data when validator is present."""
@@ -1036,10 +1055,16 @@ class TestCoordinatorHealthAndValidation:
             EntityMonitor,
         )
 
+        import copy
+
         coordinator._state_reader = None
         coordinator._entity_monitor = EntityMonitor(coordinator)
-        # Should not raise, just return
+        before = copy.deepcopy(coordinator.data)
+
         coordinator._read_all_external_state()
+
+        # Nothing was read, so the coordinator data is untouched.
+        assert coordinator.data == before
 
     def test_read_all_external_state_calls_reader_when_present(self, coordinator):
         """Test _read_all_external_state calls reader when present."""
@@ -1089,11 +1114,17 @@ class TestCoordinatorBootstrapperAndLearning:
     def test_save_learning_data_when_orchestrator_is_none(self, coordinator):
         """Test _save_learning_data returns early when orchestrator is None."""
         import asyncio
+        from unittest.mock import AsyncMock, MagicMock
 
         coordinator._decision_telemetry = None
+        tracker = MagicMock()
+        tracker.async_save = AsyncMock()
+        coordinator.solar_accuracy_tracker = tracker
 
-        # Should not raise
         asyncio.run(coordinator._save_learning_data())
+
+        # The coordinator-owned solar tracker is saved even without telemetry.
+        tracker.async_save.assert_awaited_once()
 
     def test_save_learning_data_calls_telemetry_when_present(self, coordinator):
         """Test _save_learning_data calls the telemetry owner when present."""
@@ -1132,8 +1163,10 @@ class TestCoordinatorBootstrapperAndLearning:
         if hasattr(coordinator, "solar_accuracy_tracker"):
             del coordinator.solar_accuracy_tracker
 
-        # Should not raise
         asyncio.run(coordinator._save_learning_data())
+
+        # The telemetry save still happens; only the tracker save is skipped.
+        coordinator._decision_telemetry.async_save_all.assert_awaited_once()
 
     def test_save_learning_data_tracker_save_does_not_block_telemetry(
         self, coordinator
@@ -1180,9 +1213,12 @@ class TestCoordinatorBootstrapperAndLearning:
         coordinator.hass.async_create_task = MagicMock()
         coordinator._decision_telemetry = None
 
-        # Should not raise
         coordinator._handle_learning_save(datetime.now(UTC))
+
+        # The save is still scheduled; _save_learning_data handles the None.
+        coordinator.hass.async_create_task.assert_called_once()
         call_args = coordinator.hass.async_create_task.call_args
+        assert call_args[0][1] == "localshift_periodic_learning_save"
         call_args[0][0].close()
 
 
@@ -1397,18 +1433,6 @@ class TestCoordinatorDailySummary:
         mock_notification_service.send_daily_summary.assert_called_once_with(
             coordinator.data
         )
-
-    @pytest.mark.asyncio
-    async def test_send_daily_summary_without_notification_service(
-        self, coordinator, caplog
-    ):
-        """Test sending daily summary when notification service is not available."""
-        coordinator._notification_service = None
-
-        # Call the method via tick_scheduler - should return early without error
-        await coordinator._tick_scheduler._send_daily_summary()
-
-        # Verify it completes without error (no assertion needed, just check no exception)
 
 
 class TestRecomputeDecisionContract:

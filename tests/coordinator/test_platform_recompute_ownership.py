@@ -240,15 +240,17 @@ class TestSwitchToggleRecomputeOwnership:
     async def test_switch_turn_off_automation_still_commands_self_consumption(
         self, fake_hass, entry, real_coordinator
     ):
-        """The real safety argument for deferring the recompute: the switch
-        sets `automation_enabled` False in the coordinator's switch-state
-        bridge (synchronously, before persisting), so even though the
-        recompute now lands via the listener (started inside
-        `async_update_entry`) rather than from the switch's own call, the
-        state the listener's evaluation sees is already correct — a stale
-        interleave can't re-decide a mode using the old switch state."""
+        """The switch must set `automation_enabled` False in the coordinator's
+        switch-state bridge BEFORE it persists the option.
+
+        Issue #1030: HA starts update listeners as eager tasks, so the
+        listener's recompute runs inside `async_update_entry` itself -- before
+        `async_turn_off` reaches the self-consumption command, not after the
+        method returns. A switch that persisted first would have the recompute
+        evaluate with automation still reading ON. The fake dispatches the
+        same way, so the listener here observes exactly what it would in HA.
+        """
         entry.options = {f"switch_state_{SWITCH_AUTOMATION_ENABLED}": True}
-        real_coordinator.async_set_self_consumption = AsyncMock()
         real_coordinator._notification_service = None
 
         switch = LocalShiftSwitch(real_coordinator, entry, SWITCH_AUTOMATION_ENABLED)
@@ -266,13 +268,27 @@ class TestSwitchToggleRecomputeOwnership:
         entry.update_listeners.clear()
         entry.add_update_listener(spy_listener)
 
+        async def record_recomputes_at_command_time():
+            seen["recomputes_when_command_started"] = (
+                real_coordinator._compute_derived_values.call_count
+            )
+
+        real_coordinator.async_set_self_consumption = AsyncMock(
+            side_effect=record_recomputes_at_command_time
+        )
+
         with patch.object(switch, "async_write_ha_state"):
             await switch.async_turn_off()
         await fake_hass.config_entries.async_flush(entry)
 
-        assert real_coordinator._compute_derived_values.call_count == 1
         real_coordinator.async_set_self_consumption.assert_awaited_once()
+        # The listener's recompute ran inside the persist, ahead of the command...
+        assert seen["recomputes_when_command_started"] == 1
+        # ...and it saw the switch already off.
         assert seen["automation_enabled_during_listener"] is False
+        # One recompute in total.
+        assert real_coordinator._compute_derived_values.call_count == 1
+        assert fake_hass.config_entries.dispatched == 1
 
 
 class TestOptimizationModeSelectRecomputeOwnership:

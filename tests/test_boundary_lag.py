@@ -943,10 +943,18 @@ class TestBoundaryLagFlatten:
         documented key — the second half of ``(interval_start_utc,
         boundary_lag)`` is not decorative.
         """
+        # Issue #1044: the two entries must share interval_start_utc exactly,
+        # or the primary key separates them and the tie never happens. The
+        # larger lag is inserted first, so a stable sort on the interval start
+        # alone would leave them as [30.0, 10.0].
         history = {
-            "price": [self._entry("price", 5, second=30)],
-            "backstop": [self._entry("backstop", 5, second=10)],
+            "price": [self._entry("price", 5, lag=30.0)],
+            "backstop": [self._entry("backstop", 5, lag=10.0)],
         }
+        assert (
+            history["price"][0]["interval_start_utc"]
+            == history["backstop"][0]["interval_start_utc"]
+        )
         merged = _flatten_boundary_lag_history(history)
         assert [e["boundary_lag"] for e in merged] == [10.0, 30.0]
 
@@ -980,6 +988,29 @@ class TestBoundaryLagPartition:
                 data, BatteryMode.SELF_CONSUMPTION, dry_run=False
             )
 
+    def test_per_source_cap_is_200_and_matches_the_docs(self):
+        """Issue #1045: the partition tests below assert against the imported
+        constant, so they pass at any cap. #990 was exactly that blindness: a
+        documented 200 was silently 50. Pin the number, and pin the two places
+        that state it in prose so they cannot drift from it either.
+        """
+        from pathlib import Path
+
+        import custom_components.localshift.coordinator.data as data_module
+
+        assert _BOUNDARY_LAG_PER_SOURCE_CAP == 200
+
+        repo_root = Path(__file__).resolve().parents[1]
+        entity_reference = (repo_root / "docs" / "ENTITY_REFERENCE.md").read_text()
+        assert (
+            f"partitioned per `grant_source` ({_BOUNDARY_LAG_PER_SOURCE_CAP} entries each"
+            in entity_reference
+        )
+        assert (
+            f"({_BOUNDARY_LAG_PER_SOURCE_CAP} entries per source"
+            in Path(data_module.__file__).read_text()
+        )
+
     def test_partitioned_by_grant_source(self, state_machine, data):
         state_machine._last_grant_source = "price"
         self._record(state_machine, data, 5)
@@ -1012,7 +1043,9 @@ class TestBoundaryLagPartition:
         # The price bucket still holds exactly its one original sample.
         assert data.boundary_lag_history["price"] == [price_entry]
         # The backstop bucket is capped at its own per-source window.
-        assert len(data.boundary_lag_history["backstop"]) == _BOUNDARY_LAG_PER_SOURCE_CAP
+        assert (
+            len(data.boundary_lag_history["backstop"]) == _BOUNDARY_LAG_PER_SOURCE_CAP
+        )
         assert set(data.boundary_lag_history) == {"price", "backstop"}
 
     def test_per_source_cap_keeps_newest(self, state_machine, data):
@@ -1029,16 +1062,18 @@ class TestBoundaryLagPartition:
         # rather than hard-coded against a specific cap size.
         newest_hour, newest_minute = divmod(total - 1, 60)
         oldest_hour, oldest_minute = divmod(total - _BOUNDARY_LAG_PER_SOURCE_CAP, 60)
-        assert bucket[-1]["interval_start_utc"] == dt_util.as_utc(
-            dt_aware(
-                2026, 8, 27, 6 + newest_hour, (newest_minute // 5) * 5, 0
-            )
-        ).isoformat()
-        assert bucket[0]["interval_start_utc"] == dt_util.as_utc(
-            dt_aware(
-                2026, 8, 27, 6 + oldest_hour, (oldest_minute // 5) * 5, 0
-            )
-        ).isoformat()
+        assert (
+            bucket[-1]["interval_start_utc"]
+            == dt_util.as_utc(
+                dt_aware(2026, 8, 27, 6 + newest_hour, (newest_minute // 5) * 5, 0)
+            ).isoformat()
+        )
+        assert (
+            bucket[0]["interval_start_utc"]
+            == dt_util.as_utc(
+                dt_aware(2026, 8, 27, 6 + oldest_hour, (oldest_minute // 5) * 5, 0)
+            ).isoformat()
+        )
 
     def test_unknown_bucket_on_fresh_machine(self, state_machine, data):
         # No prior grant and no override -> the "unknown" bucket.

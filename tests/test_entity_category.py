@@ -134,6 +134,40 @@ def _parse_doc_table() -> dict[str, str | None]:
     return {uid: category for uid, (_, category) in _parse_doc_rows().items()}
 
 
+def _parse_overview() -> tuple[int, dict[str, int]]:
+    """Parse the `## Overview` block into (stated total, platform -> count)."""
+    text = ENTITY_REFERENCE_PATH.read_text()
+
+    marker = "## Overview"
+    start = text.find(marker)
+    assert start != -1, (
+        f"docs/ENTITY_REFERENCE.md is missing the '{marker}' section entirely"
+    )
+    rest = text[start:]
+    end_match = re.search(r"\n---\n", rest)
+    section = rest[: end_match.start()] if end_match else rest
+
+    total_match = re.search(r"creates \*\*(\d+) entities\*\*", section)
+    assert total_match, (
+        "docs/ENTITY_REFERENCE.md § Overview no longer states the total as "
+        "'creates **N entities**'; update the parser in "
+        "tests/test_entity_category.py"
+    )
+
+    counts = {
+        match.group(2): int(match.group(1))
+        for match in re.finditer(
+            r"^\|[^|]+\|\s*(\d+)\s*\|\s*`([a-z_]+)`\s*\|$", section, re.MULTILINE
+        )
+    }
+    assert counts, (
+        "Parsed zero rows from docs/ENTITY_REFERENCE.md § Overview -- table "
+        "format may have changed; update the parser in "
+        "tests/test_entity_category.py"
+    )
+    return int(total_match.group(1)), counts
+
+
 class TestEntityCategoryDocSync:
     """Entity categories in code and docs/ENTITY_REFERENCE.md must agree."""
 
@@ -207,11 +241,29 @@ class TestEntityCategoryDocSync:
 
     @pytest.mark.asyncio
     async def test_entity_count_matches_overview(self):
-        """The doc table's row count matches the Overview total (sanity check)."""
-        code_categories, _ = await _collect_entities_from_code()
-        doc_categories = _parse_doc_table()
+        """The Overview block's total and per-platform counts match the code.
 
-        assert len(code_categories) == len(doc_categories)
+        Issue #999: this used to compare the code against the Entity Categories
+        table, which the two subset tests above already imply, and never read
+        the Overview at all -- so the Overview counts drifted ungated.
+        """
+        _, seen_platforms = await _collect_entities_from_code()
+        overview_total, overview_counts = _parse_overview()
+
+        code_counts = {platform: 0 for _, platform in PLATFORM_MODULES}
+        for platform in seen_platforms.values():
+            code_counts[platform] += 1
+
+        assert overview_counts == code_counts, (
+            "docs/ENTITY_REFERENCE.md § Overview per-platform counts do not match "
+            f"the code: doc={overview_counts} code={code_counts}. "
+            "Update the Overview table in docs/ENTITY_REFERENCE.md."
+        )
+        assert overview_total == len(seen_platforms), (
+            f"docs/ENTITY_REFERENCE.md § Overview says {overview_total} entities "
+            f"but the code creates {len(seen_platforms)}. "
+            "Update the Overview total in docs/ENTITY_REFERENCE.md."
+        )
 
 
 class TestCategoryReader:

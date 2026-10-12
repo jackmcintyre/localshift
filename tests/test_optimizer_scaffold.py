@@ -464,25 +464,17 @@ def test_optimizer_result_serialization_safe(default_config, multi_slots):
     CoordinatorData and exposure via sensor attributes.
     """
     import json
-    from dataclasses import dataclass, field
-    from typing import Any
 
+    from custom_components.localshift.coordinator.data import CoordinatorData
     from custom_components.localshift.engine.optimizer_runner import (
         run_optimizer,
     )
 
-    @dataclass
-    class MockCoordinatorData:
-        soc: float = 50.0
-        daily_forecast: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_result: dict[str, Any] | None = None
-        optimizer_decisions: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_summary: dict[str, Any] = field(default_factory=dict)
-        forecast_net_cost: float = 0.0
-        forecast_import_cost: float = 0.0
-        forecast_export_revenue: float = 0.0
-
-    data = MockCoordinatorData(
+    # Issue #1059: a real CoordinatorData. The partial mock this test used to
+    # build made the run fail on a missing attribute, so the test serialized
+    # only a failure summary and an empty decision list.
+    data = CoordinatorData(
+        soc=50.0,
         daily_forecast=[
             {
                 "timestamp_iso": f"2026-01-03T{(i // 2):02d}:{(i % 2) * 30:02d}:00",
@@ -496,7 +488,32 @@ def test_optimizer_result_serialization_safe(default_config, multi_slots):
         ]
     )
 
-    run_optimizer(data, {})
+    # Slot building needs live forecast entities, so hand the runner real
+    # slots; the real planner and the real serializer then produce what is
+    # checked below.
+    from unittest.mock import patch
+
+    from custom_components.localshift.engine.slots import SlotBuildMetadata
+
+    metadata = SlotBuildMetadata(
+        total_slots=len(multi_slots),
+        five_min_slots=0,
+        thirty_min_slots=len(multi_slots),
+        horizon_hours=24.0,
+        solar_confidence_factor=1.0,
+        slots_with_defaulted_solar=0,
+        slots_with_defaulted_price=0,
+    )
+    with patch(
+        "custom_components.localshift.engine.optimizer_runner.SlotBuilder"
+    ) as mock_builder:
+        mock_builder.return_value.build_slots.return_value = (multi_slots, metadata)
+        run_optimizer(data, {})
+
+    # An empty summary and an empty decision list are trivially serializable:
+    # prove the run produced a real plan before serializing it.
+    assert data.optimizer_summary["success"] is True
+    assert len(data.optimizer_decisions) == len(multi_slots) == 48
 
     try:
         json_str = json.dumps(data.optimizer_summary)

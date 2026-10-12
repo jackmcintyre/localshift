@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock
 
 import pytest
+import voluptuous as vol
 from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.localshift.config_flow import (
@@ -10,6 +11,9 @@ from custom_components.localshift.config_flow import (
     LocalShiftOptionsFlow,
 )
 from custom_components.localshift.const import (
+    CONF_AWAY_ENTITY,
+    CONF_BATTERY_TARGET,
+    CONF_CHEAP_PRICE_PERCENTILE,
     CONF_COMPARISON_MODE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
@@ -26,7 +30,6 @@ from custom_components.localshift.const import (
     CONF_SWITCHING_PENALTY_PER_KWH,
     CONF_TARGET_PENALTY,
     CONF_TESLEMETRY_BACKUP_RESERVE,
-    CONF_TESLEMETRY_BACKUP_RESERVE,
     CONF_TESLEMETRY_BATTERY_POWER,
     CONF_TESLEMETRY_GRID_POWER,
     CONF_TESLEMETRY_LOAD_POWER,
@@ -34,6 +37,7 @@ from custom_components.localshift.const import (
     CONF_TESLEMETRY_SOC,
     CONF_TESLEMETRY_SOLAR_POWER,
     CONF_WEATHER_ENTITY,
+    DEFAULT_CHEAP_PRICE_PERCENTILE,
     DOMAIN,
     PRICING_SOURCE_AMBER,
     PRICING_SOURCE_AMBER_EXPRESS,
@@ -728,8 +732,10 @@ class TestOptionsFlow:
             CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
             CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
             CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
-            CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
-            CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+            # Issue #992: deliberately NOT the id the '100h' prefix would
+            # derive, so a preserved mapping and a substituted guess differ.
+            CONF_PRICING_GENERAL_FORECAST: "sensor.my_site_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.my_site_feed_in_forecast",
             CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
@@ -740,8 +746,12 @@ class TestOptionsFlow:
         )
         defaults = {key.schema: key.default() for key in schema.schema}
 
-        assert defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.100h_general_forecast"
-        assert defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.100h_feed_in_forecast"
+        assert (
+            defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.my_site_general_forecast"
+        )
+        assert (
+            defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.my_site_feed_in_forecast"
+        )
 
         # The pre-filled form must validate — this is what the frontend submits.
         schema(defaults)
@@ -774,8 +784,10 @@ class TestOptionsFlow:
             CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
             CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
             CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
-            CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
-            CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+            # Issue #992: deliberately NOT the id the '100h' prefix would
+            # derive, so a preserved mapping and a substituted guess differ.
+            CONF_PRICING_GENERAL_FORECAST: "sensor.my_site_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.my_site_feed_in_forecast",
             CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
@@ -788,8 +800,12 @@ class TestOptionsFlow:
 
         schema = result["data_schema"]
         defaults = {key.schema: key.default() for key in schema.schema}
-        assert defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.100h_general_forecast"
-        assert defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.100h_feed_in_forecast"
+        assert (
+            defaults[CONF_PRICING_GENERAL_FORECAST] == "sensor.my_site_general_forecast"
+        )
+        assert (
+            defaults[CONF_PRICING_FEED_IN_FORECAST] == "sensor.my_site_feed_in_forecast"
+        )
         schema(defaults)
 
 
@@ -900,8 +916,10 @@ class TestEntityMappingsStep:
             CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
             CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
             CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
-            CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
-            CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+            # Issue #992: deliberately NOT the id the '100h' prefix would
+            # derive, so a preserved mapping and a substituted guess differ.
+            CONF_PRICING_GENERAL_FORECAST: "sensor.my_site_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.my_site_feed_in_forecast",
             CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
@@ -930,8 +948,10 @@ class TestEntityMappingsStep:
             CONF_TESLEMETRY_LOAD_POWER: "sensor.teslemetry_load_power",
             CONF_PRICING_GENERAL_PRICE: "sensor.100h_general_price",
             CONF_PRICING_FEED_IN_PRICE: "sensor.100h_feed_in_price",
-            CONF_PRICING_GENERAL_FORECAST: "sensor.100h_general_forecast",
-            CONF_PRICING_FEED_IN_FORECAST: "sensor.100h_feed_in_forecast",
+            # Issue #992: deliberately NOT the id the '100h' prefix would
+            # derive, so a preserved mapping and a substituted guess differ.
+            CONF_PRICING_GENERAL_FORECAST: "sensor.my_site_general_forecast",
+            CONF_PRICING_FEED_IN_FORECAST: "sensor.my_site_feed_in_forecast",
             CONF_PRICING_PRICE_SPIKE: "binary_sensor.100h_price_spike",
             CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_forecast_today",
             CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_forecast_tomorrow",
@@ -1064,13 +1084,25 @@ class TestInvalidInputFormats:
         # The actual validation happens in the options flow
 
     @pytest.mark.asyncio
-    async def test_invalid_time_format_demand_window_end(self, mock_hass):
-        """Test handling of invalid time format for demand window end."""
-        flow = LocalShiftConfigFlow()
+    async def test_invalid_time_format_demand_window_end(
+        self, mock_hass, mock_config_entry
+    ):
+        """A malformed demand window end is rejected by the settings form schema."""
+        flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
         flow.hass = mock_hass
+        schema = flow._build_settings_schema({}, ["notify.mobile_app_test"], [])
+        valid = {
+            CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
+            CONF_DEMAND_WINDOW_START: "18:00:00",
+            CONF_DEMAND_WINDOW_END: "22:00:00",
+            CONF_MANUAL_OVERRIDE_TIMEOUT: 24,
+        }
 
-        # Malformed time "not-a-time" would be handled by form validation
-        # Implementation should validate this
+        # The same input with a well-formed end time is accepted...
+        assert schema(valid)[CONF_DEMAND_WINDOW_END] == "22:00:00"
+        # ...so it is the malformed time alone that is refused.
+        with pytest.raises(vol.Invalid):
+            schema({**valid, CONF_DEMAND_WINDOW_END: "not-a-time"})
 
     @pytest.mark.asyncio
     async def test_entity_id_with_special_characters(self, mock_hass):
@@ -1122,7 +1154,7 @@ class TestOptionsFlowValidation:
     async def test_options_flow_empty_notify_service(
         self, mock_hass, mock_config_entry
     ):
-        """Test options flow with empty notify service."""
+        """An empty notify service re-shows the settings form with an error."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
         flow.handler = mock_config_entry.entry_id
 
@@ -1140,14 +1172,18 @@ class TestOptionsFlowValidation:
             CONF_MANUAL_OVERRIDE_TIMEOUT: 24,
         }
 
-        _ = await flow.async_step_init(user_input)
+        result = await flow.async_step_settings(user_input)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "settings"
+        assert result["errors"] == {CONF_NOTIFY_SERVICE: "Notify service is required"}
 
         # Should either show error or use default
         # Implementation dependent
 
     @pytest.mark.asyncio
     async def test_options_flow_negative_timeout(self, mock_hass, mock_config_entry):
-        """Test options flow with negative manual override timeout."""
+        """A negative manual override timeout is rejected by the settings form schema."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
         flow.handler = mock_config_entry.entry_id
 
@@ -1164,14 +1200,19 @@ class TestOptionsFlowValidation:
             CONF_DEMAND_WINDOW_END: "22:00:00",
             CONF_MANUAL_OVERRIDE_TIMEOUT: -1,  # Invalid negative
         }
+        schema = flow._build_settings_schema({}, ["notify.mobile_app_test"], [])
 
-        _ = await flow.async_step_init(user_input)
+        # The same input with an in-range timeout is accepted...
+        assert schema({**user_input, CONF_MANUAL_OVERRIDE_TIMEOUT: 24})
+        # ...so it is the out-of-range timeout alone that is refused.
+        with pytest.raises(vol.Invalid):
+            schema(user_input)
 
         # Should handle gracefully
 
     @pytest.mark.asyncio
     async def test_options_flow_very_large_timeout(self, mock_hass, mock_config_entry):
-        """Test options flow with very large timeout value."""
+        """A timeout above the 24 hour maximum is rejected by the settings form schema."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
         flow.handler = mock_config_entry.entry_id
 
@@ -1188,8 +1229,13 @@ class TestOptionsFlowValidation:
             CONF_DEMAND_WINDOW_END: "22:00:00",
             CONF_MANUAL_OVERRIDE_TIMEOUT: 1000000,  # Very large
         }
+        schema = flow._build_settings_schema({}, ["notify.mobile_app_test"], [])
 
-        _ = await flow.async_step_init(user_input)
+        # The same input with an in-range timeout is accepted...
+        assert schema({**user_input, CONF_MANUAL_OVERRIDE_TIMEOUT: 24})
+        # ...so it is the out-of-range timeout alone that is refused.
+        with pytest.raises(vol.Invalid):
+            schema(user_input)
 
         # Should handle gracefully (might clamp or accept)
 
@@ -1197,7 +1243,7 @@ class TestOptionsFlowValidation:
     async def test_options_flow_demand_window_start_after_end(
         self, mock_hass, mock_config_entry
     ):
-        """Test options flow when demand window start is after end."""
+        """A start after the end is accepted as given (an overnight window)."""
         flow = LocalShiftConfigFlow.async_get_options_flow(mock_config_entry)
         flow.handler = mock_config_entry.entry_id
 
@@ -1215,9 +1261,12 @@ class TestOptionsFlowValidation:
             CONF_MANUAL_OVERRIDE_TIMEOUT: 24,
         }
 
-        _ = await flow.async_step_init(user_input)
+        result = await flow.async_step_settings(user_input)
 
-        # Should handle gracefully (might swap, reject, or accept as overnight window)
+        # Neither swapped nor rejected: the times are stored exactly as entered.
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["data"][CONF_DEMAND_WINDOW_START] == "22:00:00"
+        assert result["data"][CONF_DEMAND_WINDOW_END] == "18:00:00"
 
 
 # =============================================================================
@@ -1451,3 +1500,118 @@ class TestErrorMessages:
         assert "mode_select" in result
         # Error message should mention expected vs actual domain
         assert "select" in result["mode_select"].lower()
+
+
+# =============================================================================
+# OPTIONS FLOW: FORM RENDERS, ADVANCED STEP, AWAY ENTITY (Issue #994)
+# =============================================================================
+
+
+class TestOptionsFlowFormsAndAwayEntity:
+    """Branches of config_flow/__init__.py no other test reached (#994)."""
+
+    @pytest.mark.asyncio
+    async def test_pricing_source_form_defaults_to_stored_source(
+        self, mock_hass, mock_config_entry
+    ):
+        """Opening the Pricing Source step pre-selects what is stored, not the default."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_config_entry.data = {
+            # Neither value is the default (amber / disabled).
+            CONF_PRICING_DATA_SOURCE: PRICING_SOURCE_AMBER_EXPRESS,
+            CONF_COMPARISON_MODE: "enabled",
+        }
+
+        result = await flow.async_step_options_pricing_source(None)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "options_pricing_source"
+        defaults = {key.schema: key.default() for key in result["data_schema"].schema}
+        assert defaults[CONF_PRICING_DATA_SOURCE] == PRICING_SOURCE_AMBER_EXPRESS
+        assert defaults[CONF_COMPARISON_MODE] == "enabled"
+        mock_hass.config_entries.async_update_entry.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_settings_rejects_missing_away_entity(
+        self, mock_hass, mock_config_entry
+    ):
+        """An away entity that does not exist re-shows Settings with an error."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_hass.states.get = MagicMock(return_value=None)
+
+        result = await flow.async_step_settings({
+            CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
+            CONF_DEMAND_WINDOW_START: "18:00:00",
+            CONF_DEMAND_WINDOW_END: "22:00:00",
+            CONF_MANUAL_OVERRIDE_TIMEOUT: 24,
+            CONF_AWAY_ENTITY: "input_boolean.gone",
+        })
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "settings"
+        assert result["errors"] == {
+            CONF_AWAY_ENTITY: "Entity 'input_boolean.gone' does not exist"
+        }
+
+    @pytest.mark.asyncio
+    async def test_solcast_step_rejects_missing_away_entity(self, mock_hass):
+        """Initial setup refuses an away entity that does not exist."""
+        flow = LocalShiftConfigFlow()
+        flow.hass = mock_hass
+        flow._teslemetry_data = {}
+        flow._pricing_data = {}
+
+        def mock_get_state(entity_id):
+            if entity_id == "input_boolean.gone":
+                return None
+            return create_mock_state(entity_id, "10", "sensor")
+
+        mock_hass.states.get = mock_get_state
+
+        result = await flow.async_step_solcast({
+            CONF_SOLCAST_FORECAST_TODAY: "sensor.solcast_today",
+            CONF_SOLCAST_FORECAST_TOMORROW: "sensor.solcast_tomorrow",
+            CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
+            CONF_AWAY_ENTITY: "input_boolean.gone",
+        })
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "solcast"
+        assert result["errors"] == {
+            CONF_AWAY_ENTITY: "Entity 'input_boolean.gone' does not exist"
+        }
+
+    @pytest.mark.asyncio
+    async def test_advanced_form_defaults_to_stored_options(
+        self, mock_hass, mock_config_entry
+    ):
+        """Opening Advanced shows stored values, and defaults for the rest."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_config_entry.options = {CONF_BATTERY_TARGET: 87}
+
+        result = await flow.async_step_advanced(None)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "advanced"
+        defaults = {key.schema: key.default() for key in result["data_schema"].schema}
+        assert defaults[CONF_BATTERY_TARGET] == 87
+        assert defaults[CONF_CHEAP_PRICE_PERCENTILE] == DEFAULT_CHEAP_PRICE_PERCENTILE
+
+    @pytest.mark.asyncio
+    async def test_advanced_submit_merges_into_existing_options(
+        self, mock_hass, mock_config_entry
+    ):
+        """Saving Advanced keeps options that step does not own."""
+        flow = make_options_flow(mock_hass, mock_config_entry)
+        mock_config_entry.options = {
+            CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
+            CONF_BATTERY_TARGET: 100,
+        }
+
+        result = await flow.async_step_advanced({CONF_BATTERY_TARGET: 87})
+
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["data"] == {
+            CONF_NOTIFY_SERVICE: "notify.mobile_app_test",
+            CONF_BATTERY_TARGET: 87,
+        }

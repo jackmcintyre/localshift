@@ -1,5 +1,6 @@
 """Tests for ForecastHistoryStore refactoring (Issue #581)."""
 
+import logging
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, AsyncMock, patch
 import pytest
@@ -152,7 +153,7 @@ class TestAsyncSave:
     """Tests for async_save method."""
 
     @pytest.mark.asyncio
-    async def test_save_exception(self, store, data):
+    async def test_save_exception(self, store, data, caplog):
         """Handle save exception gracefully."""
         store._store = MagicMock()
         store._store.async_save = AsyncMock(side_effect=Exception("Save error"))
@@ -161,6 +162,8 @@ class TestAsyncSave:
         ]
 
         await store.async_save(data)
+        store._store.async_save.assert_awaited_once()
+        assert "Failed to save forecast history: Save error" in caplog.text
 
     @pytest.mark.asyncio
     async def test_save_filters_entries(self, store, data):
@@ -395,11 +398,16 @@ class TestStoreForecastHistory:
 
 class TestAsyncSaveNoStore:
     @pytest.mark.asyncio
-    async def test_save_no_store_returns_immediately(self, store, data):
+    async def test_save_no_store_returns_immediately(self, store, data, caplog):
         store._store = None
         data.forecast_history = [{"target_time": "t", "offset_minutes": 1}]
         data.forecast_first_prediction_time = ""
-        await store.async_save(data)
+
+        with caplog.at_level(logging.DEBUG):
+            await store.async_save(data)
+
+        # Nothing is reported as saved or failed.
+        assert "forecast history" not in caplog.text
 
 
 class TestStoreForecastHistoryDeduplication:
