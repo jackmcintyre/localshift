@@ -1236,9 +1236,15 @@ class TestPerDayOfWeekProfiles:
         forecaster.estimate_hourly_consumption_kw(slot_hour=12, **base)
 
         counts = forecaster.get_profile_bucket_counts()
-        assert counts["day_2"] == 1
-        assert counts["aggregate_weekday"] == 1
-        assert "global" not in counts
+        # Issue #1008: the exact tally. Hour 11 wins on the day bucket, hour 12
+        # (one day sample, too few) falls to the weekday aggregate, and the
+        # other 22 hours backfill from the global average -- whose tag is
+        # "global_avg", so a bare '"global" not in counts' could never fail.
+        assert counts == {
+            "day_2": 1,
+            "aggregate_weekday": 1,
+            "global_avg": 22,
+        }
 
     def test_profile_bucket_counts_reset_each_call(self):
         """Counts describe the most recent estimate call, not a cumulative total."""
