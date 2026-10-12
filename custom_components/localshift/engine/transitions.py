@@ -281,9 +281,9 @@ def _transition_export(
     capacity_kwh = config.battery_capacity_kwh
 
     max_discharge_kwh = config.discharge_rate_kw * slot_hours
-    available_kwh = max(
-        0.0, (soc_pct - config.discharge_floor_pct) / 100.0 * capacity_kwh
-    )
+    # Export stops at the slot's load-sized floor, not the general discharge floor.
+    floor_pct = max(config.discharge_floor_pct, slot.export_floor_pct)
+    available_kwh = max(0.0, (soc_pct - floor_pct) / 100.0 * capacity_kwh)
     battery_discharge_kwh = min(
         max_discharge_kwh, available_kwh * config.discharge_efficiency
     )

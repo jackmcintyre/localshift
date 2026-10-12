@@ -287,6 +287,23 @@ DEFAULT_EXPORT_PRICE_MARGIN = (
     0.10  # $/kWh minimum profit margin for export/re-import arbitrage
 )
 DEFAULT_OPTIMIZATION_MODE = OPTIMIZATION_MODE_SELF_CONSUMPTION
+
+# Load-sized export floor. Battery export may not drain below what the house is
+# forecast to need for the rest of the elevated-price period, times this margin.
+# The margin is the allowance for the load forecast being low; 0 disables the floor.
+EXPORT_FLOOR_LOAD_MARGIN: Final[float] = 1.5
+# A slot is "elevated" when its buy price exceeds this multiple of the horizon's
+# median buy price: dear enough that running out there costs real money.
+EXPORT_FLOOR_ELEVATED_PRICE_FACTOR: Final[float] = 1.5
+# The elevated period ends once prices have stayed normal for this long, so a
+# single cheap half-hour inside a peak does not end it and a separate later peak
+# (which solar or cheap charging can refill for) is not counted.
+EXPORT_FLOOR_NORMAL_RUN_MINUTES: Final[int] = 60
+# Energy is only held back for a later slot whose buy price is at least this
+# fraction of what selling it now would earn. Below that, selling now and buying
+# back later wins even if the load forecast is badly wrong (2026-10-12: the floor
+# sat at 100% through a $24/kWh feed-in price to protect $3/kWh evening load).
+EXPORT_FLOOR_HOLD_PRICE_RATIO: Final[float] = 0.5
 DEFAULT_SWITCHING_PENALTY = 0.02  # $/switch disincentive (flat knob)
 DEFAULT_SWITCHING_PENALTY_PER_KWH = (
     0.40  # $/kWh floor: scales the hurdle to slot energy, damps marginal jitter

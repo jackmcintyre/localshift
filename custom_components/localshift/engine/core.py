@@ -32,6 +32,7 @@ from custom_components.localshift.engine.dp_math import (
     _simulate_max_soc_in_demand_window,
     urgency_window_hours,
 )
+from custom_components.localshift.engine.export_floor import apply_export_floor
 from custom_components.localshift.engine.negative_fit import (
     derive_negative_fit_avoidance_context,
 )
@@ -455,6 +456,7 @@ class DPPlanner:
         start = time.monotonic()
 
         try:
+            apply_export_floor(inputs.slots, inputs.config)
             result = self._solve_guarded(inputs)
 
         except Exception as exc:  # noqa: BLE001
@@ -1692,6 +1694,7 @@ class DPPlanner:
                 buy_price=slot.buy_price,
                 sell_price=slot.sell_price,
                 is_solar_opportunity=stage.solar_opportunity_penalty > 0,
+                export_floor_pct=slot.export_floor_pct,
             )
             decisions.append(decision)
 
