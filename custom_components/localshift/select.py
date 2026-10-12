@@ -167,9 +167,11 @@ class BatteryModeSelect(SelectEntity):
             self.coordinator.set_manual_override(
                 False, reason="user_selected_automatic"
             )
-            # The switch state and the override are both cleared above, before
-            # the options are persisted, so whichever recompute runs below
-            # already sees automation ON and no manual override.
+            # Order is load-bearing: the switch state and the override must be
+            # cleared BEFORE the options are persisted. HA starts the entry
+            # update listener eagerly, inside async_update_entry, so its
+            # recompute reads coordinator state as it stands at that call —
+            # and it is the only recompute on a real hand-back (issue #1029).
             options_changed = self.hass.config_entries.async_update_entry(
                 self._entry, options=new_options
             )

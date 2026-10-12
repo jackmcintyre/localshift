@@ -15,18 +15,22 @@ to "automatic" was left double-firing by #975 and is covered here since issue
 #1029: the listener owns the recompute whenever the options really change,
 and the select recomputes itself only when they do not (no listener fires).
 
-`FakeConfigEntries` below mirrors the two behaviours of HA's real
+`FakeConfigEntries` below mirrors the three behaviours of HA's real
 `ConfigEntries.async_update_entry` that matter here: a write that does not
-actually change `entry.options` fires no listener at all, and a write that
-does change it queues every registered listener for later execution (HA
-schedules these as tasks; here `async_flush` runs and awaits them
-explicitly, so nothing is ever left as a stray un-awaited coroutine). This
-is what lets these tests reach the production listener wiring rather than
-asserting on a mock of themselves.
+actually change `entry.options` fires no listener at all; a write that does
+change it starts every registered listener as an eager task, so the listener
+body runs synchronously INSIDE `async_update_entry` up to its first real
+suspension (HA: `_async_save_and_notify` -> `hass.async_create_task`, whose
+`eager_start` defaults to True); and whatever is left of each listener
+finishes later (`async_flush` awaits the tasks, so nothing is left as a stray
+un-awaited coroutine). The eager start is what makes "set the coordinator
+state before persisting" a real ordering requirement on the platforms rather
+than a nicety, and what lets these tests pin it.
 """
 
 from __future__ import annotations
 
+import asyncio
 from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -58,25 +62,32 @@ class FakeConfigEntries:
 
     def __init__(self, hass):
         self.hass = hass
-        self._pending: list = []
+        self._pending: list[asyncio.Task] = []
         self.dispatched = 0
 
     def async_update_entry(self, entry, *, options=None, **_kwargs) -> bool:
-        """Set entry.options and queue listeners — but only on a real change,
-        matching HA: `if not changed: return False` before anything fires."""
+        """Set entry.options and start listeners — but only on a real change,
+        matching HA: `if not changed: return False` before anything fires.
+
+        Each listener is started as an eager task, as HA does: it runs right
+        here, before this method returns, up to its first real suspension."""
         if options is None or dict(entry.options) == dict(options):
             return False
         entry.options = MappingProxyType(dict(options))
-        self._pending.extend(entry.update_listeners)
+        loop = asyncio.get_running_loop()
+        for listener in list(entry.update_listeners):
+            self.dispatched += 1
+            self._pending.append(
+                asyncio.Task(listener(self.hass, entry), loop=loop, eager_start=True)
+            )
         return True
 
     async def async_flush(self, entry) -> None:
-        """Run every listener queued so far, awaited (as HA's task runner
-        would await it), against the given entry."""
+        """Await every listener task started so far (as HA's task runner
+        would), surfacing any exception a listener raised."""
         pending, self._pending = self._pending, []
-        for listener in pending:
-            self.dispatched += 1
-            await listener(self.hass, entry)
+        for task in pending:
+            await task
 
 
 @pytest.fixture
@@ -232,7 +243,8 @@ class TestSwitchToggleRecomputeOwnership:
         """The real safety argument for deferring the recompute: the switch
         sets `automation_enabled` False in the coordinator's switch-state
         bridge (synchronously, before persisting), so even though the
-        recompute now lands one event-loop turn later via the listener, the
+        recompute now lands via the listener (started inside
+        `async_update_entry`) rather than from the switch's own call, the
         state the listener's evaluation sees is already correct — a stale
         interleave can't re-decide a mode using the old switch state."""
         entry.options = {f"switch_state_{SWITCH_AUTOMATION_ENABLED}": True}
@@ -325,10 +337,13 @@ class TestBatteryModeSelectHandBackRecomputeOwnership:
     async def test_hand_back_recompute_sees_automation_on_and_override_cleared(
         self, fake_hass, entry, real_coordinator
     ):
-        """The one cycle now lands via the listener, an event-loop turn after
-        the select returns. It must still evaluate against the handed-back
+        """The one cycle now lands via the listener, which HA starts eagerly
+        inside `async_update_entry`. It must evaluate against the handed-back
         state — automation ON, manual override cleared — never the manual
-        state the user just left."""
+        state the user just left, so the select has to clear both BEFORE it
+        persists. With no second recompute to paper over it (issue #1029),
+        clearing after the persist would plan the hand-back against manual
+        state until the next tick."""
         entry.options = {self.AUTOMATION_OPTION: False, "manual_battery_mode": "hold"}
         real_coordinator.set_switch_state(SWITCH_AUTOMATION_ENABLED, False)
         real_coordinator.set_manual_override(True, reason="test")
