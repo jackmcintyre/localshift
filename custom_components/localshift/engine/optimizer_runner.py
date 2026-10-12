@@ -632,6 +632,7 @@ def _serialize_decision(decision: Any) -> dict[str, Any]:
         "consumption_kwh": round(decision.consumption_kwh, 3),
         "buy_price": round(decision.buy_price, 4),
         "sell_price": round(decision.sell_price, 4),
+        "export_floor_pct": round(decision.export_floor_pct, 1),
         # Derived compatibility flags
         "grid_charge": decision.grid_charge,
         "grid_charge_boost": decision.grid_charge_boost,

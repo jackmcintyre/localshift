@@ -53,6 +53,7 @@ Determines which actions are physically/legal possible for a given state.
 | Export profitability | Only export if sell price exceeds threshold | L1437-1446 |
 | Negative-FIT DW guardrail | In avoidance mode, DW export allowed only if net benefit >= $0.02/kWh | `engine/constraints.py` / `engine/core.py` |
 | Away discharge floor | While away is active, `can_discharge = soc > config.discharge_floor_pct` (`max(min_soc_pct, away_reserve_floor_pct)`), and the HOLD/EXPORT transitions clamp their drain at it too | `engine/constraints.py:58,112`, `engine/transitions.py:108,285` (docs/holiday-away/plan.md item 4) |
+| Load-sized export floor | EXPORT may not drain below forecast net load over the rest of the elevated-price period (buy price above 1.5x the horizon median, ending after 60 min of normal prices), times `export_floor_load_margin` (1.5). A later slot only counts if its buy price is at least half the current slot's sell price, so an extreme sell price releases the floor. Set per slot as `SlotContext.export_floor_pct`; raises the discharge floor for EXPORT only, so HOLD still serves load beneath it and it never unlocks grid charging. The PROACTIVE_EXPORT hardware reserve stops at the same floor | `engine/export_floor.py`, `engine/constraints.py`, `engine/transitions.py`, `state/machine.py` |
 
 ### When to Add Hard Constraints
 

@@ -55,7 +55,9 @@ def _determine_export_actions(
     from custom_components.localshift.engine.types import PlannerAction
 
     actions = []
-    can_discharge = soc_pct > config.discharge_floor_pct
+    # The slot's load-sized export floor only ever raises the discharge floor.
+    export_floor_pct = max(config.discharge_floor_pct, slot.export_floor_pct)
+    can_discharge = soc_pct > export_floor_pct
 
     # Issue #1097: export is only worth planning where the hardware will do it.
     # Outside Tesla's top sell rate, autonomous mode holds or grid-charges.
@@ -111,7 +113,7 @@ def _determine_export_actions(
                 / config.battery_capacity_kwh
                 * 100.0
             )
-            landing_soc_pct = max(soc_pct - max_export_pp, config.discharge_floor_pct)
+            landing_soc_pct = max(soc_pct - max_export_pp, export_floor_pct)
             if landing_soc_pct >= floor_pct:
                 actions.append(PlannerAction.EXPORT_PROACTIVE)
     else:
