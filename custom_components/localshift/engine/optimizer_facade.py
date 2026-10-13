@@ -1043,7 +1043,7 @@ class OptimizerFacade:
     def _precharge_required_today(optimizer_config: Any) -> bool:
         """True when today genuinely needs a pre-charge, by either engine signal.
 
-        Found live 2026-08-25. This predicate used to be ``_floor_suppressed_by_solar``
+        Found live 2026-08-25. This predicate used to be the floor-suppressed-by-solar check
         alone, on the reasoning that "a live floor means #901 owns the cycle and this arm
         stays out of the way". That mutual exclusion was keyed on the wrong quantity. The
         call site already reaches this arm ONLY when ``_precharge_backstop_mode`` returned

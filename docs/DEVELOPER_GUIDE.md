@@ -17,7 +17,7 @@ custom_components/localshift/
 ├── engine/                  # DP Optimization engine
 │   ├── optimizer_dp.py      # Core DP solver (feasible_actions, stage_cost, terminal_cost)
 │   ├── optimizer_facade.py  # Facade: slot building, corrections, planner, runtime mode
-│   ├── optimizer_runner.py   # Coordinator integration
+│   ├── optimizer_runner.py   # Helpers around a DP optimizer run (library)
 │   ├── constraints.py       # Hard constraint functions (feasible_actions)
 │   ├── cost.py              # Cost function components (stage_cost, terminal_cost)
 │   ├── types.py             # Type definitions (SlotContext, OptimizerConfig, etc.)

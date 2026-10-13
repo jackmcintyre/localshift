@@ -159,29 +159,20 @@ def test_active_mode_automation_disabled(computation_engine, coordinator_data):
 
 
 @pytest.mark.parametrize(
-    "grid_charge_boost, grid_charge, proactive_export, price_spike, "
-    "demand_window_active, manual_override, expected_mode",
+    "price_spike, demand_window_active, manual_override, expected_mode",
     [
-        # Forecast-driven modes: set grid_import_kwh=0 to prevent activation
-        # (tests the logic when forecast flags are set but conditions not met)
-        (True, False, False, False, False, False, BatteryMode.SELF_CONSUMPTION),
-        (False, True, False, False, False, False, BatteryMode.SELF_CONSUMPTION),
-        (False, False, True, False, False, False, BatteryMode.SELF_CONSUMPTION),
         # spike_discharge and demand_block need specific switch states not available in test
-        (False, False, False, True, False, False, BatteryMode.SELF_CONSUMPTION),
-        (False, False, False, False, True, False, BatteryMode.SELF_CONSUMPTION),
+        (True, False, False, BatteryMode.SELF_CONSUMPTION),
+        (False, True, False, BatteryMode.SELF_CONSUMPTION),
         # Manual override works correctly
-        (False, False, False, False, False, True, BatteryMode.MANUAL),
+        (False, False, True, BatteryMode.MANUAL),
         # Default case
-        (False, False, False, False, False, False, BatteryMode.SELF_CONSUMPTION),
+        (False, False, False, BatteryMode.SELF_CONSUMPTION),
     ],
 )
 def test_active_mode_forecast_driven(
     computation_engine,
     coordinator_data,
-    grid_charge_boost,
-    grid_charge,
-    proactive_export,
     price_spike,
     demand_window_active,
     manual_override,

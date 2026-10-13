@@ -132,7 +132,7 @@ class SlotBuildMetadata:
 
 
 class SlotBuilder:
-    """Builds SlotContext list from raw CoordinatorData without touching daily_forecast.
+    """Builds SlotContext list from raw CoordinatorData.
 
     Reads:
     - data.general_forecast / data.feed_in_forecast — Amber buy/sell price series

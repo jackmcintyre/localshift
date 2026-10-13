@@ -50,7 +50,7 @@ Use this index to quickly determine which documentation files to consult before 
 ### Related Files
 - `engine/optimizer_dp.py` — Main DP solver
 - `engine/constraints.py` — Hard constraint functions
-- `engine/optimizer_runner.py` — Coordinator integration
+- `engine/optimizer_runner.py` — Helpers around a DP optimizer run (library)
 - `tests/test_optimizer_dp_solve.py` — Test patterns
 
 ---
