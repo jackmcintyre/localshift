@@ -132,6 +132,74 @@ def test_cancel_pending_coalesce(mock_call_later):
     assert dispatcher._coalesce_count == 0
 
 
+def _stoppable_dispatcher(hass):
+    state_machine = MagicMock()
+    state_machine.in_mode_transition = False
+    read_state = MagicMock()
+    dispatcher = EvaluationDispatcher(
+        hass,
+        lambda _key: "sensor.price",
+        read_state,
+        MagicMock(),
+        AsyncMock(),
+        state_machine,
+        timedelta(minutes=10),
+    )
+    return dispatcher, read_state
+
+
+@patch("custom_components.localshift.services.evaluation_dispatcher.async_call_later")
+def test_stop_cancels_pending_coalesce(mock_call_later):
+    """Issue #1149: stopping cancels the armed timer."""
+    mock_unsub = MagicMock()
+    mock_call_later.return_value = mock_unsub
+    hass = MagicMock()
+    dispatcher, _ = _stoppable_dispatcher(hass)
+    dispatcher.on_state_change(MagicMock())
+
+    dispatcher.stop()
+
+    mock_unsub.assert_called_once()
+    assert dispatcher._coalesce_unsub is None
+
+
+@patch("custom_components.localshift.services.evaluation_dispatcher.async_call_later")
+def test_coalesce_callback_after_stop_is_a_no_op(mock_call_later):
+    """Issue #1149: a callback that was already scheduled when the cancel ran
+    must not evaluate."""
+    hass = MagicMock()
+    dispatcher, _ = _stoppable_dispatcher(hass)
+    dispatcher.on_state_change(MagicMock())
+    timer_callback = mock_call_later.call_args[0][2]
+
+    dispatcher.stop()
+    timer_callback(MagicMock())
+
+    hass.async_create_task.assert_not_called()
+
+
+@patch("custom_components.localshift.services.evaluation_dispatcher.async_call_later")
+def test_state_change_after_stop_arms_nothing(mock_call_later):
+    hass = MagicMock()
+    dispatcher, read_state = _stoppable_dispatcher(hass)
+
+    dispatcher.stop()
+    dispatcher.on_state_change(MagicMock())
+
+    mock_call_later.assert_not_called()
+    read_state.assert_not_called()
+
+
+def test_fast_tick_after_stop_dispatches_nothing():
+    hass = MagicMock()
+    dispatcher, _ = _stoppable_dispatcher(hass)
+
+    dispatcher.stop()
+
+    assert dispatcher.on_fast_tick(dt_util.now()) is False
+    hass.async_create_task.assert_not_called()
+
+
 @patch("custom_components.localshift.services.evaluation_dispatcher.async_call_later")
 def test_coalesce_timer_skips_if_transition_started(mock_call_later):
     """Timer callback skips evaluation if transition starts before expiry."""
