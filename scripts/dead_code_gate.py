@@ -41,11 +41,33 @@ Why the whitelist is matched by qualified name here
 vulture's own whitelist mechanism matches on the bare name across the whole
 package: listing ``estimate`` would hide every unused ``estimate`` anywhere.
 This gate therefore runs vulture on the package alone and applies the
-whitelist itself, by qualified name (``StateMachine._build_hold_config``), and
-applies Home Assistant framework names only to members of classes that derive
-from a ``homeassistant`` import. The whitelist file is still valid vulture
-input, so a bare ``uv run vulture`` picks it up from ``[tool.vulture] paths``
-and prints roughly the baseline.
+whitelist itself. A normal entry matches one kind of symbol, in one file, by
+qualified name (``method state/machine.py StateMachine._build_hold_config``).
+A ``# framework:`` entry can only be ``_.member``, which covers members of
+classes that derive from a ``homeassistant`` import, or a bare module-level
+hook, which covers functions in the modules Home Assistant loads by name
+(``__init__.py`` and the ``PLATFORMS`` modules). Nothing else is accepted
+under ``# framework:``.
+
+The two naming conventions Home Assistant defines by pattern are applied here
+too, scoped the same way: ``_attr_*`` attributes on classes that derive from
+Home Assistant, and ``async_step_*`` methods on config/options flow classes.
+
+The whitelist file is still valid vulture input, so a bare ``uv run vulture``
+picks it up from ``[tool.vulture] paths``. That command is red by design (it
+prints the baseline, more or less); this script is the pass/fail.
+
+Limits
+------
+* The scan sees unused NAMES. It cannot vouch for a parameter, or a class
+  built only through an injected reference.
+* The census counts any load of ``data.<field>`` as a read, so a container
+  field that is only ever appended to (``data.log.append(x)``) looks read.
+* ``dataclasses.asdict`` / ``replace`` over the snapshot are not modelled.
+  Nothing uses them today; if something starts to, fields it serialises would
+  be reported unread and the gate would fail loudly rather than pass quietly.
+* When a field is write-only, the gate reports the field and its write sites.
+  It cannot see that the computation feeding the write is now pointless.
 
 Usage
 -----
@@ -93,7 +115,9 @@ BASELINE_HEADER = """\
 #     Do not add it here.
 #
 # Format: <kind> <file, relative to the package> <qualified name>  [# note]
-# Sorted; no line numbers on purpose. Notes survive --update.
+# '@2', '@3' = the 2nd, 3rd symbol with that same key (e.g. another write
+# site of the same attribute). Sorted; no line numbers on purpose. Notes
+# survive --update.
 """
 
 
@@ -104,20 +128,31 @@ BASELINE_HEADER = """\
 
 @dataclass(frozen=True, order=True)
 class Finding:
-    """One unused symbol, keyed so unrelated edits do not change it."""
+    """One unused symbol, keyed so unrelated edits do not change it.
+
+    ``ordinal`` separates symbols that would otherwise share a key: two dead
+    functions of the same name in one scope, or several write sites of one
+    attribute. Without it a second one added later would be invisible.
+    """
 
     kind: str
     file: str
     qualname: str
+    ordinal: int = 1
 
     @property
     def name(self) -> str:
         """Last component of the qualified name."""
         return self.qualname.rsplit(".", 1)[-1]
 
+    @property
+    def key(self) -> str:
+        """Qualified name plus ``@n`` for the 2nd, 3rd... of the same key."""
+        return self.qualname + (f"@{self.ordinal}" if self.ordinal > 1 else "")
+
     def render(self) -> str:
-        """Baseline line for this finding."""
-        return f"{self.kind:<13}{self.file}  {self.qualname}"
+        """Baseline line for this finding. Fields are whitespace-separated."""
+        return f"{self.kind:<12} {self.file}  {self.key}"
 
 
 @dataclass
@@ -128,6 +163,8 @@ class WhitelistEntry:
     name: str
     line: int
     why: str = ""
+    file: str = ""  # package-relative file of the definition (normal entries)
+    kind: str = ""  # detector kind it matches (normal entries)
     # (site file relative to the repo root, text that must be present in it)
     evidence: list[tuple[str, str]] = field(default_factory=list)
     sites: list[str] = field(default_factory=list)
@@ -287,20 +324,20 @@ def vulture_findings(layout: Layout, config: dict) -> set[Finding]:
     min_confidence = int(config.get("min_confidence", DEFAULT_MIN_CONFIDENCE))
 
     indexes: dict[Path, _ModuleIndex] = {}
+    seen: Counter[tuple[str, str, str]] = Counter()
     findings: set[Finding] = set()
-    for item in scanner.get_unused_code(min_confidence=min_confidence):
+    items = scanner.get_unused_code(min_confidence=min_confidence)
+    for item in sorted(items, key=lambda i: (str(i.filename), i.first_lineno)):
         path = Path(item.filename).resolve()
         if path not in indexes:
             indexes[path] = _ModuleIndex(path.read_text(encoding="utf-8"))
-        findings.add(
-            Finding(
-                kind=item.typ,
-                file=path.relative_to(layout.package.resolve()).as_posix(),
-                qualname=_qualname(
-                    indexes[path], item.typ, str(item.name), item.first_lineno
-                ),
-            )
+        key = (
+            item.typ,
+            path.relative_to(layout.package.resolve()).as_posix(),
+            _qualname(indexes[path], item.typ, str(item.name), item.first_lineno),
         )
+        seen[key] += 1
+        findings.add(Finding(*key, ordinal=seen[key]))
     return findings
 
 
@@ -517,13 +554,20 @@ def field_reads(source: str, data_class: str = DEFAULT_DATA_CLASS) -> set[str]:
     return reads
 
 
-def unread_field_findings(layout: Layout) -> set[Finding]:
-    """``CoordinatorData`` fields with no reader in production code."""
+def census_fields(layout: Layout) -> list[str]:
+    """Fields the census examines: annotated names on the data class."""
     if not layout.data_module.is_file():
-        return set()
-    fields = declared_fields(
+        return []
+    return declared_fields(
         layout.data_module.read_text(encoding="utf-8"), layout.data_class
     )
+
+
+def unread_field_findings(layout: Layout) -> set[Finding]:
+    """``CoordinatorData`` fields with no reader in production code."""
+    fields = census_fields(layout)
+    if not fields:
+        return set()
     reads: set[str] = set()
     for path in sorted(layout.package.rglob("*.py")):
         if path.resolve() == layout.data_module.resolve():
@@ -537,8 +581,36 @@ def unread_field_findings(layout: Layout) -> set[Finding]:
     }
 
 
-def collect_findings(layout: Layout, config: dict) -> set[Finding]:
-    """All findings from both detectors, before the whitelist is applied."""
+def _is_framework_convention(finding: Finding, roots: dict[str, set[str]]) -> bool:
+    """``_attr_*`` on an HA-derived class, ``async_step_*`` on a flow class.
+
+    Home Assistant reads any ``_attr_<property>`` off an entity and dispatches
+    a flow step to ``async_step_<step_id>``. Those are conventions by pattern,
+    so they are globs -- but only where the convention applies.
+    """
+    parts = finding.qualname.split(".")
+    if len(parts) < 2:
+        return False
+    owner_roots = roots.get(parts[-2], set())
+    if finding.kind == "attribute" and parts[-1].startswith("_attr_"):
+        return bool(owner_roots)
+    if finding.kind == "method" and parts[-1].startswith("async_step_"):
+        return any(root.endswith("Flow") for root in owner_roots)
+    return False
+
+
+def collect_findings(layout: Layout, config: dict) -> tuple[set[Finding], list[str]]:
+    """Findings from both detectors before the whitelist, and detector problems."""
+    problems: list[str] = []
+    examined = set(census_fields(layout))
+    if not examined:
+        problems.append(
+            f"the reader census found no fields: class {layout.data_class} in "
+            f"{layout.data_module.relative_to(layout.root)} is missing or has no "
+            "annotated fields. If it was renamed or moved, update "
+            "DEFAULT_DATA_MODULE / DEFAULT_DATA_CLASS in this script; a census "
+            "that examines nothing must not pass."
+        )
     data_rel = ""
     if layout.data_module.is_file():
         data_rel = (
@@ -548,18 +620,21 @@ def collect_findings(layout: Layout, config: dict) -> set[Finding]:
             .as_posix()
         )
     prefix = f"{layout.data_class}."
+    roots = framework_roots(layout.package)
     findings = {
         f
         for f in vulture_findings(layout, config)
-        # The reader census owns CoordinatorData fields (module docstring).
+        # The census owns the fields it examined, and only those: an
+        # un-annotated class attribute stays vulture's to report.
         if not (
             f.kind == "variable"
             and f.file == data_rel
             and f.qualname.startswith(prefix)
-            and "." not in f.qualname[len(prefix) :]
+            and f.qualname[len(prefix) :] in examined
         )
+        and not _is_framework_convention(f, roots)
     }
-    return findings | unread_field_findings(layout)
+    return findings | unread_field_findings(layout), problems
 
 
 # ---------------------------------------------------------------------------
@@ -567,7 +642,9 @@ def collect_findings(layout: Layout, config: dict) -> set[Finding]:
 # ---------------------------------------------------------------------------
 
 _ENTRY_RE = re.compile(r"^(?:(?P<owner>[A-Za-z_][\w.]*)\.)?(?P<name>[A-Za-z_]\w*)$")
-_META_RE = re.compile(r"^#\s*(?P<key>site|evidence|why|framework):\s*(?P<value>.*)$")
+_META_RE = re.compile(
+    r"^#\s*(?P<key>site|evidence|why|framework|file|kind):\s*(?P<value>.*)$"
+)
 
 
 def parse_whitelist(text: str) -> list[WhitelistEntry]:
@@ -633,6 +710,8 @@ class _Block:
             sites=list(self.meta.get("site", [])),
             evidence=list(self.meta.get("evidence", [])),
             framework=(self.meta.get("framework") or [""])[-1],
+            file=(self.meta.get("file") or [""])[-1],
+            kind=(self.meta.get("kind") or [""])[-1],
         )
 
 
@@ -664,10 +743,14 @@ def _base_names(node: ast.ClassDef) -> set[str]:
     return names
 
 
-def framework_classes(package: Path, framework: str = "homeassistant") -> set[str]:
-    """Names of package classes that derive from an import of ``framework``."""
+def framework_roots(package: Path, framework: str = "homeassistant") -> dict:
+    """Package class name -> the ``framework`` imports it derives from.
+
+    ``{"LocalShiftSwitch": {"CoordinatorEntity", "SwitchEntity"}, ...}``. A
+    class that does not derive from the framework is absent. Purely static.
+    """
     bases: dict[str, set[str]] = {}
-    derived: set[str] = set()
+    roots: dict[str, set[str]] = {}
     for path in sorted(package.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         imported = _framework_imports(tree, framework)
@@ -676,54 +759,72 @@ def framework_classes(package: Path, framework: str = "homeassistant") -> set[st
                 names = _base_names(node)
                 bases.setdefault(node.name, set()).update(names)
                 if names & imported:
-                    derived.add(node.name)
+                    roots.setdefault(node.name, set()).update(names & imported)
     changed = True
     while changed:
         changed = False
         for name, parents in bases.items():
-            if name not in derived and parents & derived:
-                derived.add(name)
+            inherited = set().union(*(roots.get(p, set()) for p in parents))
+            if not inherited <= roots.get(name, set()):
+                roots.setdefault(name, set()).update(inherited)
                 changed = True
-    return derived
+    return roots
 
 
-def _entry_matches(entry: WhitelistEntry, finding: Finding, derived: set[str]) -> bool:
+def entry_modules(package: Path) -> set[str]:
+    """Modules Home Assistant loads by name: ``__init__`` and the platforms.
+
+    The platforms are read from the integration's own ``PLATFORMS`` list, the
+    one it hands to ``async_forward_entry_setups``.
+    """
+    modules = {"__init__.py"}
+    for path in sorted(package.rglob("*.py")):
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            targets = getattr(node, "targets", None) or [getattr(node, "target", None)]
+            if any(isinstance(t, ast.Name) and t.id == "PLATFORMS" for t in targets):
+                modules |= {f"{name}.py" for name in _strings([node.value])}
+    return modules
+
+
+@dataclass
+class _Context:
+    """What whitelist matching needs to know about the package."""
+
+    roots: dict[str, set[str]]
+    entry_modules: set[str]
+
+
+def _entry_matches(entry: WhitelistEntry, finding: Finding, ctx: _Context) -> bool:
     """True when ``entry`` covers ``finding``."""
-    if entry.owner == ANY_OWNER:
-        # Framework member: any class deriving from the framework.
-        parts = finding.qualname.split(".")
-        return (
-            len(parts) >= 2
-            and parts[-1] == entry.name
-            and parts[-2] in derived
-            and finding.kind in {"method", "property", "variable", "attribute"}
-        )
-    return finding.qualname == entry.qualname
-
-
-def _claim_problems(layout: Layout, entry: WhitelistEntry) -> list[str]:
-    """Problems with what an entry claims, before matching it to findings."""
-    problems: list[str] = []
-    if not entry.why:
-        problems.append("no '# why:' line. Say why it is live.")
     if entry.framework:
-        # Verified against the framework itself by tests/test_dead_code_gate.py,
-        # which can import it.
-        return problems
-    if entry.owner == ANY_OWNER:
-        problems.append(
-            "'_.name' matches every class and is only allowed under "
-            "'# framework:'. Name the owning class instead."
-        )
-        return problems
-    if not entry.evidence or any(not site for site, _ in entry.evidence):
-        problems.append(
-            "needs '# site:' (file that reaches it dynamically) followed by "
-            "'# evidence:' (text that must be present there)."
-        )
-        return problems
+        if entry.owner == ANY_OWNER:
+            # Member of a class that derives from the framework.
+            parts = finding.qualname.split(".")
+            return (
+                len(parts) >= 2
+                and parts[-1] == entry.name
+                and bool(ctx.roots.get(parts[-2]))
+                and finding.kind in {"method", "property"}
+            )
+        if entry.owner is None:
+            # Module-level hook, only in a module the framework loads by name.
+            return (
+                finding.kind == "function"
+                and finding.qualname == entry.name
+                and finding.file in ctx.entry_modules
+            )
+        return False  # rejected by _claim_problems
+    return (
+        finding.kind == entry.kind
+        and finding.file == entry.file
+        and finding.qualname == entry.qualname
+    )
+
+
+def _evidence_problems(layout: Layout, entry: WhitelistEntry) -> list[str]:
+    """Check that every cited site still contains its evidence."""
     cited = {site for site, _ in entry.evidence}
-    problems += [
+    problems = [
         f"site {site} has no '# evidence:'."
         for site in entry.sites
         if site not in cited
@@ -741,23 +842,71 @@ def _claim_problems(layout: Layout, entry: WhitelistEntry) -> list[str]:
     return problems
 
 
+def _claim_problems(layout: Layout, entry: WhitelistEntry) -> list[str]:
+    """Problems with what an entry claims, before matching it to findings."""
+    problems: list[str] = []
+    if not entry.why:
+        problems.append("no '# why:' line. Say why it is live.")
+    if entry.framework:
+        # '# framework:' is not a way round the evidence rules. It accepts
+        # exactly two shapes, and tests/test_dead_code_gate.py checks both
+        # against the real framework.
+        if entry.owner not in {ANY_OWNER, None}:
+            problems.append(
+                "under '# framework:' only '_.member' (a member of a class "
+                "that derives from the framework) or a bare module-level hook "
+                "is accepted. Give this entry '# file:', '# kind:', '# site:' "
+                "and '# evidence:' in a block of its own instead."
+            )
+        return problems
+    if entry.owner == ANY_OWNER:
+        problems.append(
+            "'_.name' matches every class and is only allowed under "
+            "'# framework:'. Name the owning class instead."
+        )
+        return problems
+    if not entry.file or not entry.kind:
+        problems.append(
+            "needs '# file:' (where it is defined, relative to the package) "
+            "and '# kind:' (method, function, variable, ...), so it cannot "
+            "cover a same-named symbol somewhere else."
+        )
+    if not entry.evidence or any(not site for site, _ in entry.evidence):
+        problems.append(
+            "needs '# site:' (file that reaches it dynamically) followed by "
+            "'# evidence:' (text that must be present there)."
+        )
+        return problems
+    return problems + _evidence_problems(layout, entry)
+
+
+def match_whitelist(
+    layout: Layout, entries: list[WhitelistEntry], findings: set[Finding]
+) -> list[tuple[WhitelistEntry, set[Finding]]]:
+    """Each whitelist entry with the findings it covers."""
+    ctx = _Context(framework_roots(layout.package), entry_modules(layout.package))
+    return [
+        (entry, {f for f in findings if _entry_matches(entry, f, ctx)})
+        for entry in entries
+    ]
+
+
 def check_whitelist(
     layout: Layout, entries: list[WhitelistEntry], findings: set[Finding]
 ) -> tuple[set[Finding], list[str]]:
     """Apply the whitelist. Returns (suppressed findings, problems)."""
-    derived = framework_classes(layout.package)
     suppressed: set[Finding] = set()
     problems: list[str] = []
 
-    for entry in entries:
+    for entry, matched in match_whitelist(layout, entries, findings):
         where = f"{layout.whitelist.name}:{entry.line} {entry.label}"
-        problems += [f"{where}: {p}" for p in _claim_problems(layout, entry)]
-        matched = {f for f in findings if _entry_matches(entry, f, derived)}
-        if not matched:
+        claim = _claim_problems(layout, entry)
+        problems += [f"{where}: {p}" for p in claim]
+        if not matched and not claim:
             problems.append(
                 f"{where}: matches nothing the detectors report. The symbol was "
-                "deleted or renamed, or is now referenced directly. Remove the "
-                "entry."
+                "deleted or renamed, moved to another file, or is now "
+                "referenced directly. Remove or correct the entry."
             )
         suppressed |= matched
     return suppressed, problems
@@ -768,18 +917,29 @@ def check_whitelist(
 # ---------------------------------------------------------------------------
 
 
+_ORDINAL_RE = re.compile(r"^(?P<qualname>.*)@(?P<ordinal>[0-9]+)$")
+
+
 def parse_baseline(text: str) -> dict[Finding, str]:
     """Baseline entries -> trailing note (may be empty)."""
     entries: dict[Finding, str] = {}
     for lineno, raw in enumerate(text.splitlines(), start=1):
-        body, _, note = raw.partition("#")
-        body = body.strip()
-        if not body:
+        if not raw.strip() or raw.lstrip().startswith("#"):
             continue
+        body, _, note = raw.partition("  # ")
         parts = body.split(None, 2)
         if len(parts) != 3:
             raise ValueError(f"baseline line {lineno}: cannot parse {raw!r}")
-        entries[Finding(parts[0], parts[1], parts[2].strip())] = note.strip()
+        kind, file, key = parts[0], parts[1], parts[2].strip()
+        match = _ORDINAL_RE.match(key)
+        finding = (
+            Finding(kind, file, match["qualname"], int(match["ordinal"]))
+            if match
+            else Finding(kind, file, key)
+        )
+        if finding in entries:
+            raise ValueError(f"baseline line {lineno}: duplicate entry {raw!r}")
+        entries[finding] = note.strip()
     return entries
 
 
@@ -805,6 +965,7 @@ class Result:
     suppressed: set[Finding]
     baseline: dict[Finding, str]
     whitelist_problems: list[str]
+    detector_problems: list[str] = field(default_factory=list)
 
     @property
     def current(self) -> set[Finding]:
@@ -824,13 +985,15 @@ class Result:
     @property
     def ok(self) -> bool:
         """True when the gate passes."""
-        return not (self.new or self.gone or self.whitelist_problems)
+        return not (
+            self.new or self.gone or self.whitelist_problems or self.detector_problems
+        )
 
 
 def run(layout: Layout) -> Result:
     """Run both detectors and compare with the whitelist and the baseline."""
     config = load_vulture_config(layout.root)
-    findings = collect_findings(layout, config)
+    findings, detector_problems = collect_findings(layout, config)
     entries = (
         parse_whitelist(layout.whitelist.read_text(encoding="utf-8"))
         if layout.whitelist.is_file()
@@ -842,13 +1005,18 @@ def run(layout: Layout) -> Result:
         if layout.baseline.is_file()
         else {}
     )
-    return Result(findings, suppressed, baseline, problems)
+    return Result(findings, suppressed, baseline, problems, detector_problems)
 
 
 def report(result: Result, layout: Layout) -> str:
     """Failure text telling the developer exactly what to do."""
     script = "uv run python scripts/dead_code_gate.py"
     out: list[str] = []
+    if result.detector_problems:
+        out.append(
+            "DETECTOR PROBLEMS:\n"
+            + "\n".join(f"    {p}" for p in result.detector_problems)
+        )
     if result.new:
         out.append(
             f"NEW DEAD CODE: {len(result.new)} unused symbol(s) that are not in "

@@ -330,25 +330,67 @@ through the string tables in `state/mode_configs.py` and `getattr`. Home
 Assistant calls `async_setup_entry`, `extra_state_attributes` and the like by
 name. A scan reports all of them as unused.
 
-So the whitelist is evidence, not a mute button. Each entry carries a
-`# site:` (a file that reaches the symbol), an `# evidence:` (text that must
-still be in that file) and a `# why:`. The gate re-checks the evidence on
+So the whitelist is evidence, not a mute button. Each entry carries `# file:`
+and `# kind:` (what it is and where it is defined), a `# site:` (a file that
+reaches the symbol), an `# evidence:` (text that must still be in that file)
+and a `# why:`. The gate re-checks the evidence on
 every run: delete the dispatch-table row for a builder and the gate fails,
 telling you the method is now dead. Home Assistant names are checked against
 Home Assistant itself by `tests/test_dead_code_gate.py`.
 
-The gate matches the whitelist by qualified name, so `ForecastSlot.estimate`
-does not hide any other `estimate`. Naming conventions Home Assistant defines
-by pattern (`_attr_*`, `async_step_*`) are the only globs, in
-`[tool.vulture] ignore_names`.
+An entry covers one kind of symbol in one file (`# file:`, `# kind:`), matched
+by qualified name. `ForecastSlot.estimate` does not hide any other `estimate`,
+and a second `StateMachine` in another file is not covered.
 
-One limit to know about: the scan only reports symbols whose *name* is unused.
-A parameter, or a class that is only ever built through an injected reference
-(`self._slot_builder_cls(...)` in `engine/optimizer_facade.py`), is not
-something it can vouch for. Removing "unused" pieces of such a class is how
-the inline optimizer was once silently disabled. The gate keeps a deletion
-honest about what was removed; it does not prove the deletion was safe. Run
-the scenario tests.
+`# framework:` blocks are for what Home Assistant calls by name, and they
+accept exactly two shapes:
+
+- `_.member`: a method or property of a class that derives from a
+  `homeassistant` import. The test suite checks that every class it covers is
+  a real subclass of the framework class named and that the class defines the
+  member.
+- a bare name: a module-level hook such as `async_setup_entry`, matched only
+  in the modules Home Assistant loads by name (`__init__.py` and the
+  `PLATFORMS` modules).
+
+Anything else under `# framework:` is an error. It is not a way around the
+site and evidence rules.
+
+Two conventions Home Assistant defines by pattern are applied by the gate
+itself, scoped the same way: `_attr_*` attributes on classes that derive from
+Home Assistant, and `async_step_*` methods on config and options flow classes.
+A new entity that sets `_attr_translation_key` needs no whitelist edit; an
+`_attr_foo` on a class that is not an entity is reported.
+
+Two findings that share a key (several write sites of one dead attribute, two
+dead functions of the same name) are listed as `name`, `name@2`, `name@3`, so
+adding another one is seen.
+
+### What the gate does not do
+
+- **It is a red check, not a merge block.** `main` has no branch protection,
+  so a failing gate does not stop a merge. Somebody has to look at it.
+- **It reports unused names, nothing finer.** A parameter, or a class only
+  ever built through an injected reference (`self._slot_builder_cls(...)` in
+  `engine/optimizer_facade.py`), is not something it can vouch for. Removing
+  "unused" pieces of such a class is how the inline optimizer was once
+  silently disabled. The gate keeps a deletion honest about what was removed;
+  it does not prove the deletion was safe. Run the scenario tests.
+- **A container field that is only written to counts as read.** The census
+  treats any load of `data.<field>` as a read, and `data.log.append(x)` loads
+  `data.log`.
+- **`dataclasses.asdict` / `replace` over `CoordinatorData` are not
+  modelled.** Nothing uses them today. If something starts to, the fields it
+  serialises would be reported unread and the gate would fail loudly rather
+  than pass quietly; teach the census the new form then.
+- **It cannot force the removal of a computation that feeds a write-only
+  field.** It reports the field and its write sites. The method that works the
+  value out is still called, so it is not reported
+  (`_update_hybrid_accuracy` feeding `hybrid_solar_accuracy` is the live
+  example). Deleting the field means deciding about that method too.
+- **If `coordinator/data.py` or `CoordinatorData` is renamed** the census
+  finds no fields and the gate fails, rather than passing with the census
+  switched off. Update the defaults at the top of the script.
 
 ### What to do when it fails
 
@@ -358,7 +400,7 @@ the scenario tests.
 2. It was meant to be called: wire it up. A fix that was written but never
    connected looks exactly like this (issues #959, #968).
 3. It is live through dynamic access: add it to `vulture_whitelist.py` with
-   its site, evidence and reason.
+   its file, kind, site, evidence and reason.
 
 Do not add it to the baseline. `--update` refuses to.
 
@@ -391,7 +433,7 @@ nothing reaches it any more.
 uv run python scripts/dead_code_gate.py              # the CI check
 uv run python scripts/dead_code_gate.py --summary    # counts by kind
 uv run python scripts/dead_code_gate.py --update     # shrink the baseline
-uv run vulture                                       # raw vulture view of the same
+uv run vulture                                       # raw view; red by design, not the pass/fail
 ```
 
 `--update --allow-additions` adds new findings to the baseline. It exists for
