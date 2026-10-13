@@ -58,6 +58,58 @@
    "summary": {},
    "swallowed_failures": [],
    "decisions": []
+  },
+  "live_like": {
+   "commanded_mode": "manual",
+   "coverage": {
+    "confidence_ceiling_today": 1.0,
+    "confidence_ceiling_tomorrow": 1.0,
+    "day_type": "weekday",
+    "load_slots": {
+     "aggregate_weekday": 0,
+     "aggregate_weekend": 0,
+     "combined": 0,
+     "day": 0
+    },
+    "load_slots_on_ceiling": 0,
+    "solar_absent_confidence": 1.0,
+    "solar_accuracy": 0.727257,
+    "solar_bias_slots": 0,
+    "solar_samples": 358,
+    "weather": "sunny"
+   },
+   "data": {
+    "boost_charge_active": false,
+    "boost_charge_needed": false,
+    "cheap_charge_stop_price": 0.0,
+    "debug_forecast_slot_found": false,
+    "debug_mode_source": "manual_override",
+    "debug_plan_mode_pending": null,
+    "demand_window_active": false,
+    "effective_cheap_price": 0.0,
+    "forecast_horizon_hours": 18.0,
+    "negative_fit_window_open": false,
+    "optimizer_apply_plan": null,
+    "optimizer_last_apply_status": "none",
+    "optimizer_precharge_backstop_active": false,
+    "planner_export_floor_pct": 0.0,
+    "planner_threshold_used": null,
+    "solar_can_reach_target": false,
+    "solar_can_reach_target_in_dw": false
+   },
+   "no_grant": {
+    "apply_status": "none",
+    "commanded_mode": "manual",
+    "mode_source": "manual_override",
+    "plan_mode_pending": null,
+    "precharge_backstop_active": false
+   },
+   "optimizer_result_present": false,
+   "result": {},
+   "slot0_action": null,
+   "summary": {},
+   "swallowed_failures": [],
+   "decisions": []
   }
  }
 }
