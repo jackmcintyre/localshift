@@ -38,13 +38,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: LocalShiftConfigEntry) -
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: LocalShiftConfigEntry) -> bool:
-    """Unload a LocalShift config entry."""
-    # Stop the coordinator
+    """Unload a LocalShift config entry.
+
+    Platforms first, and the coordinator only once they are gone (Issue
+    #1149). If the platforms refuse to unload, Home Assistant keeps the entry
+    loaded; a coordinator stopped ahead of that would leave it loaded with no
+    battery control until the next restart, because a stopped coordinator
+    never evaluates again.
+    """
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
+
     coordinator: LocalShiftCoordinator = entry.runtime_data
     await coordinator.async_stop()
-
-    # Unload platforms
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    return True
 
 
 async def _async_options_updated(

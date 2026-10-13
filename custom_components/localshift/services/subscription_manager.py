@@ -55,6 +55,8 @@ class SubscriptionManager:
         self._unsub_timer_fast: CALLBACK_TYPE | None = None
         self._unsub_timer_medium: CALLBACK_TYPE | None = None
         self._unsub_timer_slow: CALLBACK_TYPE | None = None
+        # Issue #1149: once stopped, nothing may subscribe again.
+        self._stopped = False
 
     def start(self, monitored_entities: Iterable[str], demand_window_end: time) -> None:
         """Start all subscriptions and timers."""
@@ -104,6 +106,7 @@ class SubscriptionManager:
 
     def stop(self) -> None:
         """Stop all subscriptions and timers."""
+        self._stopped = True
         for unsub in (
             self._unsub_state,
             self._unsub_midnight,
@@ -126,6 +129,11 @@ class SubscriptionManager:
 
     def reschedule_daily_summary(self, demand_window_end: time) -> None:
         """Reschedule daily summary timer using the provided time."""
+        if self._stopped:
+            # Issue #1149: an options update that lands after unload. A timer
+            # armed now would never be cancelled.
+            return
+
         if self._unsub_daily_summary is not None:
             self._unsub_daily_summary()
             self._unsub_daily_summary = None

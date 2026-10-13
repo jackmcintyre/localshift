@@ -41,6 +41,7 @@ class ForecastBootstrapper:
 
         self._retry_count = 0
         self._solcast_ready = False
+        self._stopped = False
         self._forecast_computed_on_startup = False
 
     @property
@@ -112,6 +113,10 @@ class ForecastBootstrapper:
         self.data.forecast_status = "ready"
         return True
 
+    def stop(self) -> None:
+        """End the startup retry chain (Issue #1149). Called on unload."""
+        self._stopped = True
+
     async def wait_for_solcast_and_compute(self) -> None:
         """Wait for Solcast data to be ready, then compute derived values."""
         if self.check_solcast_ready():
@@ -156,6 +161,10 @@ class ForecastBootstrapper:
     async def _retry_solcast_check(self) -> None:
         """Retry checking Solcast data after a delay."""
         await asyncio.sleep(self._retry_delay.total_seconds())
+
+        if self._stopped:
+            # Issue #1149: unloaded while this slept. End the chain here.
+            return
 
         self._read_state()
 

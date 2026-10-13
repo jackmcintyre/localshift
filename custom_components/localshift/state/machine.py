@@ -127,6 +127,8 @@ class StateMachine:
         self._mode_desired_since: dict[BatteryMode, datetime] = {}
         self._startup_grace_until: datetime | None = None
         self._evaluate_lock = asyncio.Lock()
+        # Issue #1149: set on unload, see stop().
+        self._stopped = False
         self._in_mode_transition: bool = False
         self._manual_override_set_at: datetime | None = None
         # Track dynamic reserve for PROACTIVE_EXPORT mode
@@ -1060,6 +1062,12 @@ class StateMachine:
 
         """
         async with self._evaluate_lock:
+            if self._stopped:
+                # Issue #1149: this evaluation was waiting for the lock,
+                # behind a transition, when the entry was unloaded. The
+                # coordinator's own check was already behind it.
+                _LOGGER.debug("Skipping evaluation: state machine is stopped")
+                return
             _LOGGER.debug(
                 "State machine evaluate: desired=%s, commanded=%s, hardware_op=%s",
                 data.active_mode.value if hasattr(data, "active_mode") else "unknown",
@@ -2443,6 +2451,15 @@ class StateMachine:
         """Check if currently in a mode transition."""
         return self._in_mode_transition
 
+    def stop(self) -> None:
+        """Refuse all further work on this instance (Issue #1149).
+
+        Called on unload, after which a new coordinator and state machine
+        command the same battery. A transition already in flight is not
+        interrupted; anything that has not started yet does not start.
+        """
+        self._stopped = True
+
     def start_grid_charging_listener(self, hass: Any) -> None:
         """Register a state-change listener on the grid_charging switch.
 
@@ -2512,6 +2529,8 @@ class StateMachine:
             "mode %s — correcting immediately",
             self._commanded_mode.value,
         )
+        if self._stopped:  # Issue #1149: unloaded since this was queued
+            return
         try:
             await hass.services.async_call(
                 "switch",

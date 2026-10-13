@@ -146,6 +146,11 @@ class LocalShiftCoordinator:
         self._evaluation_dispatcher: EvaluationDispatcher | None = None
         self._subscription_manager: SubscriptionManager | None = None
         self._tick_scheduler: TickScheduler | None = None
+        # Issue #1149: set by async_stop. Checked wherever something that can
+        # outlive an unload (a timer, a queued task, a sleeping retry) would
+        # otherwise evaluate or re-subscribe on this instance.
+        self._stopped = False
+        self._stopped_refusal_logged = False
 
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
@@ -528,6 +533,17 @@ class LocalShiftCoordinator:
 
         Saves every store before the coordinator goes, to prevent data loss.
         """
+        # Issue #1149: first, and before anything awaits. From here on this
+        # instance must not evaluate: after a reload a new coordinator is
+        # commanding the same battery.
+        _LOGGER.info("LocalShift coordinator stopping")
+        self._stopped = True
+        if self._evaluation_dispatcher is not None:
+            self._evaluation_dispatcher.stop()
+        if self._state_machine is not None:
+            self._state_machine.stop()
+        if self._forecast_bootstrapper is not None:
+            self._forecast_bootstrapper.stop()
         if self._subscription_manager is not None:
             self._subscription_manager.stop()
         if self._unsub_homeassistant_stop is not None:
@@ -926,7 +942,7 @@ class LocalShiftCoordinator:
         Called when options are updated to pick up new notification time
         without requiring a restart.
         """
-        if self._subscription_manager is None:
+        if self._subscription_manager is None or self._stopped:
             return
 
         dw_end = self._parse_time_option(
@@ -937,6 +953,20 @@ class LocalShiftCoordinator:
 
     async def _evaluate_state_machine(self) -> None:
         """Compare desired mode with commanded mode and execute transitions."""
+        if self._stopped:
+            # Issue #1149: every evaluation path ends here (the coalesce
+            # timer, the ticks, the Solcast startup retry, an options change),
+            # so this one check covers a task or a sleeping retry that was
+            # already queued when the entry was unloaded. The first refusal
+            # is a warning: a straggler is harmless, but if this instance is
+            # still the live one it has no battery control, and that must
+            # not be silent.
+            _LOGGER.log(
+                logging.DEBUG if self._stopped_refusal_logged else logging.WARNING,
+                "Skipping evaluation: coordinator is stopped",
+            )
+            self._stopped_refusal_logged = True
+            return
         if self._state_machine is not None and self._computation_engine is not None:
             await self._state_machine.evaluate_state_machine(
                 self.data,
@@ -962,7 +992,9 @@ class LocalShiftCoordinator:
         lingering listener; an expired watch records the timeout.
         """
         watch = self.data.physical_response_watch
-        if watch is None:
+        if watch is None or self._stopped:
+            # Stopped (Issue #1149): an evaluation that was mid-flight at
+            # unload ends by calling this, and must not subscribe again.
             self._remove_battery_power_listener()
             return
         if dt_util.now() >= watch.timeout_at:
