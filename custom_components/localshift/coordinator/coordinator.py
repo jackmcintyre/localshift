@@ -6,7 +6,9 @@ coordinates internal state updates, and triggers automation logic.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -68,6 +70,10 @@ PERIODIC_INTERVAL = PERIODIC_INTERVAL_FAST
 
 # How often to save learning data to storage (prevents data loss on restart)
 LEARNING_SAVE_INTERVAL = timedelta(minutes=5)
+# Longest the final save waits for any one store (Issue #1142). A store write
+# normally takes milliseconds; this only bounds a stuck disk. Six stores at
+# this limit is 60 s, inside the 100 s Home Assistant allows its stop stage.
+FINAL_SAVE_STORE_TIMEOUT = 10.0
 
 # Solcast startup retry configuration
 SOLCAST_STARTUP_RETRY_DELAY = timedelta(seconds=30)
@@ -109,6 +115,12 @@ class LocalShiftCoordinator:
         # shutdown listener that writes it (shutdown does not unload entries).
         self._daily_totals_store: DailyTotalsStore | None = None
         self._unsub_homeassistant_stop: CALLBACK_TYPE | None = None
+        # Issue #1142: the final save on shutdown and on unload. The lock
+        # keeps the two from interleaving if both fire; the flag is set once
+        # async_start has loaded the forecast stores, so a stop that lands
+        # mid-startup cannot write empty data over what is stored.
+        self._final_save_lock = asyncio.Lock()
+        self._forecast_stores_loaded = False
         self._battery_controller: BatteryController | None = None
         self._notification_service: NotificationService | None = None
         self._computation_engine: ComputationEngine | None = None
@@ -456,6 +468,8 @@ class LocalShiftCoordinator:
         # Initialize accuracy metrics storage and load persisted metrics (Issue #706)
         await self._computation_engine.async_initialize_accuracy_metrics_storage()
         await self._computation_engine.async_load_accuracy_metrics(self.data)
+        # Issue #1142: from here the final save may write these stores back.
+        self._forecast_stores_loaded = True
 
         self._forecast_bootstrapper = ForecastBootstrapper(
             self.hass,
@@ -505,7 +519,7 @@ class LocalShiftCoordinator:
     async def async_stop(self) -> None:
         """Stop listening and clean up.
 
-        Saves all learning data to storage before shutdown to prevent data loss.
+        Saves every store before the coordinator goes, to prevent data loss.
         """
         if self._subscription_manager is not None:
             self._subscription_manager.stop()
@@ -517,8 +531,8 @@ class LocalShiftCoordinator:
         self._remove_battery_power_listener()
         if self._state_machine is not None:
             self._state_machine.stop_grid_charging_listener()
-        # Save all learning data to storage before shutdown
-        await self._save_learning_data()
+        # Save every store before the coordinator goes (Issue #1142)
+        await self._final_save("unload")
 
         # (backlog-med-004) Clean up historical load cache on shutdown
         if self._computation_engine is not None:
@@ -529,7 +543,8 @@ class LocalShiftCoordinator:
     async def _save_learning_data(self) -> None:
         """Save all learning system data to storage.
 
-        Called on shutdown and periodically to prevent data loss.
+        The periodic (5-minute) save. Unload and Home Assistant shutdown use
+        _final_save instead, which covers these stores and the slower ones.
         """
         # Issue #1102: the day's cost/energy totals ride the same cadence.
         # First, because it swallows its own errors and so cannot block the
@@ -561,17 +576,76 @@ class LocalShiftCoordinator:
             return
         await self._daily_totals_store.async_save(self.data, self._cost_tracker)
 
+    def _final_save_steps(self) -> list[tuple[str, Callable[[], Awaitable[None]]]]:
+        """Return every store's save, in the order the final save runs them.
+
+        The day's totals come first (Issue #1102): they are the one store with
+        no other copy of the day, so nothing may run ahead of them.
+        """
+        steps: list[tuple[str, Callable[[], Awaitable[None]]]] = [
+            ("daily totals", self._save_daily_totals)
+        ]
+        if self._decision_telemetry is not None:
+            steps.append((
+                "decision telemetry",
+                self._decision_telemetry.async_save_all,
+            ))
+        # Created in async_start, so absent on a failed-startup teardown.
+        tracker = getattr(self, "solar_accuracy_tracker", None)
+        if tracker is not None:
+            steps.append(("solar accuracy", tracker.async_save))
+        engine = self._computation_engine
+        if engine is not None and self._forecast_stores_loaded:
+            # These three are otherwise saved on the 30-minute tick (the first
+            # two) and once an hour (the last).
+            steps.append((
+                "forecast history",
+                lambda: engine.async_save_forecast_history(self.data),
+            ))
+            steps.append((
+                "accuracy metrics",
+                lambda: engine.async_save_accuracy_metrics(self.data),
+            ))
+            steps.append(("weather correlation", engine.async_save_weather_correlation))
+        return steps
+
+    async def _final_save(self, reason: str) -> None:
+        """Save every store before the process or the coordinator goes away.
+
+        Issue #1142. Runs on Home Assistant shutdown and on unload. It never
+        raises and cannot hang: each store is saved on its own, with its own
+        time limit, and a store that fails or runs out of time is logged once
+        and skipped so the stores after it are still saved.
+
+        Saving twice is harmless (every save writes the current state), so
+        nothing stops a second run if shutdown and unload both fire; the lock
+        only keeps the two runs from interleaving.
+        """
+        async with self._final_save_lock:
+            for name, save in self._final_save_steps():
+                try:
+                    await asyncio.wait_for(save(), timeout=FINAL_SAVE_STORE_TIMEOUT)
+                except TimeoutError:
+                    _LOGGER.warning(
+                        "Final save (%s): %s not saved within %.0f s, skipped",
+                        reason,
+                        name,
+                        FINAL_SAVE_STORE_TIMEOUT,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _LOGGER.warning("Final save (%s): %s failed: %s", reason, name, exc)
+
     async def _handle_homeassistant_stop(self, _event: Event) -> None:
-        """Save the day's totals when Home Assistant shuts down (Issue #1102).
+        """Save every store when Home Assistant shuts down (Issues #1102, #1142).
 
         A shutdown or restart does not unload config entries, so async_stop
-        never runs on that path; without this the snapshot would be up to one
+        never runs on that path; without this every store would be up to one
         save interval old on every restart.
         """
         # The listener fires once and removes itself; drop the handle so
         # async_stop does not try to remove it again.
         self._unsub_homeassistant_stop = None
-        await self._save_daily_totals()
+        await self._final_save("shutdown")
 
     @callback
     def _handle_learning_save(self, now: datetime) -> None:

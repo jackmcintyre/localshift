@@ -9,6 +9,7 @@ snapshot at startup only when it belongs to the current local day.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 from datetime import date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -25,7 +26,11 @@ from custom_components.localshift.utils.costs import (
     MAX_DAILY_TOTAL_KWH,
     CostTracker,
 )
-from custom_components.localshift.utils.daily_totals_store import DailyTotalsStore
+from custom_components.localshift.utils.daily_totals_store import (
+    DW_ENTRY_RECORD_FIELDS,
+    DW_ENTRY_SNAPSHOT_KEY,
+    DailyTotalsStore,
+)
 
 SYDNEY = ZoneInfo("Australia/Sydney")
 NOW_PATH = "custom_components.localshift.utils.costs.dt_util.now"
@@ -583,6 +588,8 @@ class TestSave:
         mock_store.async_save.assert_awaited_once_with({
             "date": "2026-10-13",
             "totals": _totals(),
+            # Issue #1142: no demand-window entry recorded yet at 07:29.
+            DW_ENTRY_SNAPSHOT_KEY: None,
         })
 
     async def test_snapshot_is_dated_by_the_day_the_totals_belong_to(
@@ -691,3 +698,211 @@ class TestPersistedFieldsMatchTheDailyReset:
         # The exclusion list must not go stale either.
         assert self._RESET_BUT_NOT_PERSISTED <= cleared
         assert not self._RESET_BUT_NOT_PERSISTED & set(DAILY_ACCUMULATOR_FIELDS)
+
+
+# ─── Demand-window entry record rides the same dated snapshot (Issue #1142) ──
+
+
+def _entry_record(**overrides: object) -> dict[str, object]:
+    """The 27 Jul case: entered at 64% against a 95% target."""
+    record: dict[str, object] = {
+        "dw_entry_actual_date": "2026-10-13",
+        "dw_entry_actual_at": "2026-10-13T15:00:20+11:00",
+        "dw_entry_actual_soc_pct": 64.0,
+        "dw_entry_actual_target_pct": 95.0,
+        "dw_entry_actual_shortfall_pct": 31.0,
+    }
+    record.update(overrides)
+    return record
+
+
+def _set_entry_record(data: CoordinatorData, at: datetime) -> None:
+    data.dw_entry_actual_soc_pct = 64.0
+    data.dw_entry_actual_at = at
+    data.dw_entry_actual_target_pct = 95.0
+    data.dw_entry_actual_shortfall_pct = 31.0
+    data.dw_entry_actual_date = at.date()
+
+
+def _assert_entry_blank(data: CoordinatorData) -> None:
+    for key in DW_ENTRY_RECORD_FIELDS:
+        assert getattr(data, key) is None, key
+
+
+class TestDwEntryRecord:
+    async def test_round_trips_within_the_day(self, totals_store, mock_store, data):
+        """A restart at 16:40 keeps the entry recorded at 15:00."""
+        captured_at = _at(2026, 10, 13, 15, 0)
+        _set_entry_record(data, captured_at)
+        await totals_store.async_save(data, _tracker(_at(2026, 10, 13, 16, 39)))
+        mock_store.async_load.return_value = mock_store.async_save.await_args.args[0]
+
+        fresh = CoordinatorData()
+        later = _at(2026, 10, 13, 16, 41)
+        with patch(NOW_PATH, return_value=later):
+            assert await totals_store.async_restore(fresh, _tracker(later)) is True
+
+        assert fresh.dw_entry_actual_soc_pct == 64.0
+        assert fresh.dw_entry_actual_target_pct == 95.0
+        assert fresh.dw_entry_actual_shortfall_pct == 31.0
+        assert fresh.dw_entry_actual_at == captured_at
+        assert fresh.dw_entry_actual_at.utcoffset() == captured_at.utcoffset()
+        assert fresh.dw_entry_actual_date == date(2026, 10, 13)
+
+    async def test_saved_snapshot_is_json_and_keeps_the_totals_shape(
+        self, totals_store, mock_store, data
+    ):
+        """The record is a new top-level key; "date" and "totals" are as
+        before, which is what lets a version without this code still read it."""
+        _set_entry_record(data, _at(2026, 10, 13, 15, 0))
+
+        await totals_store.async_save(data, _tracker(_at(2026, 10, 13, 16, 0)))
+
+        saved = mock_store.async_save.await_args.args[0]
+        assert set(saved) == {"date", "totals", DW_ENTRY_SNAPSHOT_KEY}
+        assert set(saved["totals"]) == set(DAILY_ACCUMULATOR_FIELDS)
+        assert saved[DW_ENTRY_SNAPSHOT_KEY] == {
+            "dw_entry_actual_date": "2026-10-13",
+            "dw_entry_actual_at": "2026-10-13T15:00:00+11:00",
+            "dw_entry_actual_soc_pct": 64.0,
+            "dw_entry_actual_target_pct": 95.0,
+            "dw_entry_actual_shortfall_pct": 31.0,
+        }
+        # Home Assistant's Store writes JSON.
+        assert json.loads(json.dumps(saved)) == saved
+
+    async def test_blank_record_stays_blank(self, totals_store, mock_store, data):
+        """No entry was recorded before the restart, so none is invented."""
+        await totals_store.async_save(data, _tracker(_at(2026, 10, 13, 16, 39)))
+        saved = mock_store.async_save.await_args.args[0]
+        assert saved[DW_ENTRY_SNAPSHOT_KEY] is None
+        mock_store.async_load.return_value = saved
+
+        fresh = CoordinatorData()
+        later = _at(2026, 10, 13, 16, 41)
+        with patch(NOW_PATH, return_value=later):
+            assert await totals_store.async_restore(fresh, _tracker(later)) is True
+
+        _assert_entry_blank(fresh)
+
+    async def test_discarded_with_a_previous_day_snapshot(
+        self, totals_store, mock_store, data
+    ):
+        now = _at(2026, 10, 14, 0, 2)
+        mock_store.async_load.return_value = {
+            "date": "2026-10-13",
+            "totals": _totals(),
+            DW_ENTRY_SNAPSHOT_KEY: _entry_record(),
+        }
+
+        with patch(NOW_PATH, return_value=now):
+            assert await totals_store.async_restore(data, _tracker(now)) is False
+
+        _assert_entry_blank(data)
+        _assert_all_zero(data)
+
+    async def test_previous_day_record_in_a_same_day_snapshot_is_discarded(
+        self, totals_store, mock_store, data
+    ):
+        """The record carries its own date, so yesterday's entry cannot ride in
+        on a snapshot stamped today (a save between midnight and the first
+        evaluation, which is what clears the record)."""
+        now = _at(2026, 10, 14, 0, 2)
+        mock_store.async_load.return_value = {
+            "date": "2026-10-14",
+            "totals": _totals(),
+            DW_ENTRY_SNAPSHOT_KEY: _entry_record(),
+        }
+
+        with patch(NOW_PATH, return_value=now):
+            assert await totals_store.async_restore(data, _tracker(now)) is True
+
+        _assert_entry_blank(data)
+        assert data.grid_import_cost == pytest.approx(1.14)
+
+    async def test_snapshot_without_the_record_still_restores_totals(
+        self, totals_store, mock_store, data, caplog
+    ):
+        """Upgrade: a snapshot written before this change has no record key."""
+        now = _at(2026, 10, 13, 16, 41)
+        mock_store.async_load.return_value = {"date": "2026-10-13", "totals": _totals()}
+
+        with patch(NOW_PATH, return_value=now), caplog.at_level(logging.WARNING):
+            assert await totals_store.async_restore(data, _tracker(now)) is True
+
+        for key, value in _totals().items():
+            assert getattr(data, key) == pytest.approx(value), key
+        _assert_entry_blank(data)
+        assert not caplog.records
+
+    @pytest.mark.parametrize(
+        "record",
+        [
+            "not a dict",
+            [],
+            {},
+            _entry_record(dw_entry_actual_date=None),
+            _entry_record(dw_entry_actual_date="garbage"),
+            _entry_record(dw_entry_actual_at=None),
+            _entry_record(dw_entry_actual_at="garbage"),
+            # No timezone: the sensor publishes this value as-is.
+            _entry_record(dw_entry_actual_at="2026-10-13T15:00:20"),
+            _entry_record(dw_entry_actual_soc_pct=None),
+            _entry_record(dw_entry_actual_soc_pct="64"),
+            _entry_record(dw_entry_actual_soc_pct=True),
+            _entry_record(dw_entry_actual_soc_pct=float("nan")),
+            _entry_record(dw_entry_actual_soc_pct=-1.0),
+            _entry_record(dw_entry_actual_soc_pct=640.0),
+            _entry_record(dw_entry_actual_target_pct=float("inf")),
+            _entry_record(dw_entry_actual_shortfall_pct=-0.5),
+        ],
+    )
+    async def test_malformed_record_is_dropped_whole_and_totals_survive(
+        self, totals_store, mock_store, data, caplog, record
+    ):
+        now = _at(2026, 10, 13, 16, 41)
+        mock_store.async_load.return_value = {
+            "date": "2026-10-13",
+            "totals": _totals(),
+            DW_ENTRY_SNAPSHOT_KEY: record,
+        }
+
+        with patch(NOW_PATH, return_value=now), caplog.at_level(logging.WARNING):
+            assert await totals_store.async_restore(data, _tracker(now)) is True
+
+        _assert_entry_blank(data)
+        assert data.grid_import_cost == pytest.approx(1.14)
+        assert "demand-window entry record" in caplog.text
+
+    async def test_restoring_the_record_never_writes_the_target_latch(
+        self, totals_store, mock_store, data
+    ):
+        """target_reached_today and its reset date are control state."""
+        now = _at(2026, 10, 13, 16, 41)
+        mock_store.async_load.return_value = {
+            "date": "2026-10-13",
+            "totals": _totals(),
+            DW_ENTRY_SNAPSHOT_KEY: _entry_record(),
+        }
+        before = {
+            field.name: getattr(data, field.name)
+            for field in dataclasses.fields(CoordinatorData)
+        }
+
+        with patch(NOW_PATH, return_value=now):
+            assert await totals_store.async_restore(data, _tracker(now)) is True
+
+        changed = {
+            name for name, value in before.items() if getattr(data, name) != value
+        }
+        assert changed == set(DAILY_ACCUMULATOR_FIELDS) | set(DW_ENTRY_RECORD_FIELDS)
+
+    def test_every_entry_record_field_is_persisted(self):
+        """A sixth dw_entry_actual_* field cannot silently miss the snapshot."""
+        on_data = {
+            field.name
+            for field in dataclasses.fields(CoordinatorData)
+            if field.name.startswith("dw_entry_actual_")
+        }
+        assert on_data == set(DW_ENTRY_RECORD_FIELDS)
+        assert not set(DW_ENTRY_RECORD_FIELDS) & set(DAILY_ACCUMULATOR_FIELDS)
