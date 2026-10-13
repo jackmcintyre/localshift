@@ -7,14 +7,17 @@ plans), plus the Home Assistant log, and checks the invariants a deploy must
 not break. Prints a pass/fail table and exits non-zero if any invariant fails.
 
 The Home Assistant log is truncated at every restart, so "since the restart"
-is the whole file and the restart time is its first timestamp.
+is the whole file and the restart time is its first timestamp. Without --log
+the log is fetched over the API: the network share keeps serving cached pages
+of the previous log for minutes after a restart, so a file read there can
+show the old restart time and a planner that looks stopped.
 
 Usage
 -----
   scripts/deploy_check.py --before B.json --after A.json \\
-      --log /Volumes/appdata/Home-Assistant-Container/home-assistant.log \\
       --component-dir /Volumes/appdata/Home-Assistant-Container/custom_components/localshift
 
+  --log PATH                   read the log from a file instead of the API
   --allow-removed-attr KEY     an attribute the change removed on purpose (repeatable)
   --allow-removed-entity ID    an entity the change removed on purpose (repeatable)
   --allow-dw-entry-move        the change is meant to move the projected entry
@@ -407,13 +410,29 @@ def render(checks: list[Check]) -> str:
     return "\n".join(lines)
 
 
+def fetch_live_log() -> list[str]:
+    """Read the current log over the API, with ha_entity_dump's credentials."""
+    import types
+    import urllib.request
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from ha_entity_dump import resolve_credentials
+
+    url, token = resolve_credentials(types.SimpleNamespace(url=None, token=None))
+    req = urllib.request.Request(
+        f"{url}/api/error_log", headers={"Authorization": f"Bearer {token}"}
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.read().decode(errors="replace").splitlines()
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--before", required=True, type=Path)
     ap.add_argument("--after", required=True, type=Path)
-    ap.add_argument("--log", required=True, type=Path)
+    ap.add_argument("--log", type=Path)
     ap.add_argument("--component-dir", type=Path)
     ap.add_argument("--allow-removed-attr", action="append", default=[])
     ap.add_argument("--allow-removed-entity", action="append", default=[])
@@ -424,7 +443,9 @@ def main(argv=None) -> int:
     checks = run_checks(
         load_dump(args.before),
         load_dump(args.after),
-        args.log.read_text(errors="replace").splitlines(),
+        args.log.read_text(errors="replace").splitlines()
+        if args.log
+        else fetch_live_log(),
         datetime.now(),
         component_dir=args.component_dir,
         allow_removed_attrs=frozenset(args.allow_removed_attr),
