@@ -314,9 +314,7 @@ class TestOptimizerSafetyGate:
         """Missing optimizer result should block admission."""
         gate = OptimizerSafetyGate({})
 
-        result = gate.check_admission(
-            data=object(), optimizer_result=None, alignment=None
-        )
+        result = gate.check_admission(data=object(), optimizer_result=None)
 
         assert result.allowed is False
         assert result.block_reason == "optimizer_result_none"
@@ -326,25 +324,10 @@ class TestOptimizerSafetyGate:
         gate = OptimizerSafetyGate({})
         optimizer_result = OptimizerResult(success=False, error_message="boom")
 
-        result = gate.check_admission(
-            data=object(), optimizer_result=optimizer_result, alignment=None
-        )
+        result = gate.check_admission(data=object(), optimizer_result=optimizer_result)
 
         assert result.allowed is False
         assert result.block_reason == "optimizer_solve_failed"
-
-    def test_gate_blocks_on_alignment_failure(self):
-        """Alignment issues should block admission."""
-        gate = OptimizerSafetyGate({})
-        optimizer_result = OptimizerResult(success=True, decisions=[object()])
-        alignment = {"valid": False, "issues": ["bad"]}
-
-        result = gate.check_admission(
-            data=object(), optimizer_result=optimizer_result, alignment=alignment
-        )
-
-        assert result.allowed is False
-        assert result.block_reason == "slot_alignment_invalid"
 
     def test_gate_blocks_on_stale_forecast(self):
         """Stale forecast should block admission."""
@@ -363,7 +346,7 @@ class TestOptimizerSafetyGate:
             mock_datetime.now.return_value = datetime(2026, 1, 1, 10, 0, 0, tzinfo=UTC)
             mock_datetime.UTC = UTC
             result = gate.check_admission(
-                data=MockData(), optimizer_result=optimizer_result, alignment=None
+                data=MockData(), optimizer_result=optimizer_result
             )
 
         assert result.allowed is False
@@ -374,9 +357,7 @@ class TestOptimizerSafetyGate:
         gate = OptimizerSafetyGate({})
         optimizer_result = OptimizerResult(success=True, decisions=[])
 
-        result = gate.check_admission(
-            data=object(), optimizer_result=optimizer_result, alignment=None
-        )
+        result = gate.check_admission(data=object(), optimizer_result=optimizer_result)
 
         assert result.allowed is False
         assert result.block_reason == "no_decisions_available"
@@ -398,7 +379,7 @@ class TestOptimizerSafetyGate:
             mock_datetime.now.return_value = datetime(2026, 1, 1, 10, 0, 0, tzinfo=UTC)
             mock_datetime.UTC = UTC
             result = gate.check_admission(
-                data=MockData(), optimizer_result=optimizer_result, alignment=None
+                data=MockData(), optimizer_result=optimizer_result
             )
 
         assert result.allowed is True

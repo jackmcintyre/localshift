@@ -624,12 +624,6 @@ class OptimizerFacade:
             config_options: Configuration options dictionary.
 
         """
-        alignment = {
-            "valid": True,
-            "issues": [],
-            "warnings": [],
-        }
-
         # Surface the current-slot lookup that drives the apply plan. found=False
         # means the silent idx=0 fallback is in effect — exactly what these
         # debug fields exist to expose (Mode Source / Forecast Slot Found).
@@ -654,7 +648,7 @@ class OptimizerFacade:
         decision_allowed = data.mode_decision_allowed
 
         safety_gate = OptimizerSafetyGate(config_options)
-        gate_result = safety_gate.check_admission(data, result, alignment)
+        gate_result = safety_gate.check_admission(data, result)
 
         if not gate_result.allowed:
             _LOGGER.info(
