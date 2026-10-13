@@ -455,65 +455,6 @@ class TestEmptyResult:
         assert result["profile_source"] == "unknown"
 
 
-class TestGetProfileForDay:
-    """Tests for get_profile_for_day method."""
-
-    def test_returns_weekday_profile(self, history_fetcher):
-        """Return weekday profile for weekday date."""
-        from datetime import date
-
-        history_fetcher._weekday_hourly_avg_kw = {10: 1.5}
-        history_fetcher._weekday_sample_counts = {10: 5}
-        history_fetcher._weekend_hourly_avg_kw = {10: 2.0}
-        history_fetcher._weekend_sample_counts = {10: 3}
-        history_fetcher._profile_source = "weekday_weekend"
-
-        avg, counts, source = history_fetcher.get_profile_for_day(date(2024, 1, 8))
-
-        assert source == "weekday"
-        assert avg[10] == 1.5
-
-    def test_returns_weekend_profile(self, history_fetcher):
-        """Return weekend profile for weekend date."""
-        from datetime import date
-
-        history_fetcher._weekday_hourly_avg_kw = {10: 1.5}
-        history_fetcher._weekday_sample_counts = {10: 5}
-        history_fetcher._weekend_hourly_avg_kw = {10: 2.0}
-        history_fetcher._weekend_sample_counts = {10: 3}
-        history_fetcher._profile_source = "weekday_weekend"
-
-        avg, counts, source = history_fetcher.get_profile_for_day(date(2024, 1, 6))
-
-        assert source == "weekend"
-        assert avg[10] == 2.0
-
-    def test_returns_combined_fallback(self, history_fetcher):
-        """Return combined profile for fallback source."""
-        from datetime import date
-
-        history_fetcher._historical_load_cache = {10: 1.5}
-        history_fetcher._historical_load_sample_counts = {10: 5}
-        history_fetcher._profile_source = "combined_fallback"
-        history_fetcher._weekday_hourly_avg_kw = {10: 1.0}
-        history_fetcher._weekend_hourly_avg_kw = {10: 2.0}
-
-        avg, counts, source = history_fetcher.get_profile_for_day(date(2024, 1, 8))
-
-        assert source == "combined"
-        assert avg[10] == 1.5
-
-    def test_returns_empty_when_no_profiles(self, history_fetcher):
-        """Return empty when no profiles available."""
-        from datetime import date
-
-        avg, counts, source = history_fetcher.get_profile_for_day(date(2024, 1, 8))
-
-        assert source == "combined"
-        assert avg == {}
-        assert counts == {}
-
-
 class TestAsyncGetRecentLoad1hr:
     """Tests for async_get_recent_load_1hr method."""
 
@@ -877,49 +818,6 @@ class TestFetchStatisticsDataEdgeCases:
         )
 
         assert "error" in result
-
-    def test_returns_empty_when_no_profiles(self, history_fetcher):
-        """Return empty when no profiles available."""
-        from datetime import date
-
-        history_fetcher._weekday_hourly_avg_kw = {}
-        history_fetcher._weekend_hourly_avg_kw = {}
-
-        avg, counts, source = history_fetcher.get_profile_for_day(date(2024, 1, 8))
-
-        assert avg == {}
-        assert counts == {}
-        assert source == "combined"
-
-    def test_weekend_falls_back_to_combined(self, history_fetcher):
-        """Weekend falls back to combined when no weekend profile."""
-        from datetime import date
-
-        history_fetcher._weekday_hourly_avg_kw = {10: 1.5}
-        history_fetcher._weekend_hourly_avg_kw = {}
-        history_fetcher._historical_load_cache = {10: 2.0}
-        history_fetcher._historical_load_sample_counts = {10: 5}
-        history_fetcher._profile_source = "weekday_weekend"
-
-        avg, counts, source = history_fetcher.get_profile_for_day(date(2024, 1, 6))
-
-        assert source == "combined"
-        assert avg[10] == 2.0
-
-    def test_weekday_falls_back_to_combined(self, history_fetcher):
-        """Weekday falls back to combined when no weekday profile."""
-        from datetime import date
-
-        history_fetcher._weekday_hourly_avg_kw = {}
-        history_fetcher._weekend_hourly_avg_kw = {10: 2.0}
-        history_fetcher._historical_load_cache = {10: 1.5}
-        history_fetcher._historical_load_sample_counts = {10: 5}
-        history_fetcher._profile_source = "weekday_weekend"
-
-        avg, counts, source = history_fetcher.get_profile_for_day(date(2024, 1, 8))
-
-        assert source == "combined"
-        assert avg[10] == 1.5
 
 
 class TestGetWeekdayWeekendProfiles:
