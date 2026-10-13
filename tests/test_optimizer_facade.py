@@ -78,6 +78,11 @@ def test_facade_wires_solar_can_reach_target_in_dw_correctly():
     mock_result.planner_version = "test"
     mock_result.total_slots = 0
     mock_result.states_explored = 0
+    # Real numbers, not auto-created MagicMock attributes: the pre-charge
+    # decision line formats these, and a MagicMock there raised inside
+    # ``_log_precharge_decision``, which swallows it at DEBUG.
+    mock_result.peak_soc_pct = 50.0
+    mock_result.dw_entry_soc_pct = 50.0
 
     mock_metadata = MagicMock()
     mock_metadata.horizon_hours = 24
@@ -472,6 +477,7 @@ def test_run_inline_skips_invalid_soc_before_planner_call():
     planner.plan.assert_not_called()
 
 
+@pytest.mark.allow_swallowed_failure("inline_optimizer")
 def test_run_inline_logs_and_swallows_unexpected_exception(caplog):
     facade = OptimizerFacade(slot_builder_cls=_ExplodingSlotBuilder)
 
@@ -847,6 +853,7 @@ def test_run_shadow_comparison_threads_solcast_analysis_and_logs_mismatch():
     assert len(data.decision_log) == 1
 
 
+@pytest.mark.allow_swallowed_failure("shadow_optimizer")
 def test_run_shadow_comparison_handles_empty_slots_invalid_soc_and_exceptions(caplog):
     data = CoordinatorData()
     data.general_price_shadow = 0.15

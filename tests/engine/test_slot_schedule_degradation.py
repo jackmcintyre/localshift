@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -211,25 +211,36 @@ def _minimal_mock_result() -> MagicMock:
     return result
 
 
+def _facade_with_stub_planner(slot0_price_source: str) -> OptimizerFacade:
+    """A facade whose planner returns ``_minimal_mock_result()``.
+
+    The planner is injected rather than patched in. These tests used to patch
+    ``optimizer_facade.DPPlanner`` AFTER constructing the facade, which is too
+    late: the facade had already built a real planner in ``__init__``, the real
+    planner then failed on the stub's ``MagicMock`` slot, and ``DPPlanner.plan``
+    swallowed that into ``success=False``. The tests passed only because the
+    sample is recorded before the solve.
+    """
+    planner = MagicMock()
+    planner.plan.return_value = _minimal_mock_result()
+    return OptimizerFacade(
+        planner=planner, slot_builder_cls=_make_stub_builder_cls(slot0_price_source)
+    )
+
+
 class TestRunInlineRecordsSyntheticSample:
     """OptimizerFacade.run_inline feeds data.synthetic_slot_health exactly once."""
 
     def test_records_one_synthetic_sample(self):
         data = CoordinatorData()
         data.soc = 50.0
-        facade = OptimizerFacade(
-            slot_builder_cls=_make_stub_builder_cls("synthetic")
-        )
+        facade = _facade_with_stub_planner("synthetic")
 
-        with patch(
-            "custom_components.localshift.engine.optimizer_facade.DPPlanner"
-        ) as MockPlanner:
-            MockPlanner.return_value.plan.return_value = _minimal_mock_result()
-            facade.run_inline(
-                data=data,
-                now_dt=datetime(2026, 2, 16, 10, 0, tzinfo=UTC),
-                config_options={},
-            )
+        facade.run_inline(
+            data=data,
+            now_dt=datetime(2026, 2, 16, 10, 0, tzinfo=UTC),
+            config_options={},
+        )
 
         assert data.synthetic_slot_health.sample_count == 1
         assert data.synthetic_slot_health.rate == 1.0
@@ -237,19 +248,13 @@ class TestRunInlineRecordsSyntheticSample:
     def test_records_one_non_synthetic_sample(self):
         data = CoordinatorData()
         data.soc = 50.0
-        facade = OptimizerFacade(
-            slot_builder_cls=_make_stub_builder_cls("forecast_current")
-        )
+        facade = _facade_with_stub_planner("forecast_current")
 
-        with patch(
-            "custom_components.localshift.engine.optimizer_facade.DPPlanner"
-        ) as MockPlanner:
-            MockPlanner.return_value.plan.return_value = _minimal_mock_result()
-            facade.run_inline(
-                data=data,
-                now_dt=datetime(2026, 2, 16, 10, 0, tzinfo=UTC),
-                config_options={},
-            )
+        facade.run_inline(
+            data=data,
+            now_dt=datetime(2026, 2, 16, 10, 0, tzinfo=UTC),
+            config_options={},
+        )
 
         assert data.synthetic_slot_health.sample_count == 1
         assert data.synthetic_slot_health.rate == 0.0
@@ -257,20 +262,14 @@ class TestRunInlineRecordsSyntheticSample:
     def test_two_calls_record_exactly_two_samples(self):
         data = CoordinatorData()
         data.soc = 50.0
-        facade = OptimizerFacade(
-            slot_builder_cls=_make_stub_builder_cls("synthetic")
-        )
+        facade = _facade_with_stub_planner("synthetic")
 
-        with patch(
-            "custom_components.localshift.engine.optimizer_facade.DPPlanner"
-        ) as MockPlanner:
-            MockPlanner.return_value.plan.return_value = _minimal_mock_result()
-            for _ in range(2):
-                facade.run_inline(
-                    data=data,
-                    now_dt=datetime(2026, 2, 16, 10, 0, tzinfo=UTC),
-                    config_options={},
-                )
+        for _ in range(2):
+            facade.run_inline(
+                data=data,
+                now_dt=datetime(2026, 2, 16, 10, 0, tzinfo=UTC),
+                config_options={},
+            )
 
         assert data.synthetic_slot_health.sample_count == 2
 
@@ -339,19 +338,13 @@ class TestRunInlineRecordsSyntheticSample:
         data = CoordinatorData()
         data.soc = 50.0
         data.general_price_shadow = 0.30  # enables the shadow path
-        facade = OptimizerFacade(
-            slot_builder_cls=_make_stub_builder_cls("forecast_current")
-        )
+        facade = _facade_with_stub_planner("forecast_current")
 
-        with patch(
-            "custom_components.localshift.engine.optimizer_facade.DPPlanner"
-        ) as MockPlanner:
-            MockPlanner.return_value.plan.return_value = _minimal_mock_result()
-            facade.run_inline(
-                data=data,
-                now_dt=datetime(2026, 2, 16, 10, 0, tzinfo=UTC),
-                config_options={"comparison_mode": "enabled"},
-            )
+        facade.run_inline(
+            data=data,
+            now_dt=datetime(2026, 2, 16, 10, 0, tzinfo=UTC),
+            config_options={"comparison_mode": "enabled"},
+        )
 
         # One sample from the primary build only -- the shadow build (also
         # using the same stub class here) must not add a second.
