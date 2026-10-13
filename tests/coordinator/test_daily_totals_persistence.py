@@ -12,7 +12,7 @@ the demand-window entry record to the snapshot.
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -293,6 +293,25 @@ class TestFinalSave:
         warnings = _final_save_warnings(caplog)
         assert len(warnings) == 1
         assert hanging in warnings[0]
+        assert "not saved within" in warnings[0]
+
+    async def test_a_timeout_raised_inside_a_store_is_reported_as_its_failure(
+        self, coordinator, caplog
+    ):
+        """A TimeoutError from the store's own IO is not the 10 s limit."""
+        saves = _wire_all(coordinator)
+        saves["solar accuracy"].side_effect = TimeoutError("nfs write timed out")
+
+        with caplog.at_level("WARNING"):
+            await coordinator._handle_homeassistant_stop(MagicMock())
+
+        for name, save in saves.items():
+            assert save.await_count == 1, name
+        warnings = _final_save_warnings(caplog)
+        assert len(warnings) == 1
+        assert "solar accuracy failed" in warnings[0]
+        assert "nfs write timed out" in warnings[0]
+        assert "not saved within" not in warnings[0]
 
     async def test_slower_stores_are_skipped_until_they_have_been_loaded(
         self, coordinator
@@ -358,6 +377,18 @@ class TestRealStartPath:
     """Through the real async_start: restore, first evaluation, shutdown."""
 
     _start = TestDailyTotalsRestoreOnStart._start
+
+    @pytest.fixture(autouse=True)
+    def _frozen_clock(self):
+        """Hold the clock mid-window, 100 minutes after the 15:00 start.
+
+        Every module reads the time through ``dt_util.now``, so one patch
+        covers the restore, the first evaluation and the save. Without it a
+        run that straddled midnight would compare two different days.
+        """
+        frozen = datetime(2026, 10, 13, 16, 40, tzinfo=dt_util.DEFAULT_TIME_ZONE)
+        with patch("homeassistant.util.dt.now", return_value=frozen):
+            yield
 
     @staticmethod
     def _snapshot(at) -> dict:

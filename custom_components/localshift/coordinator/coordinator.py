@@ -70,9 +70,16 @@ PERIODIC_INTERVAL = PERIODIC_INTERVAL_FAST
 
 # How often to save learning data to storage (prevents data loss on restart)
 LEARNING_SAVE_INTERVAL = timedelta(minutes=5)
-# Longest the final save waits for any one store (Issue #1142). A store write
-# normally takes milliseconds; this only bounds a stuck disk. Six stores at
-# this limit is 60 s, inside the 100 s Home Assistant allows its stop stage.
+# Longest the final save waits for any one store (Issue #1142). It matters on
+# the unload/reload path only, where each save writes its file before it
+# returns: a store write normally takes milliseconds, so this bounds a stuck
+# disk, and six stores at this limit is 60 s at worst.
+#
+# On Home Assistant shutdown nothing waits here. Core sets its state to
+# "stopping" before it fires EVENT_HOMEASSISTANT_STOP, and in that state
+# Store.async_save only keeps the data and returns; Home Assistant writes the
+# files itself in its final-write stage. So on a restart the final save hands
+# every store its latest data, in no time, and the limit is never reached.
 FINAL_SAVE_STORE_TIMEOUT = 10.0
 
 # Solcast startup retry configuration
@@ -617,23 +624,35 @@ class LocalShiftCoordinator:
         time limit, and a store that fails or runs out of time is logged once
         and skipped so the stores after it are still saved.
 
+        On unload each save writes its file here. On shutdown each save only
+        hands Home Assistant the data to write in its final-write stage (see
+        FINAL_SAVE_STORE_TIMEOUT), so the order and the time limit have no
+        effect there; what matters is that every store is handed its data.
+
         Saving twice is harmless (every save writes the current state), so
         nothing stops a second run if shutdown and unload both fire; the lock
         only keeps the two runs from interleaving.
         """
         async with self._final_save_lock:
             for name, save in self._final_save_steps():
+                limit = asyncio.timeout(FINAL_SAVE_STORE_TIMEOUT)
                 try:
-                    await asyncio.wait_for(save(), timeout=FINAL_SAVE_STORE_TIMEOUT)
-                except TimeoutError:
-                    _LOGGER.warning(
-                        "Final save (%s): %s not saved within %.0f s, skipped",
-                        reason,
-                        name,
-                        FINAL_SAVE_STORE_TIMEOUT,
-                    )
+                    async with limit:
+                        await save()
                 except Exception as exc:  # noqa: BLE001
-                    _LOGGER.warning("Final save (%s): %s failed: %s", reason, name, exc)
+                    # Only the limit above expiring is "not saved in time". A
+                    # TimeoutError the store raised itself is its own failure.
+                    if isinstance(exc, TimeoutError) and limit.expired():
+                        _LOGGER.warning(
+                            "Final save (%s): %s not saved within %.0f s, skipped",
+                            reason,
+                            name,
+                            FINAL_SAVE_STORE_TIMEOUT,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "Final save (%s): %s failed: %r", reason, name, exc
+                        )
 
     async def _handle_homeassistant_stop(self, _event: Event) -> None:
         """Save every store when Home Assistant shuts down (Issues #1102, #1142).

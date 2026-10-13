@@ -11,13 +11,14 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from custom_components.localshift.coordinator import CoordinatorData
+from custom_components.localshift.utils import daily_totals_store
 from custom_components.localshift.utils.costs import (
     DAILY_ACCUMULATOR_FIELDS,
     DAILY_DOLLAR_FIELDS,
@@ -847,6 +848,9 @@ class TestDwEntryRecord:
             _entry_record(dw_entry_actual_at="garbage"),
             # No timezone: the sensor publishes this value as-is.
             _entry_record(dw_entry_actual_at="2026-10-13T15:00:20"),
+            # The timestamp is not on the day the record claims.
+            _entry_record(dw_entry_actual_at="2026-10-12T15:00:20+11:00"),
+            _entry_record(dw_entry_actual_at="2026-10-14T00:00:00+11:00"),
             _entry_record(dw_entry_actual_soc_pct=None),
             _entry_record(dw_entry_actual_soc_pct="64"),
             _entry_record(dw_entry_actual_soc_pct=True),
@@ -897,12 +901,112 @@ class TestDwEntryRecord:
         }
         assert changed == set(DAILY_ACCUMULATOR_FIELDS) | set(DW_ENTRY_RECORD_FIELDS)
 
-    def test_every_entry_record_field_is_persisted(self):
-        """A sixth dw_entry_actual_* field cannot silently miss the snapshot."""
-        on_data = {
-            field.name
+    async def test_record_that_cannot_be_snapshotted_does_not_cost_the_totals(
+        self, totals_store, mock_store, data, caplog
+    ):
+        """The save-side twin of the malformed-record restore test."""
+        for key, value in _totals().items():
+            setattr(data, key, value)
+        _set_entry_record(data, _at(2026, 10, 13, 15, 0))
+
+        with (
+            patch.object(
+                daily_totals_store,
+                "snapshot_dw_entry_record",
+                side_effect=RuntimeError("boom"),
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            await totals_store.async_save(data, _tracker(_at(2026, 10, 13, 16, 0)))
+
+        mock_store.async_save.assert_awaited_once_with({
+            "date": "2026-10-13",
+            "totals": _totals(),
+            DW_ENTRY_SNAPSHOT_KEY: None,
+        })
+        warnings = [r.getMessage() for r in caplog.records]
+        assert len(warnings) == 1
+        assert "demand-window entry record" in warnings[0]
+        assert "boom" in warnings[0]
+
+    # A value away from the default for each annotation a record field may
+    # have. A field of a new type fails the round trip below until it is
+    # given a kind in DW_ENTRY_RECORD_FIELDS and a value here.
+    _ROUND_TRIP_VALUES: dict[str, object] = {
+        "float | None": 12.5,
+        "datetime | None": _at(2026, 10, 13, 15, 0),
+        "date | None": date(2026, 10, 13),
+    }
+
+    async def _round_trip(self, totals_store, mock_store, source, fresh) -> None:
+        await totals_store.async_save(source, _tracker(_at(2026, 10, 13, 16, 39)))
+        mock_store.async_load.return_value = mock_store.async_save.await_args.args[0]
+        later = _at(2026, 10, 13, 16, 41)
+        with patch(NOW_PATH, return_value=later):
+            assert await totals_store.async_restore(fresh, _tracker(later)) is True
+
+    async def test_every_entry_record_field_on_the_data_round_trips(
+        self, totals_store, mock_store, data
+    ):
+        """A sixth dw_entry_actual_* field cannot silently miss the snapshot.
+
+        Not a comparison of two lists: every such field on CoordinatorData is
+        set, saved, restored into a fresh object and compared.
+        """
+        on_data = [
+            field
             for field in dataclasses.fields(CoordinatorData)
             if field.name.startswith("dw_entry_actual_")
-        }
-        assert on_data == set(DW_ENTRY_RECORD_FIELDS)
+        ]
+        assert len(on_data) >= 5
+        for field in on_data:
+            assert getattr(data, field.name) is None, field.name
+            setattr(data, field.name, self._ROUND_TRIP_VALUES[str(field.type)])
+
+        fresh = CoordinatorData()
+        await self._round_trip(totals_store, mock_store, data, fresh)
+
+        for field in on_data:
+            assert getattr(fresh, field.name) == getattr(data, field.name), field.name
+        assert {field.name for field in on_data} == set(DW_ENTRY_RECORD_FIELDS)
         assert not set(DW_ENTRY_RECORD_FIELDS) & set(DAILY_ACCUMULATOR_FIELDS)
+
+    async def test_a_field_added_to_the_record_is_saved_and_restored(
+        self, totals_store, mock_store
+    ):
+        """DW_ENTRY_RECORD_FIELDS is what save and restore work from, so
+        adding a field there is all it takes to persist it."""
+
+        @dataclasses.dataclass
+        class _Extended(CoordinatorData):
+            dw_entry_actual_extra_pct: float | None = None
+
+        source = _Extended()
+        _set_entry_record(source, _at(2026, 10, 13, 15, 0))
+        source.dw_entry_actual_extra_pct = 12.5
+
+        fresh = _Extended()
+        with patch.dict(
+            daily_totals_store.DW_ENTRY_RECORD_FIELDS,
+            {"dw_entry_actual_extra_pct": "percent"},
+        ):
+            await self._round_trip(totals_store, mock_store, source, fresh)
+
+        assert fresh.dw_entry_actual_extra_pct == 12.5
+        assert fresh.dw_entry_actual_soc_pct == 64.0
+
+    async def test_record_timestamp_just_inside_its_day_is_accepted(
+        self, totals_store, mock_store, data
+    ):
+        """The same-day check on the timestamp is not off by one at the edges."""
+        for captured_at in (
+            _at(2026, 10, 13, 0, 0),
+            _at(2026, 10, 13, 23, 59) + timedelta(seconds=59),
+        ):
+            source = CoordinatorData()
+            _set_entry_record(source, captured_at)
+            fresh = CoordinatorData()
+
+            await self._round_trip(totals_store, mock_store, source, fresh)
+
+            assert fresh.dw_entry_actual_at == captured_at

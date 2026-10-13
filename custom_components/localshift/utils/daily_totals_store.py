@@ -33,22 +33,61 @@ _LOGGER = logging.getLogger(__name__)
 # treats a snapshot without the key as "no record".
 DW_ENTRY_SNAPSHOT_KEY = "dw_entry"
 
-# The five CoordinatorData fields that make up the record. Telemetry only:
-# they are written by ComputationEngine._capture_dw_entry_actual and read by
-# the optimizer summary sensor and the plan log line, never by anything that
-# chooses a battery mode.
-DW_ENTRY_RECORD_FIELDS: tuple[str, ...] = (
-    "dw_entry_actual_soc_pct",
-    "dw_entry_actual_at",
-    "dw_entry_actual_target_pct",
-    "dw_entry_actual_shortfall_pct",
-    "dw_entry_actual_date",
-)
-_DW_ENTRY_PERCENT_FIELDS: tuple[str, ...] = (
-    "dw_entry_actual_soc_pct",
-    "dw_entry_actual_target_pct",
-    "dw_entry_actual_shortfall_pct",
-)
+# The CoordinatorData fields that make up the record, each with the kind of
+# value it holds. This mapping is the one list save and restore both work
+# from: a field added here is written, validated and restored with no other
+# change. Telemetry only: the fields are written by
+# ComputationEngine._capture_dw_entry_actual and read by the optimizer summary
+# sensor and the plan log line, never by anything that chooses a battery mode.
+_KIND_PERCENT = "percent"
+_KIND_TIMESTAMP = "timestamp"
+_KIND_DATE = "date"
+DW_ENTRY_RECORD_FIELDS: dict[str, str] = {
+    "dw_entry_actual_soc_pct": _KIND_PERCENT,
+    "dw_entry_actual_at": _KIND_TIMESTAMP,
+    "dw_entry_actual_target_pct": _KIND_PERCENT,
+    "dw_entry_actual_shortfall_pct": _KIND_PERCENT,
+    "dw_entry_actual_date": _KIND_DATE,
+}
+# The field that dates the record: the once-per-day latch the capture checks.
+_DW_ENTRY_DATE_FIELD = "dw_entry_actual_date"
+
+
+def _encode_record_value(kind: str, value: Any) -> Any:
+    """Return ``value`` as JSON for the snapshot."""
+    if kind == _KIND_PERCENT:
+        return float(value)
+    if kind in (_KIND_TIMESTAMP, _KIND_DATE):
+        return value.isoformat()
+    raise ValueError(f"unknown record field kind: {kind!r}")
+
+
+def _decode_record_value(key: str, kind: str, value: Any) -> Any:
+    """Return the snapshot ``value`` as its CoordinatorData type.
+
+    Raises:
+        ValueError: the value is missing or not valid for its kind.
+
+    """
+    if kind == _KIND_PERCENT:
+        # The range test also rejects NaN and both infinities.
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not 0.0 <= value <= 100.0
+        ):
+            raise ValueError(f"invalid {key}: {value!r}")
+        return float(value)
+    if not isinstance(value, str):
+        raise ValueError(f"missing or non-string {key}: {value!r}")
+    if kind == _KIND_DATE:
+        return date.fromisoformat(value)
+    if kind == _KIND_TIMESTAMP:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError(f"{key} has no timezone: {value!r}")
+        return parsed
+    raise ValueError(f"unknown record field kind: {kind!r}")
 
 
 def snapshot_dw_entry_record(data: CoordinatorData) -> dict[str, Any] | None:
@@ -56,21 +95,15 @@ def snapshot_dw_entry_record(data: CoordinatorData) -> dict[str, Any] | None:
 
     None when nothing has been recorded: before the window opens, or on a day
     whose entry was not observed. A blank record is saved as blank so that it
-    restores as blank.
+    restores as blank. The fields are set together, so one that is None means
+    there is no whole record to save.
     """
-    record_date = data.dw_entry_actual_date
-    captured_at = data.dw_entry_actual_at
-    if record_date is None or captured_at is None:
-        return None
-    record: dict[str, Any] = {
-        "dw_entry_actual_date": record_date.isoformat(),
-        "dw_entry_actual_at": captured_at.isoformat(),
-    }
-    for key in _DW_ENTRY_PERCENT_FIELDS:
+    record: dict[str, Any] = {}
+    for key, kind in DW_ENTRY_RECORD_FIELDS.items():
         value = getattr(data, key)
         if value is None:
             return None
-        record[key] = float(value)
+        record[key] = _encode_record_value(kind, value)
     return record
 
 
@@ -95,37 +128,27 @@ def restore_dw_entry_record(data: CoordinatorData, record: Any, today: date) -> 
     if not isinstance(record, dict):
         raise ValueError(f"expected a dict, got {type(record).__name__}")
 
-    saved_date = record.get("dw_entry_actual_date")
-    if not isinstance(saved_date, str):
-        raise ValueError(f"missing or non-string date: {saved_date!r}")
-    record_date = date.fromisoformat(saved_date)
-
-    saved_at = record.get("dw_entry_actual_at")
-    if not isinstance(saved_at, str):
-        raise ValueError(f"missing or non-string timestamp: {saved_at!r}")
-    captured_at = datetime.fromisoformat(saved_at)
-    if captured_at.tzinfo is None:
-        raise ValueError(f"timestamp has no timezone: {saved_at!r}")
-
-    percents: dict[str, float] = {}
-    for key in _DW_ENTRY_PERCENT_FIELDS:
-        value = record.get(key)
-        # The range test also rejects NaN and both infinities.
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not 0.0 <= value <= 100.0
-        ):
-            raise ValueError(f"invalid {key}: {value!r}")
-        percents[key] = float(value)
+    values = {
+        key: _decode_record_value(key, kind, record.get(key))
+        for key, kind in DW_ENTRY_RECORD_FIELDS.items()
+    }
+    record_date = values[_DW_ENTRY_DATE_FIELD]
+    # A timestamp must fall on the day the record is dated. The capture takes
+    # both from one clock reading, so anything else is a corrupt or
+    # hand-edited record. Compared in the timestamp's own offset, which is the
+    # local offset it was captured in.
+    for key, kind in DW_ENTRY_RECORD_FIELDS.items():
+        if kind == _KIND_TIMESTAMP and values[key].date() != record_date:
+            raise ValueError(
+                f"{key} {values[key].isoformat()} is not on the record's date "
+                f"{record_date.isoformat()}"
+            )
 
     if record_date != today:
         return False
 
-    for key, value in percents.items():
+    for key, value in values.items():
         setattr(data, key, value)
-    data.dw_entry_actual_at = captured_at
-    data.dw_entry_actual_date = record_date
     return True
 
 
@@ -186,10 +209,23 @@ class DailyTotalsStore:
     async def async_save(
         self, data: CoordinatorData, cost_tracker: CostTracker
     ) -> None:
-        """Persist the day's totals and entry record. Never raises."""
+        """Persist the day's totals and entry record. Never raises.
+
+        The entry record is built on its own: if that ever fails, the totals
+        are still saved, with the record blank.
+        """
         try:
             snapshot = cost_tracker.snapshot_daily_totals(data)
-            snapshot[DW_ENTRY_SNAPSHOT_KEY] = snapshot_dw_entry_record(data)
+            try:
+                record = snapshot_dw_entry_record(data)
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Could not save the demand-window entry record, saving the "
+                    "daily totals without it: %s",
+                    exc,
+                )
+                record = None
+            snapshot[DW_ENTRY_SNAPSHOT_KEY] = record
             await self._store.async_save(snapshot)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("Failed to save daily totals: %s", exc)
