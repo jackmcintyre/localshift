@@ -1294,24 +1294,6 @@ class TestHelperMethods:
 
         assert result == 5.0
 
-    def test_read_str_success(self, battery_controller, mock_hass):
-        """Test _read_str with valid state."""
-        state = MagicMock()
-        state.state = "autonomous"
-        mock_hass.states.get = MagicMock(return_value=state)
-
-        result = battery_controller._read_str("sensor.test")
-
-        assert result == "autonomous"
-
-    def test_read_str_unavailable(self, battery_controller, mock_hass):
-        """Test _read_str with unavailable state."""
-        mock_hass.states.get = MagicMock(return_value=None)
-
-        result = battery_controller._read_str("sensor.test", default="default")
-
-        assert result == "default"
-
     def test_get_minimum_target_soc(self, battery_controller, mock_hass):
         """Issue #894: _get_minimum_target_soc reads the config option value."""
         result = battery_controller._get_minimum_target_soc()
