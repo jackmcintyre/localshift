@@ -1,0 +1,63 @@
+{
+ "format": 1,
+ "capture": "simulations/scenarios/manual-override-bypass.json",
+ "decision_columns": ["timestamp_iso", "slot_interval_minutes", "action", "reason_code", "predicted_soc_pct", "grid_import_kwh", "grid_export_kwh", "solar_kwh", "consumption_kwh", "buy_price", "sell_price", "export_floor_pct"],
+ "arms": {
+  "captured": {
+   "commanded_mode": "manual",
+   "data": {
+    "boost_charge_active": false,
+    "boost_charge_needed": false,
+    "cheap_charge_stop_price": 0.0,
+    "debug_forecast_slot_found": false,
+    "debug_mode_source": "manual_override",
+    "debug_plan_mode_pending": null,
+    "demand_window_active": false,
+    "effective_cheap_price": 0.0,
+    "forecast_horizon_hours": 18.0,
+    "negative_fit_window_open": false,
+    "optimizer_apply_plan": null,
+    "optimizer_last_apply_status": "none",
+    "optimizer_precharge_backstop_active": false,
+    "planner_export_floor_pct": 0.0,
+    "planner_threshold_used": null,
+    "solar_can_reach_target": false,
+    "solar_can_reach_target_in_dw": false
+   },
+   "optimizer_result_present": false,
+   "result": {},
+   "slot0_action": null,
+   "summary": {},
+   "swallowed_failures": [],
+   "decisions": []
+  },
+  "strict": {
+   "commanded_mode": "manual",
+   "data": {
+    "boost_charge_active": false,
+    "boost_charge_needed": false,
+    "cheap_charge_stop_price": 0.0,
+    "debug_forecast_slot_found": false,
+    "debug_mode_source": "manual_override",
+    "debug_plan_mode_pending": null,
+    "demand_window_active": false,
+    "effective_cheap_price": 0.0,
+    "forecast_horizon_hours": 18.0,
+    "negative_fit_window_open": false,
+    "optimizer_apply_plan": null,
+    "optimizer_last_apply_status": "none",
+    "optimizer_precharge_backstop_active": false,
+    "planner_export_floor_pct": 0.0,
+    "planner_threshold_used": null,
+    "solar_can_reach_target": false,
+    "solar_can_reach_target_in_dw": false
+   },
+   "optimizer_result_present": false,
+   "result": {},
+   "slot0_action": null,
+   "summary": {},
+   "swallowed_failures": [],
+   "decisions": []
+  }
+ }
+}

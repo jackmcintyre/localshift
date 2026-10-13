@@ -63,7 +63,6 @@ method       forecast/solar_accuracy.py  SolarAccuracyTracker._compute_context_a
 method       forecast/solar_accuracy.py  SolarAccuracyTracker._compute_context_bias
 method       forecast/solar_accuracy.py  SolarAccuracyTracker.get_additive_correction
 method       integration/controller.py  BatteryController._read_str
-method       services/evaluation_dispatcher.py  EvaluationDispatcher.cancel_pending_coalesce  # NOT dead: unwired cleanup, being wired in a separate PR; remove from baseline when that lands
 method       services/notification_service.py  NotificationService.generate_decision_reason
 method       state/machine.py  StateMachine._handle_debounce_timing  # orphan with tests: evaluate() uses the newer _clear_stale_debounce_timers path (#968 shape)
 method       utils/validation.py  EntityValidator.reset_broken_status  # possible unwired fix: docstring promises recovery after an options-flow reconfigure; no caller

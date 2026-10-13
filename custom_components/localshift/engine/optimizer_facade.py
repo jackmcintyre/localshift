@@ -29,6 +29,11 @@ from .types import PlannerAction
 
 _LOGGER = logging.getLogger(__name__)
 
+# Format string of the warning ``run_inline`` logs when it swallows an exception.
+# Named because the test suite's swallowed-failure tripwire (tests/swallow_tripwire.py)
+# matches on it: a cycle that lands here has no plan, and nothing else fails.
+INLINE_OPTIMIZER_FAILED_MSG = "Inline DP optimizer failed (non-blocking): %s"
+
 # Projected DW-entry shortfall (%-points) above which the execution backstop takes
 # over from the token-gated commit path (2026-07-27 incident). Deliberately NOT a
 # config entity: this is a failure detector, not a tuning knob — it only fires when
@@ -345,9 +350,7 @@ class OptimizerFacade:
             self._run_shadow_comparison(data, now_dt, config_options, slot_metadata)
 
         except Exception as exc:  # noqa: BLE001
-            _LOGGER.warning(
-                "Inline DP optimizer failed (non-blocking): %s", exc, exc_info=True
-            )
+            _LOGGER.warning(INLINE_OPTIMIZER_FAILED_MSG, exc, exc_info=True)
             self._mark_mode_debug_fallback(data)
 
     @staticmethod

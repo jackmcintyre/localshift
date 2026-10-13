@@ -41,10 +41,28 @@ class EvaluationDispatcher:
         self._solar_event_detector = SolarEventDetector()
         self._coalesce_unsub: CALLBACK_TYPE | None = None
         self._coalesce_count = 0
+        # Issue #1149: set on unload. Every entry point checks it, so a
+        # callback that outlives the unload cannot evaluate.
+        self._stopped = False
+
+    @callback
+    def stop(self) -> None:
+        """Stop dispatching for good (Issue #1149).
+
+        Called on unload. Cancels the pending coalesce timer and turns every
+        entry point into a no-op, so a callback that was already scheduled
+        when the cancel ran cannot evaluate the old state machine next to a
+        new coordinator's.
+        """
+        self._stopped = True
+        self.cancel_pending_coalesce()
 
     @callback
     def on_state_change(self, _event: Event) -> None:
         """Handle a state change from a monitored entity."""
+        if self._stopped:
+            return
+
         if self._state_machine is None:
             return
 
@@ -75,6 +93,9 @@ class EvaluationDispatcher:
         coalesced_changes = self._coalesce_count
         self._coalesce_count = 0
         self._coalesce_unsub = None
+
+        if self._stopped:
+            return
 
         if self._state_machine is None:
             return
@@ -111,6 +132,9 @@ class EvaluationDispatcher:
 
         Returns True if stale price was detected.
         """
+        if self._stopped:
+            return False
+
         if self._trigger_load_deviation_reoptimization(_now):
             return False
 
