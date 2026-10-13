@@ -209,13 +209,18 @@ def test_plans():
 
 
 class TestLoggingIsUnchanged:
-    """The probe level must not leak records a test would not otherwise see."""
+    """Watching the loggers must not change anything a test can observe."""
 
     FACADE = "custom_components.localshift.engine.optimizer_facade"
 
+    def test_levels_are_left_alone(self):
+        logger = logging.getLogger(self.FACADE)
+        assert logger.level == logging.NOTSET
+        assert not logger.isEnabledFor(logging.DEBUG)
+
     def test_debug_records_stay_hidden_by_default(self, caplog):
-        logging.getLogger(self.FACADE).debug("probe-level leak check")
-        assert "probe-level leak check" not in caplog.text
+        logging.getLogger(self.FACADE).debug("leak check")
+        assert "leak check" not in caplog.text
 
     def test_debug_records_appear_when_a_test_asks_for_them(self, caplog):
         with caplog.at_level(logging.DEBUG, logger=self.FACADE):
@@ -225,9 +230,36 @@ class TestLoggingIsUnchanged:
         assert "asked for by logger" in caplog.text
         assert "asked for at the root" in caplog.text
 
-    def test_warnings_still_reach_caplog(self, caplog):
-        logging.getLogger(self.FACADE).warning("ordinary warning")
-        assert "ordinary warning" in caplog.text
+    def test_records_still_name_the_line_that_logged(self, caplog):
+        logger = logging.getLogger(self.FACADE)
+        logger.warning("from a level method")
+        logger.log(logging.WARNING, "from log()")
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            logger.exception("from exception()")
+        by_message = {record.getMessage(): record for record in caplog.records}
+        for message in ("from a level method", "from log()", "from exception()"):
+            record = by_message[message]
+            assert record.filename == "test_swallow_tripwire.py", message
+            assert record.funcName == "test_records_still_name_the_line_that_logged"
+        assert by_message["from exception()"].exc_info is not None
+
+    def test_a_debug_level_path_trips_without_any_record(self, caplog):
+        """The DEBUG paths are caught even though no record is ever created."""
+        hits = swallow_tripwire.begin()
+        try:
+            try:
+                raise RuntimeError("backstop broke")
+            except RuntimeError as exc:
+                logging.getLogger(self.FACADE).debug(
+                    "Pre-charge backstop check failed (non-fatal): %s", exc
+                )
+        finally:
+            swallow_tripwire.end(hits)
+        assert [hit.key for hit in hits] == ["precharge_backstop"]
+        assert "backstop broke [RuntimeError at tests/" in hits[0].detail
+        assert caplog.records == []
 
 
 def _logged_format_strings(module_name: str) -> set[str]:

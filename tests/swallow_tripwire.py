@@ -20,18 +20,19 @@ into a blanket exemption.
 
 How it detects
 --------------
-By the log record the ``except`` block emits: logger name plus the log call's
-own format string (``LogRecord.msg``, before arguments are merged in). Not by
-searching captured output, so a test that merely prints or asserts on a
-similar sentence does not trip it, and a path cannot trip it from another
-module.
+By the log call the ``except`` block makes: which module logger, and the
+call's own format string, before arguments are merged in. Not by searching
+captured output, so a test that merely prints or asserts on a similar sentence
+does not trip it, and a path cannot trip it from another module.
 
-Several of these paths log at DEBUG, which the suite does not normally
-create records for. The tripwire therefore lowers those loggers to a private
-level just under DEBUG and drops, in a logger filter, every record the logger
-would not have produced on its own. Nothing a test can observe through
-``caplog`` changes; the cost is a ``LogRecord`` allocation per suppressed
-call.
+Several of these paths log at DEBUG, which the suite does not create records
+for, and the planner logs at DEBUG and INFO far too often to start creating
+them (doing so doubled the planner tests' run time under coverage). So the
+tripwire does not listen to the logging system at all. It wraps the level
+methods of the three module loggers involved, looks the format string up in a
+dict, and passes the call straight on. Logging itself is untouched: levels,
+records, ``caplog`` and the reported call site are all as they were. The cost
+is one dict lookup per log call on those three loggers.
 
 ``tests/test_swallow_tripwire.py`` holds each format string below to the
 production source, so rewording a log line fails a test instead of silently
@@ -41,9 +42,12 @@ disarming its tripwire.
 from __future__ import annotations
 
 import logging
+import sys
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from custom_components.localshift.engine.optimizer_facade import (
     INLINE_OPTIMIZER_FAILED_MSG,
@@ -54,10 +58,6 @@ MARKER = "allow_swallowed_failure"
 _FACADE = "custom_components.localshift.engine.optimizer_facade"
 _CORE = "custom_components.localshift.engine.core"
 _MACHINE = "custom_components.localshift.state.machine"
-
-# Below DEBUG (10) and not a level anything else uses, so the filter can tell
-# "still at the level the tripwire set" from "a test changed it".
-_PROBE_LEVEL = 9
 
 _REPO_PREFIX = str(Path(__file__).resolve().parent.parent) + "/"
 
@@ -148,15 +148,16 @@ class Hit:
     detail: str
 
 
-def _describe(record: logging.LogRecord) -> str:
+def _describe(msg: str, args: tuple[object, ...]) -> str:
     """The logged message plus where the swallowed exception was raised."""
     try:
-        text = record.getMessage()
-    except Exception:  # noqa: BLE001 - a bad format must not mask the trip
-        text = str(record.msg)
-    exc = record.exc_info[1] if record.exc_info else None
+        text = msg % args if args else msg
+    except (TypeError, ValueError):  # a bad format must not mask the trip
+        text = msg
+    # These calls are made from inside the ``except`` block, so the exception
+    # being handled is the one that was swallowed.
+    exc = sys.exc_info()[1]
     if exc is None:
-        args = record.args if isinstance(record.args, tuple) else ()
         exc = next((a for a in reversed(args) if isinstance(a, BaseException)), None)
     if exc is not None and exc.__traceback__ is not None:
         frame = traceback.extract_tb(exc.__traceback__)[-1]
@@ -172,37 +173,48 @@ def _describe(record: logging.LogRecord) -> str:
 # and leaves the outer test's list alone.
 _stack: list[list[Hit]] = []
 
+_LEVEL_METHODS = ("debug", "info", "warning", "error", "exception", "critical")
 
-class _LoggerFilter(logging.Filter):
-    """Records trips on one logger; hides the records the probe level let in."""
 
-    def __init__(self, logger: logging.Logger, messages: dict[str, str]) -> None:
-        super().__init__()
-        self._logger = logger
-        self._messages = messages
-        self._own_level = logger.level
+def _watch(logger: logging.Logger, messages: dict[str, str]) -> None:
+    """Wrap ``logger``'s level methods so a guarded format string is noticed.
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.msg
-        key = self._messages.get(msg) if isinstance(msg, str) else None
+    Each wrapper passes the call on unchanged, with ``stacklevel`` raised by
+    one so the record still names the production line that logged it.
+    """
+
+    def note(msg: object, args: tuple[object, ...]) -> None:
+        key = messages.get(msg) if msg.__class__ is str else None
         if key is not None and _stack:
-            _stack[-1].append(Hit(key, _describe(record)))
-        if self._logger.level != _PROBE_LEVEL:
-            # A test set its own level on this logger: it gets what it asked for.
-            return True
-        parent = self._logger.parent
-        floor = self._own_level or (
-            parent.getEffectiveLevel() if parent else logging.WARNING
-        )
-        return record.levelno >= floor
+            _stack[-1].append(Hit(key, _describe(msg, args)))  # type: ignore[arg-type]
+
+    def wrap_level(original: Callable[..., None]) -> Callable[..., None]:
+        def wrapper(msg: object, *args: object, **kwargs: Any) -> None:
+            note(msg, args)
+            kwargs["stacklevel"] = kwargs.get("stacklevel", 1) + 1
+            original(msg, *args, **kwargs)
+
+        return wrapper
+
+    for name in _LEVEL_METHODS:
+        setattr(logger, name, wrap_level(getattr(logger, name)))
+
+    original_log = logger.log
+
+    def log_wrapper(level: int, msg: object, *args: object, **kwargs: Any) -> None:
+        note(msg, args)
+        kwargs["stacklevel"] = kwargs.get("stacklevel", 1) + 1
+        original_log(level, msg, *args, **kwargs)
+
+    logger.log = log_wrapper  # type: ignore[method-assign]
 
 
 _installed = False
 
 
 def _install() -> None:
-    """Attach the filters, once per process. Never removed: it is inert when
-    no test is recording, and the probe level changes nothing observable."""
+    """Wrap the loggers, once per process. Never undone: the wrappers are inert
+    when no test is recording."""
     global _installed
     if _installed:
         return
@@ -211,10 +223,7 @@ def _install() -> None:
     for wire in TRIPWIRES:
         by_logger.setdefault(wire.logger, {})[wire.message] = wire.key
     for name, messages in by_logger.items():
-        logger = logging.getLogger(name)
-        logger.addFilter(_LoggerFilter(logger, messages))
-        if logger.level == logging.NOTSET or logger.level > _PROBE_LEVEL:
-            logger.setLevel(_PROBE_LEVEL)
+        _watch(logging.getLogger(name), messages)
 
 
 def begin() -> list[Hit]:
