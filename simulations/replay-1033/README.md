@@ -82,7 +82,7 @@ from that day reaches that far.) Measured gap from the end of the last slot to t
 | 20:30 (10-03), 21:30 | 9 | 1050 min | `gap_too_long` |
 
 22 `applied`, 29 `gap_too_long`, 26 `no_gap`. No instant gave
-`whole_plan_skipped`, `no_tail_slots`, `solve_unsuccessful` or `failed`: the
+`whole_plan_skipped`, `tail_too_close`, `no_tail_slots`, `solve_unsuccessful` or `failed`: the
 captured feed is never truncated, so those paths are exercised by unit tests
 only.
 

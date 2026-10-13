@@ -862,10 +862,21 @@ TAIL_MAIN_UNSUCCESSFUL = "main_unsuccessful"  # the main solve produced no plan
 TAIL_NO_GAP = "no_gap"  # no gap supplied: feed ends inside a window, or unknown
 TAIL_NO_TAIL_SLOTS = "no_tail_slots"  # nothing after the handled window
 TAIL_WHOLE_PLAN_SKIPPED = "whole_plan_skipped"  # tail would include slot 0
+TAIL_TOO_CLOSE = "tail_too_close"  # tail starts inside the minimum lead of slot 0
 TAIL_GAP_TOO_LONG = "gap_too_long"  # the gap alone can refill the battery
 TAIL_AWAY_RESERVE_COVERS = "away_reserve_covers"  # reserve above the requirement
 TAIL_SOLVE_UNSUCCESSFUL = "solve_unsuccessful"  # the tail solve produced no plan
 TAIL_FAILED = "failed"  # the tail solve raised; logged once a day at WARNING
+
+# The tail's first slot must START at least this long after slot 0 starts, or
+# the tail is refused (``TAIL_TOO_CLOSE``). The executor picks the slot to act
+# on by wall clock when it applies the plan, not by the time the slots were
+# built from, so a tail one slot ahead can be the slot it reads if the clock
+# crosses a slot boundary inside the compute cycle. Slot 0 is the live feed's
+# "now" quantum, at most five minutes wide, so this leaves at least 25 minutes
+# of clock between building a plan and the first tail slot. Measured in time,
+# not slots, so it holds for 5-minute and 30-minute slots alike.
+NEXT_WINDOW_TAIL_MIN_LEAD_MIN = 30.0
 
 
 @dataclass

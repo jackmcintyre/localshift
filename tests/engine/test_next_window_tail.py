@@ -15,12 +15,14 @@ solve handled, against the next window. These tests pin:
 4. The cases where nothing changes: no gap supplied, a window already ending the
    horizon, ``allow_dw_entry_under_target``, a next window too far off to matter,
    and the feature switched off.
-5. The tail cannot change an executed command: it never supplies slot 0, and
-   over a varied set of inputs slot 0 and every decision before the tail start
-   are the same with the tail on or off.
+5. The tail cannot change an executed command: it never supplies slot 0, its
+   first slot starts at least ``NEXT_WINDOW_TAIL_MIN_LEAD_MIN`` after slot 0
+   (the executor picks its slot by wall clock), and over a varied set of inputs
+   every decision inside that lead, and every decision before the tail start,
+   is the same with the tail on or off.
 6. Why the tail was or was not applied is always published.
-7. On flat and cheap-overnight prices the tail charges overnight no more than
-   the ordinary evening re-plan of the same slots.
+7. On flat and cheap-overnight prices the tail's overnight charge matches the
+   ordinary evening re-plan of the same slots, to within one SOC bin.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from custom_components.localshift.engine.core import (
 )
 from custom_components.localshift.engine.slots import SlotBuilder
 from custom_components.localshift.engine.types import (
+    NEXT_WINDOW_TAIL_MIN_LEAD_MIN,
     OptimizerConfig,
     OptimizerInputs,
     PlannerAction,
@@ -418,6 +421,30 @@ def _evening_dip(t: datetime) -> float:
     return 0.10 if time(21, 0) <= t.time() < time(22, 0) else 0.19
 
 
+def _deep_cheap_overnight(t: datetime) -> float:
+    """Overnight at 5c, 10c under the 15c day: the review's wider probe."""
+    if _DW_START <= t.time() < _DW_END:
+        return 0.30
+    if t.time() >= _DW_END or t.time() < time(6, 0):
+        return 0.05
+    return 0.15
+
+
+def _cheap_overnight_dear_afternoon(t: datetime) -> float:
+    """Overnight at 8c, with the last two hours before the window at 19c."""
+    if _DW_START <= t.time() < _DW_END:
+        return 0.30
+    if t.time() >= _DW_END or t.time() < time(6, 0):
+        return 0.08
+    return 0.19 if t.time() >= time(13, 0) else 0.12
+
+
+def _one_soc_bin_of_grid_charge_kwh(config: OptimizerConfig) -> float:
+    """Grid energy it takes to raise the battery one step of the solver's grid."""
+    step_pct = (config.max_soc_pct - config.min_soc_pct) / (config.soc_bins - 1)
+    return step_pct / 100.0 * config.battery_capacity_kwh / config.charge_efficiency
+
+
 def _level_overnight(t: datetime) -> float:
     """Overnight exactly at the morning price."""
     return 0.30 if _DW_START <= t.time() < _DW_END else 0.10
@@ -471,15 +498,23 @@ def _true_gap_min(slots: list[SlotContext]) -> float | None:
     return (nxt - end).total_seconds() / 60.0
 
 
-def _mode(result, config) -> str:
-    """The battery mode slot 0 would command."""
+def _mode(result, config, idx: int = 0) -> str:
+    """The battery mode the slot at ``idx`` (slot 0 by default) would command."""
     from custom_components.localshift.engine.optimizer_runner import (
         _derive_runtime_apply_plan,
         _serialize_decision,
     )
 
     serialized = [_serialize_decision(d) for d in result.decisions]
-    return _derive_runtime_apply_plan(serialized, 0, config)["battery_mode"]
+    return _derive_runtime_apply_plan(serialized, idx, config)["battery_mode"]
+
+
+def _lead_min(decisions, idx: int) -> float:
+    """Minutes from the start of slot 0 to the start of the slot at ``idx``."""
+    first = datetime.fromisoformat(decisions[0].timestamp_iso)
+    return (
+        datetime.fromisoformat(decisions[idx].timestamp_iso) - first
+    ).total_seconds() / 60.0
 
 
 class TestTailNeverSuppliesSlotZero:
@@ -529,6 +564,88 @@ class TestTailNeverSuppliesSlotZero:
         on = _plan(slots, gap_min=60.0, soc=10.0)
         assert on.decisions == off.decisions
         assert on.next_window_tail_status == "whole_plan_skipped"
+
+
+class TestTailKeepsItsDistanceFromSlotZero:
+    """The executor picks the slot to act on with a fresh wall-clock read when it
+    applies the plan, not the time the slots were built from. A plan built in
+    the last five-minute slot of the demand window (20:55) on a truncated feed
+    had its tail start at index 1 (21:00): had the clock crossed 21:00 inside
+    the cycle, the executed command would have been a tail decision. So the
+    tail is refused unless its first slot starts at least
+    ``NEXT_WINDOW_TAIL_MIN_LEAD_MIN`` after slot 0 starts."""
+
+    _START = datetime(2026, 9, 7, 20, 55)
+
+    @pytest.mark.parametrize("feed_h", [14.0, 16.0, 17.0, 18.0])
+    @pytest.mark.parametrize("soc", [10.0, 55.0])
+    @pytest.mark.parametrize("solar", [0.0, 6.0])
+    def test_last_window_slot_on_a_truncated_feed_is_the_main_plan(
+        self, feed_h, soc, solar
+    ):
+        """Review probe: evening-dip prices, one five-minute lead slot. With the
+        tail applied from index 1, the index-1 decision differed from the
+        tail-off plan (``hold`` or ``charge_grid_normal`` became
+        ``charge_grid_boost``)."""
+        end = self._START + timedelta(hours=feed_h)
+
+        def slots():
+            return _priced_slots(self._START, end, _evening_dip, solar, lead_5min=1)
+
+        gap = _true_gap_min(slots())
+        assert gap is not None
+        assert slots()[0].is_demand_window_slot
+        assert not slots()[1].is_demand_window_slot
+        config_off = _config(next_window_tail_enabled=False)
+        config_on = _config()
+        off, on = (
+            DPPlanner().plan(
+                OptimizerInputs(
+                    cycle_id="tail-distance",
+                    initial_soc_pct=soc,
+                    slots=slots(),
+                    config=config,
+                    next_demand_window_gap_min=gap,
+                )
+            )
+            for config in (config_off, config_on)
+        )
+        assert off.success and on.success
+        assert on.next_window_tail_status == "tail_too_close"
+        assert on.next_window_tail_start_idx is None
+        assert on.next_window_required_soc_pct is None
+        # Decision for decision the tail-disabled plan.
+        assert len(on.decisions) == len(off.decisions)
+        for mine, theirs in zip(on.decisions, off.decisions, strict=True):
+            assert mine == theirs
+        assert on.projected_net_cost == off.projected_net_cost
+        # The slot the executor would read once the clock crosses 21:00.
+        assert _mode(on, config_on, 1) == _mode(off, config_off, 1)
+
+    def test_tail_exactly_the_minimum_lead_away_is_applied(self):
+        """20:30 on 30-minute slots: the tail starts at 21:00, the minimum lead
+        to the minute. That is allowed; the bound is inclusive."""
+        slots = _slots(datetime(2026, 9, 7, 20, 30), _HORIZON_END)
+        on = _plan(slots, gap_min=0.0, soc=30.0)
+        assert on.next_window_tail_status == "applied"
+        split = on.next_window_tail_start_idx
+        assert split == 1
+        assert _lead_min(on.decisions, split) == NEXT_WINDOW_TAIL_MIN_LEAD_MIN
+
+    def test_the_lead_is_measured_in_time_not_slots(self):
+        """20:35 on five-minute slots: the tail starts five slots on, at index 5,
+        but only 25 minutes after slot 0. Refused."""
+        start = datetime(2026, 9, 7, 20, 35)
+
+        def slots():
+            return _priced_slots(start, _HORIZON_END, lead_5min=5)
+
+        assert [s.slot_interval_minutes for s in slots()[:6]] == [5, 5, 5, 5, 5, 30]
+        off = _plan(slots(), gap_min=0.0, soc=30.0, next_window_tail_enabled=False)
+        on = _plan(slots(), gap_min=0.0, soc=30.0)
+        assert on.next_window_tail_status == "tail_too_close"
+        assert on.next_window_tail_start_idx is None
+        assert on.decisions == off.decisions
 
 
 _PROPERTY_STARTS = [
@@ -588,7 +705,12 @@ class TestTailCannotChangeAnExecutedCommand:
     slots, low/mid/high SOC, flat and peaky prices, low and high solar, a gap
     present and absent, and a truncated feed: with the tail on or off, slot 0 is
     the same action and the same commanded mode, and every decision before the
-    tail start is the same decision."""
+    tail start is the same decision.
+
+    The executor picks its slot by wall clock, so "slot 0" is not enough: every
+    slot that starts inside ``NEXT_WINDOW_TAIL_MIN_LEAD_MIN`` of slot 0 must be
+    the same decision and command the same mode, and an applied tail must start
+    no sooner than that."""
 
     @pytest.mark.parametrize(
         ("start", "lead", "feed_h", "soc", "price", "solar"), _PROPERTY_CASES
@@ -620,10 +742,27 @@ class TestTailCannotChangeAnExecutedCommand:
         assert on.decisions[0].action == off.decisions[0].action
         assert _mode(on, config_on) == _mode(off, config_off)
 
-        # (b) every decision before the tail start.
+        # (b) every slot the clock could reach inside one compute cycle: those
+        # starting within the minimum lead of slot 0. Same decision, same mode.
+        assert len(on.decisions) == len(off.decisions)
+        within_lead = [
+            idx
+            for idx in range(len(on.decisions))
+            if _lead_min(on.decisions, idx) < NEXT_WINDOW_TAIL_MIN_LEAD_MIN
+        ]
+        assert within_lead and within_lead[0] == 0
+        for idx in within_lead:
+            assert on.decisions[idx] == off.decisions[idx], idx
+            assert _mode(on, config_on, idx) == _mode(off, config_off, idx), idx
+
+        # (c) an applied tail starts no sooner than the minimum lead, and every
+        # decision before it is the main solve's.
         tail_start = on.next_window_tail_start_idx
         head = len(on.decisions) if tail_start is None else tail_start
-        assert tail_start is None or tail_start >= 1
+        if tail_start is not None:
+            assert tail_start >= 1
+            assert tail_start > within_lead[-1]
+            assert _lead_min(on.decisions, tail_start) >= NEXT_WINDOW_TAIL_MIN_LEAD_MIN
         assert on.decisions[:head] == off.decisions[:head]
 
         # What the backstops read off the config after the plan returns, and the
@@ -641,11 +780,17 @@ class TestTailCannotChangeAnExecutedCommand:
 
     def test_the_cases_above_exercise_every_branch(self):
         """Guards the property test itself: it proves nothing if the tail never
-        ran, or if the skipped-whole-plan case never came up."""
+        ran, or if the skipped-whole-plan or too-close case never came up."""
         if sum(_PROPERTY_STATUSES.values()) != len(_PROPERTY_CASES):
             pytest.skip("needs the full parametrised set in the same session")
         assert _PROPERTY_STATUSES.get("applied", 0) >= 8, _PROPERTY_STATUSES
-        for status in ("whole_plan_skipped", "gap_too_long", "no_gap", "no_tail_slots"):
+        for status in (
+            "whole_plan_skipped",
+            "tail_too_close",
+            "gap_too_long",
+            "no_gap",
+            "no_tail_slots",
+        ):
             assert _PROPERTY_STATUSES.get(status, 0) >= 1, _PROPERTY_STATUSES
 
 
@@ -741,6 +886,26 @@ class TestStatusTelemetry:
         low = _plan(slots, gap_min=120.0, away_reserve_floor_pct=required - 10.0)
         assert low.next_window_tail_status == "applied"
 
+    def test_away_reserve_is_not_reported_when_the_battery_is_below_it(self):
+        """The reserve stops discharge; it does not put charge in. A battery
+        that reaches the tail start under the reserve is not covered by it, and
+        the status must not say it is."""
+        slots = _slots(_MID_DW_START, _HORIZON_END - timedelta(hours=2))
+        required = _soc_required_before_gap(_config(), 120.0)
+        reserve = required + 5.0
+        on = _plan(slots, gap_min=120.0, soc=10.0, away_reserve_floor_pct=reserve)
+        tail_start = next(i for i, s in enumerate(slots) if not s.is_demand_window_slot)
+        assert on.decisions[tail_start - 1].predicted_soc_pct < reserve
+        assert on.next_window_tail_status != "away_reserve_covers"
+        assert on.next_window_tail_status == "applied"
+        assert on.next_window_tail_start_idx == tail_start
+        # What is published is what the plan does. Whether the tail solve
+        # charges toward a target that sits under the reserve is the away-mode
+        # planner's business and is not pinned here (today it holds, and the
+        # entry SOC below the requirement says so).
+        assert on.next_window_required_soc_pct == pytest.approx(required)
+        assert on.next_window_entry_soc_pct == on.decisions[-1].predicted_soc_pct
+
     def test_summary_carries_status_and_gap(self):
         from custom_components.localshift.engine.optimizer_runner import (
             _build_summary,
@@ -761,19 +926,68 @@ class TestTailFailureLogging:
     replan for three hours."""
 
     @staticmethod
-    def _failing_plan(start: datetime):
+    def _failing_plan(start: datetime, exc: Exception | None = None):
         slots = _slots(start, start + timedelta(hours=24))
         with patch.object(
-            DPPlanner, "_solve_next_window_tail", side_effect=RuntimeError("boom")
+            DPPlanner,
+            "_solve_next_window_tail",
+            side_effect=exc if exc is not None else RuntimeError("boom"),
         ):
             return _plan(slots, gap_min=30.0)
+
+    def test_a_different_failure_the_same_day_is_a_warning_again(self, caplog):
+        """Once a day is per failure, not per day: a second bug must not hide
+        behind the first one's DEBUG repeats."""
+        import logging
+
+        from custom_components.localshift.engine import core
+
+        core._reset_tail_failure_log()
+        day = datetime(2026, 9, 7, 14, 30)
+        with caplog.at_level(logging.DEBUG, logger=core.__name__):
+            self._failing_plan(day)
+            self._failing_plan(day + timedelta(minutes=5))
+            # Same type, different message.
+            self._failing_plan(day + timedelta(minutes=10), RuntimeError("bang"))
+            # Same message, different type.
+            self._failing_plan(day + timedelta(minutes=15), ValueError("bang"))
+            # Each already seen today: back to DEBUG.
+            self._failing_plan(day + timedelta(minutes=20), RuntimeError("boom"))
+            self._failing_plan(day + timedelta(minutes=25), ValueError("bang"))
+        records = [r for r in caplog.records if "Next-window tail failed" in r.message]
+        assert [r.levelno for r in records] == [
+            logging.WARNING,
+            logging.DEBUG,
+            logging.WARNING,
+            logging.WARNING,
+            logging.DEBUG,
+            logging.DEBUG,
+        ]
+        assert all(r.exc_info for r in records)
+
+    def test_a_failure_whose_message_keeps_changing_is_capped(self, caplog):
+        """A message carrying a number that moves every replan would otherwise
+        be a WARNING every five minutes, which is what once-a-day prevents."""
+        import logging
+
+        from custom_components.localshift.engine import core
+
+        core._reset_tail_failure_log()
+        day = datetime(2026, 9, 7, 14, 30)
+        with caplog.at_level(logging.DEBUG, logger=core.__name__):
+            for i in range(core._TAIL_FAILURE_MAX_WARNINGS_PER_DAY + 3):
+                self._failing_plan(day, RuntimeError(f"soc {i}"))
+        records = [r for r in caplog.records if "Next-window tail failed" in r.message]
+        warnings = [r for r in records if r.levelno == logging.WARNING]
+        assert len(warnings) == core._TAIL_FAILURE_MAX_WARNINGS_PER_DAY
+        assert all(r.levelno == logging.DEBUG for r in records[len(warnings) :])
 
     def test_warning_once_a_day_with_traceback_then_debug(self, caplog):
         import logging
 
         from custom_components.localshift.engine import core
 
-        core._TAIL_FAILURE_LOGGED_DAY = None
+        core._reset_tail_failure_log()
         with caplog.at_level(logging.DEBUG, logger=core.__name__):
             self._failing_plan(datetime(2026, 9, 7, 14, 30))
             self._failing_plan(datetime(2026, 9, 7, 14, 35))
@@ -797,7 +1011,8 @@ class TestWinterSawtooth:
     The tail is the same ``_solve`` with the same gates as the ordinary evening
     re-plan, so the assertion is equivalence. The same tail slots are solved the
     ordinary way, from the same SOC, once tomorrow's real entry slot is in view;
-    the tail must not charge more overnight than that does."""
+    the tail's overnight charge must match that to within the solver's
+    resolution."""
 
     @staticmethod
     def _ordinary_evening_replan(slots, split, start_soc, price):
@@ -832,40 +1047,79 @@ class TestWinterSawtooth:
     def test_overnight_charge_matches_the_ordinary_replan(
         self, start, soc, solar, price, overnight_is_cheapest
     ):
-        slots = _priced_slots(start, _HORIZON_END, price, solar)
-        result = _plan(slots, gap_min=0.0, soc=soc)
-        assert result.next_window_tail_status == "applied"
-        split = result.next_window_tail_start_idx
-        tail = result.decisions[split:]
-        ordinary = self._ordinary_evening_replan(
-            _priced_slots(start, _HORIZON_END, price, solar),
-            split,
-            result.decisions[split - 1].predicted_soc_pct,
-            price,
-        )
-        assert ordinary.success
+        tail, ordinary = self._tail_and_ordinary(start, soc, solar, price)
         tail_overnight = _overnight_charge_kwh(tail)
-        ordinary_overnight = _overnight_charge_kwh(ordinary.decisions[:-1])
+        ordinary_overnight = _overnight_charge_kwh(ordinary)
         if not overnight_is_cheapest:
             # Flat, or overnight level with the morning: nothing to gain from
             # charging early, and neither path does. Slot for slot the same plan.
             assert tail_overnight == 0.0
             assert ordinary_overnight == 0.0
-            assert [d.action for d in tail] == [
-                d.action for d in ordinary.decisions[:-1]
-            ]
+            assert [d.action for d in tail] == [d.action for d in ordinary]
             return
         # Overnight 4c under the morning: the ordinary re-plan charges overnight
         # (10.8 to 16.0 kWh here) and so does the tail. Six of these eight cases
         # are the same plan slot for slot. In the other two the paths pick
         # different slots among the equally priced 8c ones, because the real
         # entry slot and the tail's zero-energy stand-in break the tie
-        # differently, and the totals land 0.3 Wh over and 43 Wh under. The
-        # bound is 10 Wh: far above that, far below one slot of charging.
+        # differently, and the totals land 0.3 Wh over and 43 Wh under.
         assert ordinary_overnight > 5.0
-        assert tail_overnight <= ordinary_overnight + 0.01, (
-            f"tail charges {tail_overnight:.3f} kWh overnight, the ordinary "
-            f"re-plan {ordinary_overnight:.3f} kWh"
+        self._assert_within_one_bin(tail_overnight, ordinary_overnight)
+
+    @pytest.mark.parametrize("start", [_PRE_DW_START, _MID_DW_START], ids=["pre", "in"])
+    @pytest.mark.parametrize(
+        ("price", "solar"),
+        [(_deep_cheap_overnight, 6.0), (_cheap_overnight_dear_afternoon, 2.0)],
+        ids=["overnight5c-solar6", "dearafternoon-solar2"],
+    )
+    def test_wider_cheap_overnight_inputs_stay_within_one_bin(
+        self, start, price, solar
+    ):
+        """The review's wider probe (270 cases: three cheap-overnight shapes, two
+        start times, SOC 10 to 100, solar 0/2/6 kWh, load 0.4/0.7/1.2 kW) found
+        the two paths apart by more than a few Wh in five cases, in both
+        directions. These are the extremes of it, full battery and a 0.4 kW
+        load: overnight at 5c with 6 kWh of solar, where the tail charges
+        140.7 Wh more than the ordinary re-plan, and a dear afternoon with 2 kWh,
+        where it charges 83 Wh less. Nothing in the 270 exceeded one bin."""
+        tail, ordinary = self._tail_and_ordinary(
+            start, 100.0, solar, price, load_kw=0.4
+        )
+        ordinary_overnight = _overnight_charge_kwh(ordinary)
+        assert ordinary_overnight > 5.0
+        self._assert_within_one_bin(_overnight_charge_kwh(tail), ordinary_overnight)
+
+    def _tail_and_ordinary(self, start, soc, solar, price, load_kw: float = 0.7):
+        """The applied tail's decisions, and the ordinary re-plan of the same
+        slots from the same SOC (without its entry slot)."""
+        slots = _priced_slots(start, _HORIZON_END, price, solar, load_kw)
+        result = _plan(slots, gap_min=0.0, soc=soc)
+        assert result.next_window_tail_status == "applied"
+        split = result.next_window_tail_start_idx
+        ordinary = self._ordinary_evening_replan(
+            _priced_slots(start, _HORIZON_END, price, solar, load_kw),
+            split,
+            result.decisions[split - 1].predicted_soc_pct,
+            price,
+        )
+        assert ordinary.success
+        return result.decisions[split:], ordinary.decisions[:-1]
+
+    @staticmethod
+    def _assert_within_one_bin(tail_overnight: float, ordinary_overnight: float):
+        """The two paths are the same solve on the same slots, apart from the
+        last one: a real entry slot with load against a zero-energy stand-in.
+        The solver works on a grid of SOC bins (0.96% here, 130 Wh stored, 141 Wh
+        of grid charge), so that difference can move the end state by one bin
+        and no finer bound means anything: one bin of grid charge is the
+        solver's resolution. Either direction, because one bin under is as much
+        a tie-break as one bin over. A sawtooth is a charge-and-drain of whole
+        slots (1.65 kWh a slot at the normal rate), more than ten bins."""
+        tolerance = _one_soc_bin_of_grid_charge_kwh(_config())
+        assert 0.10 < tolerance < 0.20
+        assert abs(tail_overnight - ordinary_overnight) <= tolerance + 1e-9, (
+            f"tail charges {tail_overnight:.4f} kWh overnight, the ordinary "
+            f"re-plan {ordinary_overnight:.4f} kWh; one bin is {tolerance:.4f} kWh"
         )
 
 

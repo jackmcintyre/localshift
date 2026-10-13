@@ -206,11 +206,17 @@ entry slot is in the feed, with the same gates.
 | Target at the horizon end | The demand-window target less what normal-rate grid charging can add in the gap, CV taper included (`_soc_required_before_gap`). Equal to the target when the feed ends as the window opens; at the SOC floor after about five hours, where the tail is left alone. Solar in the gap is not credited |
 | What stays fixed | Every decision up to the end of the window the main solve handled, and every summary field about that window. The tail solve works on a copy of the config, so `terminal_penalty_idx`, the hard floor and the runway telemetry still describe the window the backstops act on |
 | Published | `next_window_tail_start_idx`, `next_window_required_soc_pct` and `next_window_entry_soc_pct` on the optimizer summary, all null when the tail was left alone; `next_window_tail_status` (always set: `applied`, or the reason it was not) and `next_window_gap_min`. See `docs/ENTITY_REFERENCE.md` for the status values |
-| Not applied | Under `allow_dw_entry_under_target` (its target already sits on the horizon boundary); when a later window is already inside the horizon; when the required SOC is at or below the SOC floor or the away reserve; when the tail would start at slot 0; when `OptimizerConfig.next_window_tail_enabled` is False |
+| Not applied | Under `allow_dw_entry_under_target` (its target already sits on the horizon boundary); when a later window is already inside the horizon; when the required SOC is at or below the SOC floor or the away reserve; when the tail would start at slot 0, or less than 30 minutes after slot 0 starts; when `OptimizerConfig.next_window_tail_enabled` is False |
 
 The tail cannot change an executed command. It starts after a demand window the
 main solve handled or was already inside, so it starts at index 1 or later and
-slot 0 is always the main solve's. If the main solve has no window and the plan
+slot 0 is always the main solve's. Index 1 is not enough on its own: the
+executor picks the slot to act on by wall clock when it applies the plan, so a
+plan built at 20:55 with the tail at 21:00 could have a tail decision executed
+if the clock crossed 21:00 during the cycle. The tail is therefore refused
+(`tail_too_close`) unless its first slot starts at least 30 minutes after slot
+0 starts (`NEXT_WINDOW_TAIL_MIN_LEAD_MIN`). Slot 0 is at most five minutes
+wide, so that is at least 25 minutes of clock. If the main solve has no window and the plan
 does not start inside one (a truncated or stale feed that ends short of the
 next window), the tail would be the whole plan; that is refused, the main plan
 stands, and the status reads `whole_plan_skipped`. The backstops read

@@ -58,6 +58,7 @@ from custom_components.localshift.engine.spike_export import (
 from custom_components.localshift.engine.transitions import _tapered_stored_kwh
 from custom_components.localshift.engine.transitions import transition as _transition
 from custom_components.localshift.engine.types import (
+    NEXT_WINDOW_TAIL_MIN_LEAD_MIN,
     TAIL_APPLIED,
     TAIL_AWAY_RESERVE_COVERS,
     TAIL_DISABLED,
@@ -67,6 +68,7 @@ from custom_components.localshift.engine.types import (
     TAIL_NO_GAP,
     TAIL_NO_TAIL_SLOTS,
     TAIL_SOLVE_UNSUCCESSFUL,
+    TAIL_TOO_CLOSE,
     TAIL_UNDER_TARGET_MODE,
     TAIL_WHOLE_PLAN_SKIPPED,
     NegativeFitAvoidanceContext,
@@ -495,29 +497,51 @@ def _usable_gap(gap_min: Any) -> bool:
     )
 
 
-# The date of the last plan whose tail failure was logged at WARNING. Module
-# level so the primary and shadow planners share one budget.
+# The date of the last plan whose tail failure was logged at WARNING, and the
+# failures (exception type and message) already logged at WARNING on that date.
+# Module level so the primary and shadow planners share one budget.
 _TAIL_FAILURE_LOGGED_DAY: str | None = None
+_TAIL_FAILURE_LOGGED_KINDS: set[tuple[str, str]] = set()
+# A message carrying a value that moves every replan would make every failure
+# a new one; past this many distinct failures in a day the rest go to DEBUG.
+_TAIL_FAILURE_MAX_WARNINGS_PER_DAY = 5
+
+
+def _reset_tail_failure_log() -> None:
+    """Forget what has been logged. For tests."""
+    global _TAIL_FAILURE_LOGGED_DAY
+    _TAIL_FAILURE_LOGGED_DAY = None
+    _TAIL_FAILURE_LOGGED_KINDS.clear()
 
 
 def _log_tail_failure(slots: list[SlotContext], exc: Exception) -> None:
-    """Log a failed tail solve: WARNING once a day, DEBUG after that.
+    """Log a failed tail solve: WARNING once a day per failure, DEBUG after that.
 
     Must be called from the ``except`` block, so the traceback is attached. The
     tail runs on every replan from early afternoon until about 15:30, so one
-    bug would otherwise repeat every five minutes for hours. "Day" is the date
+    bug would otherwise repeat every five minutes for hours. A failure of a
+    different exception type or message is a different bug and is a WARNING
+    again, up to ``_TAIL_FAILURE_MAX_WARNINGS_PER_DAY`` a day. "Day" is the date
     slot 0 is stamped with, in the feed's own offset: the planner has no clock.
     Amber stamps local time, so that is the local day; a feed stamped in UTC
     would roll the day over mid-morning instead, which is still once a day.
     """
     global _TAIL_FAILURE_LOGGED_DAY
     day = slots[0].timestamp_iso[:10] if slots else None
-    first_today = day is None or day != _TAIL_FAILURE_LOGGED_DAY
+    if day is None or day != _TAIL_FAILURE_LOGGED_DAY:
+        _TAIL_FAILURE_LOGGED_KINDS.clear()
     _TAIL_FAILURE_LOGGED_DAY = day
+    kind = (type(exc).__name__, str(exc))
+    new_today = (
+        kind not in _TAIL_FAILURE_LOGGED_KINDS
+        and len(_TAIL_FAILURE_LOGGED_KINDS) < _TAIL_FAILURE_MAX_WARNINGS_PER_DAY
+    )
+    if new_today:
+        _TAIL_FAILURE_LOGGED_KINDS.add(kind)
     _LOGGER.log(
-        logging.WARNING if first_today else logging.DEBUG,
+        logging.WARNING if new_today else logging.DEBUG,
         "Next-window tail failed, keeping the main plan (logged at WARNING "
-        "once a day, repeats at DEBUG): %s",
+        "once a day per distinct failure, repeats at DEBUG): %s",
         exc,
         exc_info=True,
     )
@@ -731,7 +755,11 @@ class DPPlanner:
         #1033 is a reporting defect, so this must not be able to change a command.
         The tail always starts after a demand window the main solve handled or
         was already inside, which puts it at index 1 or later: slot 0 is never
-        the tail's. Decisions before the tail start are the main solve's,
+        the tail's. Index 1 is not far enough, because the executor picks the
+        slot to act on by wall clock when it applies the plan: the tail's first
+        slot must also start ``NEXT_WINDOW_TAIL_MIN_LEAD_MIN`` or more after slot
+        0 starts, or it is refused (``tail_too_close``) and the main plan
+        stands. Decisions before the tail start are the main solve's,
         untouched, and so is every summary field about that window. The tail
         solve runs on a copy of the config, so the telemetry the main solve wrote
         there (``terminal_penalty_idx``, the hard floor, runway slack) still
@@ -868,7 +896,8 @@ class DPPlanner:
 
         Returns ``(skip_status, tail_start, required_soc_pct)``. A status means
         the main plan stands and is the reason to publish; None means solve the
-        tail from ``tail_start`` (always 1 or later) to ``required_soc_pct``.
+        tail from ``tail_start`` (always 1 or later, and at least
+        ``NEXT_WINDOW_TAIL_MIN_LEAD_MIN`` after slot 0) to ``required_soc_pct``.
         """
         config = inputs.config
         slots = inputs.slots
@@ -894,9 +923,31 @@ class DPPlanner:
         if required_soc <= config.min_soc_pct:
             # The gap alone can refill the battery: the tail may rest on the floor.
             return TAIL_GAP_TOO_LONG, split, required_soc
-        if required_soc <= config.discharge_floor_pct:
+        if (
+            required_soc <= config.discharge_floor_pct
+            and main.decisions[split - 1].predicted_soc_pct
+            >= config.discharge_floor_pct
+        ):
             # The away reserve already holds the battery above the requirement.
+            # Only true of a battery that is at or above the reserve when the
+            # tail starts: the reserve stops discharge, it does not add charge.
+            # Below it, the tail is planned the normal way.
             return TAIL_AWAY_RESERVE_COVERS, split, required_soc
+
+        # Last gate before a tail is solved, after the reasons there is nothing
+        # for one to do. The executor selects the slot to act on by wall clock
+        # at apply time, not by the time these slots were built from. The tail
+        # must start far enough ahead that no clock drift within a compute
+        # cycle can land on it: a plan built at 20:55 with the tail at index 1
+        # (21:00) would hand the executor a tail decision if the clock crossed
+        # 21:00 mid-cycle. By time, not index, so it holds for 5 and 30 minute
+        # slots alike. Every path that returns None passes through here.
+        lead_min = (
+            datetime.fromisoformat(slots[split].timestamp_iso)
+            - datetime.fromisoformat(slots[0].timestamp_iso)
+        ).total_seconds() / 60.0
+        if lead_min < NEXT_WINDOW_TAIL_MIN_LEAD_MIN:
+            return TAIL_TOO_CLOSE, 0, 0.0
         return None, split, required_soc
 
     def _next_window_tail_start(self, slots: list[SlotContext]) -> int | None:
