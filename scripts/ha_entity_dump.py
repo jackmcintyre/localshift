@@ -45,7 +45,7 @@ GROUPS: list[tuple[str, re.Pattern]] = [
     ("solcast", re.compile(r"solcast", re.I)),
     ("amber", re.compile(r"amber", re.I)),
     ("powerwall", re.compile(
-        r"powerwall|tesla|my_home_(battery|grid|load|solar|vpp)", re.I)),
+        r"powerwall|tesla|my_home_(battery|grid|load|solar|vpp|percentage_charged)", re.I)),
     ("localshift_helpers", re.compile(
         r"battery_automation|battery_target|battery_hold|battery_savings|"
         r"battery_charge_cost|battery_set_|battery_force|battery_boost|"

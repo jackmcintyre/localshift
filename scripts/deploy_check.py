@@ -1,0 +1,440 @@
+#!/usr/bin/env python3
+"""deploy_check.py — compare the live system before and after a deploy.
+
+Takes two entity dumps written by ``scripts/ha_entity_dump.py`` (one from just
+before the restart, one from after the planner has produced at least two
+plans), plus the Home Assistant log, and checks the invariants a deploy must
+not break. Prints a pass/fail table and exits non-zero if any invariant fails.
+
+The Home Assistant log is truncated at every restart, so "since the restart"
+is the whole file and the restart time is its first timestamp.
+
+Usage
+-----
+  scripts/deploy_check.py --before B.json --after A.json \\
+      --log /Volumes/appdata/Home-Assistant-Container/home-assistant.log \\
+      --component-dir /Volumes/appdata/Home-Assistant-Container/custom_components/localshift
+
+  --allow-removed-attr KEY     an attribute the change removed on purpose (repeatable)
+  --allow-removed-entity ID    an entity the change removed on purpose (repeatable)
+  --allow-dw-entry-move        the change is meant to move the projected entry
+  --expect-recompile           code was copied: every compiled file must post-date the restart
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+
+SUMMARY = "sensor.localshift_optimizer_summary"
+PLAN = "sensor.localshift_optimizer_plan_detailed"
+HEALTH = "sensor.localshift_entity_health"
+AUTOMATION = "switch.localshift_automation_enabled"
+DRY_RUN = "switch.localshift_dry_run"
+MODE = "select.localshift_optimization_mode"
+POWERWALL_SOC = "sensor.my_home_percentage_charged"
+
+SOC_TOLERANCE_PCT = 5.0
+DW_ENTRY_TOLERANCE_PCT = 3.0
+# The plan covers "now until the end of the forecast", so its slot count
+# drifts by a few slots between two dumps taken minutes apart.
+SLOT_COUNT_TOLERANCE = 12
+PLAN_LINE = "Pre-charge decision"
+# One plan a minute; allow a missed tick before calling the planner quiet.
+PLAN_GAP_MAX = timedelta(seconds=150)
+MIN_PLANS = 2
+
+UNAVAILABLE = {"unavailable", "unknown"}
+LOG_TS = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ ")
+# Start-up warnings seen on every healthy restart: (pattern, max count, seconds
+# after the restart within which they are tolerated).
+BENIGN_WARNINGS: list[tuple[re.Pattern, int, int]] = [
+    (re.compile(r"Cannot read Tesla tariff"), 1, 60),
+    (re.compile(r"invalid SOC non_positive, skipping"), 2, 60),
+]
+
+
+@dataclass
+class Check:
+    name: str
+    ok: bool
+    detail: str
+
+
+def load_dump(path: Path) -> dict[str, dict]:
+    """Flatten a dump's groups into ``{entity_id: state}``."""
+    data = json.loads(Path(path).read_text())
+    return {e["entity_id"]: e for group in data["groups"].values() for e in group}
+
+
+def _state(ents: dict[str, dict], eid: str) -> str | None:
+    ent = ents.get(eid)
+    return None if ent is None else ent.get("state")
+
+
+def _attrs(ents: dict[str, dict], eid: str) -> dict:
+    return (ents.get(eid) or {}).get("attributes") or {}
+
+
+def _localshift(ents: dict[str, dict]) -> set[str]:
+    return {eid for eid in ents if "localshift" in eid}
+
+
+def _as_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def check_entities(before, after, allow_removed: set[str]) -> list[Check]:
+    lost = sorted(_localshift(before) - _localshift(after) - allow_removed)
+    newly_dead = sorted(
+        eid
+        for eid in _localshift(after)
+        if _state(after, eid) in UNAVAILABLE and _state(before, eid) not in UNAVAILABLE
+    )
+    health_before, health_after = _state(before, HEALTH), _state(after, HEALTH)
+    health_ok = health_after is not None and health_after == health_before
+    if allow_removed and health_after is not None:
+        # A deliberate removal changes the total; require every entity healthy.
+        healthy, _, total = health_after.partition("/")
+        health_ok = healthy == total
+    return [
+        Check(
+            "entities present",
+            not lost,
+            f"lost: {', '.join(lost)}"
+            if lost
+            else f"{len(_localshift(after))} localshift entities",
+        ),
+        Check(
+            "none newly unavailable", not newly_dead, ", ".join(newly_dead) or "none"
+        ),
+        Check("entity health", health_ok, f"{health_before} -> {health_after}"),
+    ]
+
+
+def check_attributes(before, after, allow_removed: set[str]) -> list[Check]:
+    checks = []
+    for eid in (SUMMARY, PLAN):
+        lost = sorted(
+            set(_attrs(before, eid)) - set(_attrs(after, eid)) - allow_removed
+        )
+        checks.append(
+            Check(
+                f"attributes kept: {eid.split('.', 1)[1]}",
+                not lost,
+                f"lost: {', '.join(lost)}"
+                if lost
+                else f"{len(_attrs(after, eid))} keys",
+            )
+        )
+    opts_before = _attrs(before, SUMMARY).get("config_options")
+    opts_after = _attrs(after, SUMMARY).get("config_options")
+    if opts_after is None or opts_before is None:
+        checks.append(
+            Check("config_options identical", False, "config_options missing")
+        )
+    else:
+        changed = sorted(
+            k
+            for k in set(opts_before) | set(opts_after)
+            if opts_before.get(k) != opts_after.get(k)
+        )
+        checks.append(
+            Check(
+                "config_options identical",
+                not changed,
+                "changed: "
+                + ", ".join(
+                    f"{k} {opts_before.get(k)!r}->{opts_after.get(k)!r}"
+                    for k in changed
+                )
+                if changed
+                else "identical",
+            )
+        )
+    return checks
+
+
+def check_switches(before, after) -> list[Check]:
+    mode_before, mode_after = _state(before, MODE), _state(after, MODE)
+    return [
+        Check(
+            "automation enabled",
+            _state(after, AUTOMATION) == "on",
+            f"{_state(after, AUTOMATION)}",
+        ),
+        Check(
+            "dry run off", _state(after, DRY_RUN) == "off", f"{_state(after, DRY_RUN)}"
+        ),
+        Check(
+            "optimization mode unchanged",
+            mode_after is not None and mode_after == mode_before,
+            f"{mode_before} -> {mode_after}",
+        ),
+    ]
+
+
+def check_plan(before, after, allow_dw_entry_move: bool) -> list[Check]:
+    summary = _attrs(after, SUMMARY)
+    checks = [
+        Check(
+            "summary state success",
+            _state(after, SUMMARY) == "success",
+            f"{_state(after, SUMMARY)}",
+        )
+    ]
+
+    slots_before = _as_float(_attrs(before, PLAN).get("total_slots"))
+    slots_after = _as_float(_attrs(after, PLAN).get("total_slots"))
+    slots_ok = (
+        slots_before is not None
+        and slots_after is not None
+        and slots_after > 0
+        and abs(slots_after - slots_before) <= SLOT_COUNT_TOLERANCE
+    )
+    checks.append(
+        Check("plan slot count", slots_ok, f"{slots_before} -> {slots_after}")
+    )
+
+    initial = _as_float(summary.get("initial_soc_pct"))
+    powerwall = _as_float(_state(after, POWERWALL_SOC))
+    soc_ok = (
+        initial is not None
+        and powerwall is not None
+        and abs(initial - powerwall) <= SOC_TOLERANCE_PCT
+    )
+    checks.append(
+        Check(
+            "initial SOC matches Powerwall",
+            soc_ok,
+            f"planner {initial} vs Powerwall {powerwall}",
+        )
+    )
+
+    dw_before = _as_float(_attrs(before, SUMMARY).get("dw_entry_soc_pct"))
+    dw_after = _as_float(summary.get("dw_entry_soc_pct"))
+    if allow_dw_entry_move:
+        checks.append(
+            Check(
+                "projected DW entry",
+                dw_after is not None,
+                f"{dw_before} -> {dw_after} (move allowed)",
+            )
+        )
+    else:
+        # Both null is legitimate: no demand window left in the horizon.
+        dw_ok = (dw_before is None and dw_after is None) or (
+            dw_before is not None
+            and dw_after is not None
+            and abs(dw_after - dw_before) <= DW_ENTRY_TOLERANCE_PCT
+        )
+        checks.append(Check("projected DW entry", dw_ok, f"{dw_before} -> {dw_after}"))
+    return checks
+
+
+def _log_time(line: str) -> datetime | None:
+    m = LOG_TS.match(line)
+    return datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S") if m else None
+
+
+def _records(lines: list[str]):
+    """Group the log into ``(timestamp, header, continuation lines)`` records."""
+    record = None
+    for line in lines:
+        ts = _log_time(line)
+        if ts is not None:
+            if record:
+                yield record
+            record = (ts, line, [])
+        elif record:
+            record[2].append(line)
+    if record:
+        yield record
+
+
+def _is_error(header: str, body: list[str]) -> bool:
+    if "localshift" in header and (" ERROR " in header or "Traceback" in header):
+        return True
+    # Another component's error whose traceback runs through our code.
+    return any("custom_components/localshift" in line for line in body)
+
+
+class _WarningTally:
+    """Counts localshift warnings that fall outside the known start-up set."""
+
+    def __init__(self, restart: datetime):
+        self.restart = restart
+        self.seen = [0] * len(BENIGN_WARNINGS)
+        self.unexpected: list[str] = []
+
+    def add(self, ts: datetime, header: str) -> None:
+        for i, (pat, limit, window) in enumerate(BENIGN_WARNINGS):
+            if pat.search(header):
+                self.seen[i] += 1
+                if self.seen[i] <= limit and ts - self.restart <= timedelta(
+                    seconds=window
+                ):
+                    return
+                break
+        self.unexpected.append(header.strip())
+
+
+def _planner_check(plan_times: list[datetime], now: datetime) -> Check:
+    if len(plan_times) < MIN_PLANS:
+        return Check(
+            "planner running",
+            False,
+            f"{len(plan_times)} plans since restart, need {MIN_PLANS}",
+        )
+    last_gap = plan_times[-1] - plan_times[-2]
+    age = now - plan_times[-1]
+    return Check(
+        "planner running",
+        last_gap <= PLAN_GAP_MAX and age <= PLAN_GAP_MAX,
+        f"{len(plan_times)} plans, last gap {int(last_gap.total_seconds())}s, "
+        f"last plan {int(age.total_seconds())}s ago",
+    )
+
+
+def check_log(lines: list[str], now: datetime) -> tuple[list[Check], datetime | None]:
+    """Check the log written since the restart. ``now`` is local wall time."""
+    records = list(_records(lines))
+    if not records:
+        return [Check("log readable", False, "no timestamped lines")], None
+    restart = records[0][0]
+
+    errors, plan_times, warnings = [], [], _WarningTally(restart)
+    for ts, header, body in records:
+        if _is_error(header, body):
+            errors.append(header.strip())
+        elif " WARNING " in header and "custom_components.localshift" in header:
+            warnings.add(ts, header)
+        elif PLAN_LINE in header and "localshift" in header:
+            plan_times.append(ts)
+
+    unexpected = warnings.unexpected
+    return [
+        Check(
+            "no localshift errors",
+            not errors,
+            f"{len(errors)}: {errors[0][:140]}" if errors else "none",
+        ),
+        # Reported, not failed: a live bug under investigation can legitimately
+        # warn. The caller compares the count before and after.
+        Check(
+            "localshift warnings (informational)",
+            True,
+            f"{len(unexpected)} beyond the known start-up set"
+            + (f"; first: {unexpected[0][:120]}" if unexpected else ""),
+        ),
+        _planner_check(plan_times, now),
+    ], restart
+
+
+def check_compiled(
+    component_dir: Path, restart: datetime, expect_recompile: bool
+) -> Check:
+    """Compiled files must not be older than their source; after a copy they
+    must also post-date the restart, which proves the new code was loaded."""
+    stale, old, count = [], [], 0
+    for src in component_dir.rglob("*.py"):
+        compiled = list((src.parent / "__pycache__").glob(f"{src.stem}.cpython-*.pyc"))
+        if not compiled:
+            continue  # never imported
+        count += 1
+        newest = max(p.stat().st_mtime for p in compiled)
+        if newest < src.stat().st_mtime:
+            stale.append(src.name)
+        if expect_recompile and newest < restart.timestamp() - 60:
+            old.append(src.name)
+    if count == 0:
+        return Check("compiled files", False, f"none found under {component_dir}")
+    if stale:
+        return Check(
+            "compiled files", False, f"older than source: {', '.join(stale[:5])}"
+        )
+    if old:
+        return Check(
+            "compiled files",
+            False,
+            f"{len(old)} pre-date the restart: {', '.join(old[:5])}",
+        )
+    return Check("compiled files", True, f"{count} current")
+
+
+def run_checks(
+    before,
+    after,
+    log_lines,
+    now,
+    *,
+    component_dir=None,
+    allow_removed_attrs=frozenset(),
+    allow_removed_entities=frozenset(),
+    allow_dw_entry_move=False,
+    expect_recompile=False,
+) -> list[Check]:
+    checks = check_entities(before, after, set(allow_removed_entities))
+    checks += check_attributes(before, after, set(allow_removed_attrs))
+    checks += check_switches(before, after)
+    checks += check_plan(before, after, allow_dw_entry_move)
+    log_checks, restart = check_log(log_lines, now)
+    checks += log_checks
+    if component_dir is not None and restart is not None:
+        checks.append(check_compiled(Path(component_dir), restart, expect_recompile))
+    return checks
+
+
+def render(checks: list[Check]) -> str:
+    width = max(len(c.name) for c in checks)
+    lines = [
+        f"{'PASS' if c.ok else 'FAIL'}  {c.name:<{width}}  {c.detail}" for c in checks
+    ]
+    failed = sum(not c.ok for c in checks)
+    lines.append("")
+    lines.append(
+        f"{len(checks) - failed}/{len(checks)} passed"
+        + (f", {failed} FAILED" if failed else "")
+    )
+    return "\n".join(lines)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--before", required=True, type=Path)
+    ap.add_argument("--after", required=True, type=Path)
+    ap.add_argument("--log", required=True, type=Path)
+    ap.add_argument("--component-dir", type=Path)
+    ap.add_argument("--allow-removed-attr", action="append", default=[])
+    ap.add_argument("--allow-removed-entity", action="append", default=[])
+    ap.add_argument("--allow-dw-entry-move", action="store_true")
+    ap.add_argument("--expect-recompile", action="store_true")
+    args = ap.parse_args(argv)
+
+    checks = run_checks(
+        load_dump(args.before),
+        load_dump(args.after),
+        args.log.read_text(errors="replace").splitlines(),
+        datetime.now(),
+        component_dir=args.component_dir,
+        allow_removed_attrs=frozenset(args.allow_removed_attr),
+        allow_removed_entities=frozenset(args.allow_removed_entity),
+        allow_dw_entry_move=args.allow_dw_entry_move,
+        expect_recompile=args.expect_recompile,
+    )
+    print(render(checks))
+    return 0 if all(c.ok for c in checks) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
