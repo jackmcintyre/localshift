@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import logging
+import math
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -55,6 +58,19 @@ from custom_components.localshift.engine.spike_export import (
 from custom_components.localshift.engine.transitions import _tapered_stored_kwh
 from custom_components.localshift.engine.transitions import transition as _transition
 from custom_components.localshift.engine.types import (
+    NEXT_WINDOW_TAIL_MIN_LEAD_MIN,
+    TAIL_APPLIED,
+    TAIL_AWAY_RESERVE_COVERS,
+    TAIL_DISABLED,
+    TAIL_FAILED,
+    TAIL_GAP_TOO_LONG,
+    TAIL_MAIN_UNSUCCESSFUL,
+    TAIL_NO_GAP,
+    TAIL_NO_TAIL_SLOTS,
+    TAIL_SOLVE_UNSUCCESSFUL,
+    TAIL_TOO_CLOSE,
+    TAIL_UNDER_TARGET_MODE,
+    TAIL_WHOLE_PLAN_SKIPPED,
     NegativeFitAvoidanceContext,
     OptimizerConfig,
     OptimizerInputs,
@@ -422,6 +438,115 @@ def _floor_guard_blocks(
     return charge_soc_gain < config.min_floor_charge_gain_pct and not in_urgency_window
 
 
+def _soc_after_normal_charge(
+    config: OptimizerConfig, start_soc_pct: float, minutes: float
+) -> float:
+    """SOC after ``minutes`` of normal-rate grid charging, taper included."""
+    soc = start_soc_pct
+    target = config.demand_window_target_soc_pct
+    for _ in range(int(minutes)):
+        if soc >= target:
+            break
+        stored_kwh = _tapered_stored_kwh(soc, config.charge_rate_kw, 1.0 / 60.0, config)
+        soc += stored_kwh / config.battery_capacity_kwh * 100.0
+    return soc
+
+
+def _soc_required_before_gap(config: OptimizerConfig, gap_min: float) -> float:
+    """SOC needed ``gap_min`` minutes before a demand window to enter it on target.
+
+    Issue #1033. The price feed can end short of the next demand window, and the
+    planner cannot price the slots in between. What it can say is how much SOC
+    those minutes are able to add: normal-rate grid charging for the whole gap,
+    stepped through the engine's own charge model so the CV taper above
+    ``charge_taper_start_pct`` is counted. The target less that gain is the least
+    the battery may hold when the horizon ends.
+
+    Normal rate, not boost: boost is what the planner unlocks when normal cannot
+    reach target, so a tail that already depended on it would leave no margin.
+    Solar in the gap is not credited.
+
+    Returns the target for a zero gap and ``min_soc_pct`` once the gap is long
+    enough to refill the battery from the floor (about five hours).
+    """
+    target = config.demand_window_target_soc_pct
+    floor = config.min_soc_pct
+    if gap_min < 1.0 or config.battery_capacity_kwh <= 0.0:
+        return target
+    if _soc_after_normal_charge(config, floor, gap_min) >= target:
+        return floor
+    # The end SOC rises with the start SOC, so bisect for the lowest start that
+    # still reaches target. 20 halvings of a 90-point range is far below one bin.
+    low, high = floor, target
+    for _ in range(20):
+        mid = (low + high) / 2.0
+        if _soc_after_normal_charge(config, mid, gap_min) >= target:
+            high = mid
+        else:
+            low = mid
+    return high
+
+
+def _usable_gap(gap_min: Any) -> bool:
+    """True when ``gap_min`` is a measured, finite, non-negative gap."""
+    return (
+        isinstance(gap_min, (int, float))
+        and not isinstance(gap_min, bool)
+        and math.isfinite(gap_min)
+        and gap_min >= 0.0
+    )
+
+
+# The date of the last plan whose tail failure was logged at WARNING, and the
+# failures (exception type and message) already logged at WARNING on that date.
+# Module level so the primary and shadow planners share one budget.
+_TAIL_FAILURE_LOGGED_DAY: str | None = None
+_TAIL_FAILURE_LOGGED_KINDS: set[tuple[str, str]] = set()
+# A message carrying a value that moves every replan would make every failure
+# a new one; past this many distinct failures in a day the rest go to DEBUG.
+_TAIL_FAILURE_MAX_WARNINGS_PER_DAY = 5
+
+
+def _reset_tail_failure_log() -> None:
+    """Forget what has been logged. For tests."""
+    global _TAIL_FAILURE_LOGGED_DAY
+    _TAIL_FAILURE_LOGGED_DAY = None
+    _TAIL_FAILURE_LOGGED_KINDS.clear()
+
+
+def _log_tail_failure(slots: list[SlotContext], exc: Exception) -> None:
+    """Log a failed tail solve: WARNING once a day per failure, DEBUG after that.
+
+    Must be called from the ``except`` block, so the traceback is attached. The
+    tail runs on every replan from early afternoon until about 15:30, so one
+    bug would otherwise repeat every five minutes for hours. A failure of a
+    different exception type or message is a different bug and is a WARNING
+    again, up to ``_TAIL_FAILURE_MAX_WARNINGS_PER_DAY`` a day. "Day" is the date
+    slot 0 is stamped with, in the feed's own offset: the planner has no clock.
+    Amber stamps local time, so that is the local day; a feed stamped in UTC
+    would roll the day over mid-morning instead, which is still once a day.
+    """
+    global _TAIL_FAILURE_LOGGED_DAY
+    day = slots[0].timestamp_iso[:10] if slots else None
+    if day is None or day != _TAIL_FAILURE_LOGGED_DAY:
+        _TAIL_FAILURE_LOGGED_KINDS.clear()
+    _TAIL_FAILURE_LOGGED_DAY = day
+    kind = (type(exc).__name__, str(exc))
+    new_today = (
+        kind not in _TAIL_FAILURE_LOGGED_KINDS
+        and len(_TAIL_FAILURE_LOGGED_KINDS) < _TAIL_FAILURE_MAX_WARNINGS_PER_DAY
+    )
+    if new_today:
+        _TAIL_FAILURE_LOGGED_KINDS.add(kind)
+    _LOGGER.log(
+        logging.WARNING if new_today else logging.DEBUG,
+        "Next-window tail failed, keeping the main plan (logged at WARNING "
+        "once a day per distinct failure, repeats at DEBUG): %s",
+        exc,
+        exc_info=True,
+    )
+
+
 class DPPlanner:
     """Deterministic dynamic-programming battery optimizer.
 
@@ -462,6 +587,7 @@ class DPPlanner:
             apply_export_floor(inputs.slots, inputs.config)
             apply_spike_export_admission(inputs.slots, inputs.config)
             result = self._solve_guarded(inputs)
+            result = self._plan_next_window_tail(inputs, result)
 
         except Exception as exc:  # noqa: BLE001
             _LOGGER.error(
@@ -479,8 +605,14 @@ class DPPlanner:
 
         return result
 
-    def _solve_guarded(self, inputs: OptimizerInputs) -> OptimizerResult:
+    def _solve_guarded(
+        self, inputs: OptimizerInputs, log_label: str = ""
+    ) -> OptimizerResult:
         """Solve with and without spike funding, keeping the cheaper plan.
+
+        ``log_label`` is appended to the ``SPIKE PRECHARGE`` log tag. The
+        next-window tail (issue #1033) passes one so its lines cannot be read as
+        the main solve's; the tail's funding fields never reach the result.
 
         WHY A GUARD RATHER THAN A BETTER GATE
         -------------------------------------
@@ -509,7 +641,9 @@ class DPPlanner:
         try:
             funding = find_funding_slots(inputs.slots, config)
         except Exception as exc:  # noqa: BLE001
-            _LOGGER.warning("Spike funding detection failed, using baseline: %s", exc)
+            _LOGGER.warning(
+                "Spike funding detection failed%s, using baseline: %s", log_label, exc
+            )
             return baseline
 
         if not funding:
@@ -519,7 +653,9 @@ class DPPlanner:
             config.spike_funding_slots = funding
             candidate = self._solve(inputs)
         except Exception as exc:  # noqa: BLE001
-            _LOGGER.warning("Spike-funded solve failed, using baseline: %s", exc)
+            _LOGGER.warning(
+                "Spike-funded solve failed%s, using baseline: %s", log_label, exc
+            )
             return baseline
         finally:
             config.spike_funding_slots = None
@@ -549,8 +685,9 @@ class DPPlanner:
         # while protecting against a case qualification no longer admits.
         if delta > 0:
             _LOGGER.info(
-                "SPIKE PRECHARGE: %d funding slot(s) accepted, "
+                "SPIKE PRECHARGE%s: %d funding slot(s) accepted, "
                 "projected net cost $%.4f -> $%.4f (saves $%.4f)",
+                log_label,
                 len(funding),
                 baseline.projected_net_cost,
                 candidate.projected_net_cost,
@@ -563,21 +700,284 @@ class DPPlanner:
 
         if delta < 0:
             _LOGGER.debug(
-                "SPIKE PRECHARGE: %d funding slot(s) REJECTED by guard — "
+                "SPIKE PRECHARGE%s: %d funding slot(s) REJECTED by guard — "
                 "$%.4f would have been worse than $%.4f",
+                log_label,
                 len(funding),
                 candidate.projected_net_cost,
                 baseline.projected_net_cost,
             )
         else:
             _LOGGER.debug(
-                "SPIKE PRECHARGE: %d funding slot(s) qualified but changed nothing",
+                "SPIKE PRECHARGE%s: %d funding slot(s) qualified but changed nothing",
+                log_label,
                 len(funding),
             )
         baseline.spike_funding_slot_count = len(funding)
         baseline.spike_funding_accepted = False
         baseline.spike_funding_net_cost_delta = delta
         return baseline
+
+    # ------------------------------------------------------------------
+
+    # Next-window tail (issue #1033)
+
+    # ------------------------------------------------------------------
+
+    def _plan_next_window_tail(
+        self, inputs: OptimizerInputs, main: OptimizerResult
+    ) -> OptimizerResult:
+        """Re-plan the tail of the horizon for a demand window that starts past it.
+
+        WHY A SECOND SOLVE
+        ------------------
+        ``_solve`` handles one demand window per plan: the first entry it finds.
+        The price feed is 24 hours long, so in the afternoon the horizon ends at
+        or just short of tomorrow's window. Before 15:00 the one window in view is
+        today's; from 15:00 until tomorrow's entry slot appears there is none.
+        Either way nothing asked for charge before tomorrow's window, and the
+        published tail drained to the SOC floor (2026-09-07: 9.3% against a 95%
+        target) until the entry slot came into the feed and the plan corrected
+        itself.
+
+        The whole target machinery (funding water level, hard floor, urgency
+        window, boost unlock) is built around a single entry index and the SOC at
+        the start of the plan, so a second target cannot be added to the same
+        solve. Instead the slots after the handled window are solved again as
+        their own plan: they start from the SOC the main solve left, and end on a
+        zero-energy entry slot standing in for the window, with the target
+        lowered by what the gap before the window can still add
+        (``_soc_required_before_gap``). That is the same code path that plans
+        those slots once the real entry slot is in the feed.
+
+        WHAT CANNOT CHANGE
+        ------------------
+        #1033 is a reporting defect, so this must not be able to change a command.
+        The tail always starts after a demand window the main solve handled or
+        was already inside, which puts it at index 1 or later: slot 0 is never
+        the tail's. Index 1 is not far enough, because the executor picks the
+        slot to act on by wall clock when it applies the plan: the tail's first
+        slot must also start ``NEXT_WINDOW_TAIL_MIN_LEAD_MIN`` or more after slot
+        0 starts, or it is refused (``tail_too_close``) and the main plan
+        stands. Decisions before the tail start are the main solve's,
+        untouched, and so is every summary field about that window. The tail
+        solve runs on a copy of the config, so the telemetry the main solve wrote
+        there (``terminal_penalty_idx``, the hard floor, runway slack) still
+        describes the window the backstops act on.
+
+        A feed that ends short of the next window with no window in view, on a
+        plan that does not start inside one, would make the tail the whole plan.
+        That is refused (``whole_plan_skipped``) and the main plan stands: the
+        tail credits no solar in the unseen gap, so its slot 0 could command a
+        grid charge the main solve would not.
+
+        Not applied under ``allow_dw_entry_under_target``, which already keeps
+        its target on the horizon boundary. Falls back to the main plan on any
+        failure, so a bug here can cost the tail but never the plan. Why the tail
+        was or was not applied is always published as
+        ``next_window_tail_status``.
+        """
+        gap_min = inputs.next_demand_window_gap_min
+        try:
+            status, result = self._solve_next_window_tail(inputs, main)
+        except Exception as exc:  # noqa: BLE001
+            _log_tail_failure(inputs.slots, exc)
+            status, result = TAIL_FAILED, main
+        result.next_window_tail_status = status
+        result.next_window_gap_min = (
+            float(gap_min) if gap_min is not None and _usable_gap(gap_min) else None
+        )
+        return result
+
+    def _solve_next_window_tail(
+        self, inputs: OptimizerInputs, main: OptimizerResult
+    ) -> tuple[str, OptimizerResult]:
+        """Solve the tail and splice it onto the main plan. See the caller.
+
+        Returns the status to publish and the plan: the main plan itself on every
+        path except ``TAIL_APPLIED``.
+        """
+        skip, split, required_soc = self._next_window_tail_scope(inputs, main)
+        if skip is not None:
+            return skip, main
+        config = inputs.config
+        slots = inputs.slots
+        gap_min = inputs.next_demand_window_gap_min
+
+        tail_slots = [
+            replace(slot, slot_index=i) for i, slot in enumerate(slots[split:])
+        ]
+        last = tail_slots[-1]
+        horizon_end = datetime.fromisoformat(last.timestamp_iso) + timedelta(
+            minutes=last.slot_interval_minutes
+        )
+        # Stand-in for the window's entry slot. No load and no solar, so it moves
+        # no energy and costs nothing; it exists so ``_solve`` finds an entry.
+        tail_slots.append(
+            SlotContext(
+                slot_index=len(tail_slots),
+                timestamp_iso=horizon_end.isoformat(),
+                slot_interval_minutes=last.slot_interval_minutes,
+                buy_price=last.buy_price,
+                sell_price=last.sell_price,
+                solar_kwh=0.0,
+                consumption_kwh=0.0,
+                is_demand_window_entry=True,
+                is_demand_window_slot=True,
+                price_source="synthetic",
+                export_available=False,
+                export_floor_pct=last.export_floor_pct,
+            )
+        )
+
+        tail_config = copy.copy(config)
+        tail_config.demand_window_target_soc_pct = required_soc
+        tail = self._solve_guarded(
+            replace(
+                inputs,
+                initial_soc_pct=main.decisions[split - 1].predicted_soc_pct,
+                slots=tail_slots,
+                config=tail_config,
+                # The switching term only exists on slot 0 of a solve; an interior
+                # slot of the main plan carries none, so the seam carries none.
+                current_action=None,
+                # Carried state about the window open now, at slot 0 of the main
+                # plan. The tail starts hours later and inherits none of it.
+                negative_fit_window_open=False,
+                next_demand_window_gap_min=None,
+            ),
+            log_label=" (next-window tail)",
+        )
+        if not tail.success or len(tail.decisions) != len(tail_slots):
+            return TAIL_SOLVE_UNSUCCESSFUL, main
+
+        decisions = main.decisions[:split] + [
+            replace(decision, slot_index=decision.slot_index + split)
+            for decision in tail.decisions[:-1]
+        ]
+        reason_histogram: dict[str, int] = {}
+        for decision in decisions:
+            key = decision.reason_code.value
+            reason_histogram[key] = reason_histogram.get(key, 0) + 1
+
+        _LOGGER.debug(
+            "Next-window tail: re-planned %d slot(s) from index %d, required SOC "
+            "%.1f%% at the horizon end (gap %.0f min), reached %.1f%%",
+            len(decisions) - split,
+            split,
+            required_soc,
+            gap_min,
+            decisions[-1].predicted_soc_pct,
+        )
+        return TAIL_APPLIED, replace(
+            main,
+            decisions=decisions,
+            states_explored=main.states_explored + tail.states_explored,
+            projected_import_kwh=sum(d.grid_import_kwh for d in decisions),
+            projected_export_kwh=sum(d.grid_export_kwh for d in decisions),
+            projected_net_cost=sum(d.objective_terms.net_cost for d in decisions),
+            reason_code_histogram=reason_histogram,
+            # The main solve's peak covered the tail it has just lost. None stays
+            # None: the main solve publishes no peak on a plan with no window.
+            peak_soc_pct=(
+                round(max(d.predicted_soc_pct for d in decisions), 2)
+                if main.peak_soc_pct is not None
+                else None
+            ),
+            next_window_tail_start_idx=split,
+            next_window_required_soc_pct=required_soc,
+            next_window_entry_soc_pct=decisions[-1].predicted_soc_pct,
+        )
+
+    def _next_window_tail_scope(
+        self, inputs: OptimizerInputs, main: OptimizerResult
+    ) -> tuple[str | None, int, float]:
+        """Decide whether the tail is re-planned, and from where to what SOC.
+
+        Returns ``(skip_status, tail_start, required_soc_pct)``. A status means
+        the main plan stands and is the reason to publish; None means solve the
+        tail from ``tail_start`` (always 1 or later, and at least
+        ``NEXT_WINDOW_TAIL_MIN_LEAD_MIN`` after slot 0) to ``required_soc_pct``.
+        """
+        config = inputs.config
+        slots = inputs.slots
+        gap_min = inputs.next_demand_window_gap_min
+        if not config.next_window_tail_enabled:
+            return TAIL_DISABLED, 0, 0.0
+        if config.allow_dw_entry_under_target:
+            return TAIL_UNDER_TARGET_MODE, 0, 0.0
+        if not main.success or len(main.decisions) != len(slots):
+            return TAIL_MAIN_UNSUCCESSFUL, 0, 0.0
+        if gap_min is None or not _usable_gap(gap_min):
+            return TAIL_NO_GAP, 0, 0.0
+
+        split = self._next_window_tail_start(slots)
+        if split is None:
+            return TAIL_NO_TAIL_SLOTS, 0, 0.0
+        if split < 1:
+            # No window in view and slot 0 outside one: the tail would be the
+            # whole plan and slot 0 would come from it. Never.
+            return TAIL_WHOLE_PLAN_SKIPPED, 0, 0.0
+
+        required_soc = _soc_required_before_gap(config, gap_min)
+        if required_soc <= config.min_soc_pct:
+            # The gap alone can refill the battery: the tail may rest on the floor.
+            return TAIL_GAP_TOO_LONG, split, required_soc
+        if (
+            required_soc <= config.discharge_floor_pct
+            and main.decisions[split - 1].predicted_soc_pct
+            >= config.discharge_floor_pct
+        ):
+            # The away reserve already holds the battery above the requirement.
+            # Only true of a battery that is at or above the reserve when the
+            # tail starts: the reserve stops discharge, it does not add charge.
+            # Below it, the tail is planned the normal way.
+            return TAIL_AWAY_RESERVE_COVERS, split, required_soc
+
+        # Last gate before a tail is solved, after the reasons there is nothing
+        # for one to do. The executor selects the slot to act on by wall clock
+        # at apply time, not by the time these slots were built from. The tail
+        # must start far enough ahead that no clock drift within a compute
+        # cycle can land on it: a plan built at 20:55 with the tail at index 1
+        # (21:00) would hand the executor a tail decision if the clock crossed
+        # 21:00 mid-cycle. By time, not index, so it holds for 5 and 30 minute
+        # slots alike. Every path that returns None passes through here.
+        lead_min = (
+            datetime.fromisoformat(slots[split].timestamp_iso)
+            - datetime.fromisoformat(slots[0].timestamp_iso)
+        ).total_seconds() / 60.0
+        if lead_min < NEXT_WINDOW_TAIL_MIN_LEAD_MIN:
+            return TAIL_TOO_CLOSE, 0, 0.0
+        return None, split, required_soc
+
+    def _next_window_tail_start(self, slots: list[SlotContext]) -> int | None:
+        """Index of the first slot after the window the main solve handled.
+
+        That window is the first entry ``_find_demand_window_bounds`` returns, or
+        the one in progress at slot 0 when it returns none. None when there is
+        nothing to re-plan: the handled window runs to the end of the horizon, or
+        a later window is already inside it (a feed longer than a day, where the
+        gap past the horizon belongs to a window after that one).
+
+        0 when there is no window in view at all and slot 0 is outside one. The
+        caller refuses that: a tail from index 0 would be the whole plan.
+        """
+        bounds = self._find_demand_window_bounds(slots)
+        entry_idx, end_idx = bounds["entry_idx"], bounds["end_idx"]
+        if entry_idx is not None:
+            if end_idx is None or end_idx >= len(slots) - 1:
+                return None
+            split = end_idx + 1
+        else:
+            split = next(
+                (i for i, slot in enumerate(slots) if not slot.is_demand_window_slot),
+                None,
+            )
+            if split is None:
+                return None
+        if any(slot.is_demand_window_slot for slot in slots[split:]):
+            return None
+        return split
 
     # ------------------------------------------------------------------
 

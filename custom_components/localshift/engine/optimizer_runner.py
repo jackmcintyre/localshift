@@ -197,6 +197,10 @@ def _run(
         current_action=_map_mode_to_action(data.active_mode),
         slots=slots,
         config=optimizer_config,
+        # Direct attribute access, not getattr: a renamed field or a slot
+        # builder returning other metadata must fail loudly, not switch the
+        # next-window tail off with every test still green.
+        next_demand_window_gap_min=slot_metadata.next_demand_window_gap_min,
     )
 
     # 2. Run DP optimizer (shadow — pure computation, no side effects)
@@ -707,6 +711,24 @@ def _build_summary(
     summary["accuracy_discount_factor"] = result.accuracy_discount_factor
     summary["peak_soc_pct"] = result.peak_soc_pct
     summary["dw_entry_soc_pct"] = result.dw_entry_soc_pct
+
+    # Next-window tail (issue #1033). A start index means decisions from there on
+    # were planned for the demand window that opens after the horizon ends, and
+    # every field above still describes the window before it. None on a plan
+    # whose tail was left alone; ``next_window_tail_status`` says why, so a tail
+    # that never runs is not mistaken for one with nothing to do.
+    summary["next_window_tail_status"] = result.next_window_tail_status
+    gap_min = result.next_window_gap_min
+    summary["next_window_gap_min"] = round(gap_min, 1) if gap_min is not None else None
+    summary["next_window_tail_start_idx"] = result.next_window_tail_start_idx
+    required_soc = result.next_window_required_soc_pct
+    summary["next_window_required_soc_pct"] = (
+        round(required_soc, 1) if required_soc is not None else None
+    )
+    entry_soc = result.next_window_entry_soc_pct
+    summary["next_window_entry_soc_pct"] = (
+        round(entry_soc, 1) if entry_soc is not None else None
+    )
 
     # Spike-event pre-charge funding. Read the count and the delta together: a zero
     # count means nothing qualified (the ordinary day), while a non-zero count with

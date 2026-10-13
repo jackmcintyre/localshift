@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -89,6 +89,12 @@ class SlotBuildMetadata:
     confirmed; None when the source carries none), ``export_start_deferred``
     (an unconfirmed sell price kept slot 0 from starting an export) and
     ``live_buy``/``live_sell`` (the price sensors' own states)."""
+
+    next_demand_window_gap_min: float | None = None
+    """Minutes from the end of the last slot to the next demand-window start
+    (issue #1033), or None when the last slot is inside a window or there are
+    no slots. Passed to the planner as
+    ``OptimizerInputs.next_demand_window_gap_min``."""
 
     def to_parity_dict(self) -> dict[str, Any]:
         """Convert to legacy parity_info dict format for backward compatibility.
@@ -257,6 +263,9 @@ class SlotBuilder:
             all_solcast=all_solcast,
             slot0_price_source=(contexts[0].price_source if contexts else "unknown"),
             slot0_price=slot0_price,
+            next_demand_window_gap_min=self._next_demand_window_gap_min(
+                contexts, local_tz, dw_start_time
+            ),
         )
 
         _LOGGER.debug(
@@ -366,6 +375,41 @@ class SlotBuilder:
             return ZoneInfo(self._ha_timezone)
         except Exception:
             return None
+
+    def _next_demand_window_gap_min(
+        self,
+        contexts: list[SlotContext],
+        local_tz: ZoneInfo | None,
+        dw_start_time: time,
+    ) -> float | None:
+        """Minutes from the end of the last slot to the next demand-window start.
+
+        Issue #1033: the price feed is 24 hours long, so in the afternoon the
+        horizon ends at or just short of tomorrow's window and the planner, which
+        has no clock, cannot tell a window is about to open. 0 means the feed
+        ends as the window opens. None when the last slot is inside a window
+        (the planner already sees it) or the gap cannot be measured.
+        """
+        if not contexts or contexts[-1].is_demand_window_slot:
+            return None
+        last = contexts[-1]
+        try:
+            horizon_end = datetime.fromisoformat(last.timestamp_iso) + timedelta(
+                minutes=last.slot_interval_minutes
+            )
+        except (ValueError, TypeError):
+            return None
+        if local_tz is not None and horizon_end.tzinfo is not None:
+            horizon_end = horizon_end.astimezone(local_tz)
+        next_start = horizon_end.replace(
+            hour=dw_start_time.hour,
+            minute=dw_start_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        if next_start < horizon_end:
+            next_start += timedelta(days=1)
+        return (next_start - horizon_end).total_seconds() / 60.0
 
     def _process_all_slots(
         self,

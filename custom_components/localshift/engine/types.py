@@ -252,6 +252,11 @@ class OptimizerConfig:
     for unit tests and standalone use.
     """
 
+    next_window_tail_enabled: bool = True
+    """If True, re-plan the tail of the horizon for a demand window that starts
+    just past it (issue #1033). Decisions up to the end of the window the main
+    solve handled are never changed. See ``DPPlanner._plan_next_window_tail``."""
+
     terminal_salvage_enabled: bool = True
     """If True, credit a bounded salvage value for residual energy at the horizon
     boundary (Issue #811).
@@ -847,6 +852,33 @@ class PlannedSlotDecision:
 # -----------------------------------------------------------------------------
 
 
+# Why the next-window tail (issue #1033) was or was not re-planned. Published as
+# ``OptimizerResult.next_window_tail_status``; every value but ``applied`` means
+# the plan is the main solve's, unchanged.
+TAIL_APPLIED = "applied"
+TAIL_DISABLED = "disabled"  # OptimizerConfig.next_window_tail_enabled is False
+TAIL_UNDER_TARGET_MODE = "under_target_mode"  # allow_dw_entry_under_target
+TAIL_MAIN_UNSUCCESSFUL = "main_unsuccessful"  # the main solve produced no plan
+TAIL_NO_GAP = "no_gap"  # no gap supplied: feed ends inside a window, or unknown
+TAIL_NO_TAIL_SLOTS = "no_tail_slots"  # nothing after the handled window
+TAIL_WHOLE_PLAN_SKIPPED = "whole_plan_skipped"  # tail would include slot 0
+TAIL_TOO_CLOSE = "tail_too_close"  # tail starts inside the minimum lead of slot 0
+TAIL_GAP_TOO_LONG = "gap_too_long"  # the gap alone can refill the battery
+TAIL_AWAY_RESERVE_COVERS = "away_reserve_covers"  # reserve above the requirement
+TAIL_SOLVE_UNSUCCESSFUL = "solve_unsuccessful"  # the tail solve produced no plan
+TAIL_FAILED = "failed"  # the tail solve raised; logged once a day at WARNING
+
+# The tail's first slot must START at least this long after slot 0 starts, or
+# the tail is refused (``TAIL_TOO_CLOSE``). The executor picks the slot to act
+# on by wall clock when it applies the plan, not by the time the slots were
+# built from, so a tail one slot ahead can be the slot it reads if the clock
+# crosses a slot boundary inside the compute cycle. Slot 0 is the live feed's
+# "now" quantum, at most five minutes wide, so this leaves at least 25 minutes
+# of clock between building a plan and the first tail slot. Measured in time,
+# not slots, so it holds for 5-minute and 30-minute slots alike.
+NEXT_WINDOW_TAIL_MIN_LEAD_MIN = 30.0
+
+
 @dataclass
 class OptimizerResult:
     """Full output from a DPPlanner.plan() call."""
@@ -929,6 +961,30 @@ class OptimizerResult:
 
     dw_entry_soc_pct: float | None = None
     """SOC (%) at demand window entry slot. None if no DW."""
+
+    # Next-window tail (issue #1033)
+    next_window_tail_start_idx: int | None = None
+    """Index of the first decision planned for the demand window that starts
+    past the horizon. None when the tail was not re-planned. Every decision
+    before this index, and every other field on this result, comes from the
+    main solve."""
+
+    next_window_required_soc_pct: float | None = None
+    """SOC (%) the tail had to hold at the end of the horizon: the target less
+    what normal-rate charging can add in the gap before the window opens."""
+
+    next_window_entry_soc_pct: float | None = None
+    """SOC (%) the re-planned tail reaches at the end of the horizon."""
+
+    next_window_tail_status: str | None = None
+    """Why the tail was or was not re-planned: one of the ``TAIL_*`` values
+    above. Set on every plan that reaches the tail step, so a tail that never
+    runs can be told from one with nothing to do. None only when the planner
+    raised before it."""
+
+    next_window_gap_min: float | None = None
+    """The gap the planner was given: minutes from the end of the last slot to
+    the next demand-window start. None when none was supplied or usable."""
 
     # Negative-FIT avoidance materiality (Issue #1103)
     negative_fit_spill_cost: float | None = None
@@ -1058,3 +1114,10 @@ class OptimizerInputs:
     battery would see now, because that figure falls as the window's own
     pre-discharge makes room; it is held until the forecast stops being
     material. See ``negative_fit.assess_negative_fit_avoidance``."""
+
+    next_demand_window_gap_min: float | None = None
+    """Minutes from the end of the last slot to the next demand-window start
+    (issue #1033). 0 when the price feed ends as the window opens. None when
+    unknown or when the last slot is itself inside a window; the plan tail is
+    then left as the main solve produced it. Measured by ``SlotBuilder``,
+    because the planner has no clock and cannot see past its last slot."""

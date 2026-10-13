@@ -178,6 +178,59 @@ charging purely to harvest the credit always loses at least half the outlay, so 
 cannot regress into overnight reserve-holding. It never touches the strict-mode
 DW-entry penalty rows. Disable via `OptimizerConfig.terminal_salvage_enabled=False`.
 
+### One window per solve, and the tail for the next one (Issue #1033)
+
+A solve handles one demand window: the first entry slot in the horizon. The
+funding water level, the hard floor, the urgency window and the boost unlock are
+all computed from that one entry index and the SOC at the start of the plan.
+
+The price feed is at most 24 hours long (in the October 2026 captures, 48
+half-hours from the current one). In the afternoon the horizon therefore ends
+at or just short of tomorrow's window: before 15:00 the one window in view is
+today's, and from 15:00 until tomorrow's entry slot enters the feed there is
+none (the window in progress at slot 0 is not a target). That was 15:30 in the
+October captures and by 15:07 in the 2026-09-07 report. Nothing asked for charge before tomorrow's window, so the published
+tail drained to the SOC floor until the entry slot entered the feed. A longer
+horizon does not help, because there are no prices past the feed, and before
+15:00 it would not help even with them: the first entry is still today's.
+
+`DPPlanner._plan_next_window_tail` plans that tail a second time. The slots
+after the window the main solve handled become their own solve, starting from
+the SOC the main solve left and ending on a zero-energy entry slot that stands
+in for the window. It is the same `_solve` that plans those slots once the real
+entry slot is in the feed, with the same gates.
+
+| Piece | Rule |
+|---|---|
+| When | `SlotBuilder` reports `next_demand_window_gap_min`, the minutes from the end of the last slot to the next window start. The tail is planned when that gap is short enough that the battery could not refill in it |
+| Target at the horizon end | The demand-window target less what normal-rate grid charging can add in the gap, CV taper included (`_soc_required_before_gap`). Equal to the target when the feed ends as the window opens; at the SOC floor after about five hours, where the tail is left alone. Solar in the gap is not credited |
+| What stays fixed | Every decision up to the end of the window the main solve handled, and every summary field about that window. The tail solve works on a copy of the config, so `terminal_penalty_idx`, the hard floor and the runway telemetry still describe the window the backstops act on |
+| Published | `next_window_tail_start_idx`, `next_window_required_soc_pct` and `next_window_entry_soc_pct` on the optimizer summary, all null when the tail was left alone; `next_window_tail_status` (always set: `applied`, or the reason it was not) and `next_window_gap_min`. See `docs/ENTITY_REFERENCE.md` for the status values |
+| Not applied | Under `allow_dw_entry_under_target` (its target already sits on the horizon boundary); when a later window is already inside the horizon; when the required SOC is at or below the SOC floor or the away reserve; when the tail would start at slot 0, or less than 30 minutes after slot 0 starts; when `OptimizerConfig.next_window_tail_enabled` is False |
+
+The tail cannot change an executed command. It starts after a demand window the
+main solve handled or was already inside, so it starts at index 1 or later and
+slot 0 is always the main solve's. Index 1 is not enough on its own: the
+executor picks the slot to act on by wall clock when it applies the plan, so a
+plan built at 20:55 with the tail at 21:00 could have a tail decision executed
+if the clock crossed 21:00 during the cycle. The tail is therefore refused
+(`tail_too_close`) unless its first slot starts at least 30 minutes after slot
+0 starts (`NEXT_WINDOW_TAIL_MIN_LEAD_MIN`). Slot 0 is at most five minutes
+wide, so that is at least 25 minutes of clock. If the main solve has no window and the plan
+does not start inside one (a truncated or stale feed that ends short of the
+next window), the tail would be the whole plan; that is refused, the main plan
+stands, and the status reads `whole_plan_skipped`. The backstops read
+`terminal_penalty_idx`, the hard floor and the runway slack off the main
+solve's config, which the tail never writes, and count pre-charge slots only
+before today's entry slot.
+
+Known limits. There is no switch entity; `next_window_tail_enabled` is a code
+default. The published tail is a lower bound: solar in the gap is not
+credited, and the required SOC steps up as the gap shrinks from one feed
+update to the next. The tail only arises because the feed stops at 24 hours;
+a longer feed would put tomorrow's entry slot in view and the status would
+read `no_tail_slots` or `no_gap`.
+
 ### Why Terminal Cost Works
 
 The terminal cost creates a "backwards incentive" through DP:
