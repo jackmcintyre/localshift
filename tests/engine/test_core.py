@@ -622,6 +622,7 @@ class TestDPPlannerEdgeCoverage:
             is_demand_window_entry=is_dw_entry,
         )
 
+    @pytest.mark.allow_swallowed_failure("planner_solve")
     def test_plan_catches_solver_exception_and_returns_failure(self, monkeypatch):
         """plan() wraps _solve exceptions and returns success=False."""
         planner = DPPlanner()

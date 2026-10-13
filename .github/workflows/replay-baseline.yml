@@ -1,0 +1,32 @@
+name: Replay baseline
+
+# Replays every tracked capture under simulations/ through the planner and
+# compares the plans with simulations/plan-baseline/ (issue #986). A change
+# that is meant to leave plans alone must pass this untouched; a change that
+# means to alter them commits the regenerated baseline alongside.
+# See docs/DEVELOPER_GUIDE.md, "Proving a change is behaviour-neutral".
+
+on:
+  pull_request:
+    branches: [main, test]
+
+jobs:
+  replay-baseline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Compare planner output with the baseline (all captures)
+        run: uv run python scripts/replay_plan_baseline.py --full-diff
