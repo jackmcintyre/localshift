@@ -24,6 +24,12 @@ jobs:
       - name: Run ruff lint
         run: uv run ruff check custom_components/localshift
 
+      # Issue #1131: a test class or function defined twice in one module
+      # shadows the first definition, so pytest silently never collects it.
+      # Only F811 is enforced on tests; the full rule set is not (yet) clean there.
+      - name: Run ruff shadowed-test check
+        run: uv run ruff check tests --select F811
+
       - name: Run ruff format check
         run: uv run ruff format --check custom_components/localshift
 
