@@ -50,12 +50,9 @@ def _make_test_slot(
 def _make_context(
     risk_start: int = 5,
     risk_end: int = 10,
-    recovery_by_slot: list[float] | None = None,
     floor_by_slot: list[float] | None = None,
 ) -> NegativeFitAvoidanceContext:
     """Create a valid NegativeFitAvoidanceContext for tests."""
-    if recovery_by_slot is None:
-        recovery_by_slot = [50.0] * 15
     if floor_by_slot is None:
         floor_by_slot = [20.0] * 15
     return NegativeFitAvoidanceContext(
@@ -63,7 +60,6 @@ def _make_context(
         risk_window_end_idx=risk_end,
         required_headroom_kwh=5.0,
         recovery_deadline_idx=14,
-        conservative_recovery_kwh_by_slot=tuple(recovery_by_slot),
         recoverability_floor_pct_by_slot=tuple(floor_by_slot),
     )
 
@@ -71,7 +67,7 @@ def _make_context(
 def test_feasible_actions_positive_fit_before_risk_window(default_config):
     """Allows EXPORT_PROACTIVE at positive FIT before risk window when SOC above floor."""
     slot = _make_test_slot(sell_price=0.08)
-    context = _make_context(risk_start=5, recovery_by_slot=[20.0] * 15)
+    context = _make_context(risk_start=5)
     actions = feasible_actions(
         soc_pct=90.0,
         slot=slot,
@@ -105,7 +101,6 @@ def test_feasible_actions_recoverability_floor_enforced(default_config):
     slot = _make_test_slot(sell_price=0.08)
     context = _make_context(
         risk_start=5,
-        recovery_by_slot=[5.0] * 15,
         floor_by_slot=[40.0] * 15,
     )
     actions = feasible_actions(
@@ -239,7 +234,7 @@ def test_feasible_actions_dw_requires_min_net_benefit_in_avoidance(default_confi
     """Demand-window export in avoidance mode requires minimum net benefit."""
     slot = _make_test_slot(sell_price=0.14, is_demand_window_slot=True)
     slot.buy_price = 0.13
-    context = _make_context(risk_start=5, recovery_by_slot=[20.0] * 15)
+    context = _make_context(risk_start=5)
     actions = feasible_actions(
         soc_pct=90.0,
         slot=slot,
@@ -256,7 +251,7 @@ def test_feasible_actions_dw_allows_export_above_min_net_benefit(default_config)
     """Demand-window export is allowed in avoidance mode when net benefit is high."""
     slot = _make_test_slot(sell_price=0.16, is_demand_window_slot=True)
     slot.buy_price = 0.13
-    context = _make_context(risk_start=5, recovery_by_slot=[20.0] * 15)
+    context = _make_context(risk_start=5)
     actions = feasible_actions(
         soc_pct=90.0,
         slot=slot,

@@ -863,9 +863,6 @@ class ComputationEngine:
         # ---- Step 12: decision_log ----
         self._maybe_log_decision(data, ctx.now_dt)
 
-        # ---- Step 16: daily_forecast ----
-        # (computed earlier; left intentionally blank)
-
         # ---- Step 17: excess_solar_signals (backlog-high-017) ----
         self._forecast_pipeline.compute_excess_solar_signals(data, ctx.now_dt)
 

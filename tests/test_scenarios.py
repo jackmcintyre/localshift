@@ -119,7 +119,6 @@ def setup_coordinator_data(input_data: dict) -> CoordinatorData:
 
     # Initialize empty containers
     data.decision_log = []
-    data.daily_forecast = []
     data.daily_forecast_soc_15min = []
     data.forecast_consumption_source_counts = {}
     data.forecast_history = []
@@ -279,33 +278,6 @@ def assert_expected_values(data: CoordinatorData, expected: dict, scenario_name:
             assert actual == expected_value, (
                 f"[{scenario_name}] optimizer_result['success']: "
                 f"expected {expected_value}, got {actual}"
-            )
-            continue
-
-        # --- Legacy special keys retained for backwards compat (no longer in any scenario) ---
-        if key == "daily_forecast_min_soc":
-            if not data.daily_forecast:
-                pytest.fail(f"[{scenario_name}] daily_forecast is empty")
-            actual_value = min(
-                slot.get("predicted_soc", 100) for slot in data.daily_forecast
-            )
-            assert actual_value == pytest.approx(expected_value, rel=0.01), (
-                f"[{scenario_name}] {key}: expected {expected_value}, got {actual_value}"
-            )
-            continue
-
-        if key == "demand_window_end_soc":
-            if not data.daily_forecast:
-                pytest.fail(f"[{scenario_name}] daily_forecast is empty")
-            dw_end_soc = None
-            for slot in data.daily_forecast:
-                if slot.get("hour") == 22 and slot.get("minute") == 0:
-                    dw_end_soc = slot.get("predicted_soc")
-                    break
-            if dw_end_soc is None:
-                pytest.fail(f"[{scenario_name}] No forecast slot at demand window end")
-            assert dw_end_soc >= expected_value, (
-                f"[{scenario_name}] {key}: expected >= {expected_value}, got {dw_end_soc}"
             )
             continue
 

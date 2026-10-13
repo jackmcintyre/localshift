@@ -26,7 +26,6 @@ def coordinator_data():
     data.price_spike = False
     data.manual_override = False
     data.decision_log = []
-    data.daily_forecast = []
     return data
 
 

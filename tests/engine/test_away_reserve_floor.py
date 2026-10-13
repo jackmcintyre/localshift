@@ -140,7 +140,6 @@ def test_b4_negative_fit_avoidance_refuses_export_at_the_floor():
         risk_window_end_idx=5,
         required_headroom_kwh=5.0,
         recovery_deadline_idx=5,
-        conservative_recovery_kwh_by_slot=(50.0,) * 6,
         recoverability_floor_pct_by_slot=(30.0,) * 6,
     )
     actions = feasible_actions(
@@ -155,7 +154,6 @@ def _avoidance_context(recoverability_floor_pct: float) -> NegativeFitAvoidanceC
         risk_window_end_idx=5,
         required_headroom_kwh=5.0,
         recovery_deadline_idx=5,
-        conservative_recovery_kwh_by_slot=(50.0,) * 6,
         recoverability_floor_pct_by_slot=(recoverability_floor_pct,) * 6,
     )
 

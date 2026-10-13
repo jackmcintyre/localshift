@@ -365,8 +365,6 @@ def _members_of(tree: ast.Module, name: str) -> set[str]:
 SCHEDULED_FOR_DELETION = frozenset({
     "adaptive_params",
     "set_adaptive_params",
-    "daily_forecast",
-    "run_optimizer",
     "optimizer_soc_underprepared",
     "optimizer_safety_block_reason",
     "hybrid_solar_accuracy",

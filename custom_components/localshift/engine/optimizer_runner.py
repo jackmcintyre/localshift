@@ -1,232 +1,33 @@
 """
-optimizer_runner.py — DP optimizer entrypoint.
+optimizer_runner.py — helpers around a DP optimizer run.
 
-Phase 6 (#448): Renamed from optimizer_shadow_runner.py, removed shadow terminology.
+A library, not an entry point: nothing here runs the planner. The cycle is
+driven by ``OptimizerFacade.run_inline`` (engine/optimizer_facade.py).
 
-This module is the single entry point called by the coordinator each compute
-cycle. It:
-  1. Converts raw coordinator data into OptimizerInputs via SlotBuilder.
-  2. Runs DPPlanner.plan() to compute optimal schedule.
-  3. Writes all results into CoordinatorData optimizer_* fields.
-
-The coordinator calls run_optimizer(data, config_options) and that
-is the ONLY coupling point. All optimizer internals stay isolated here.
+Production importers, all three of them:
+  * engine/optimizer_facade.py — ``OptimizerSafetyGate``,
+    ``_build_optimizer_config``, ``_build_summary``,
+    ``_current_slot_debug_info``, ``_derive_runtime_apply_plan``,
+    ``_find_current_slot_index``, ``_normalize_initial_soc``,
+    ``_serialize_decision``, ``_serialize_result``.
+  * computation_engine.py — ``_find_current_slot_index``.
+  * forecast/load_deviation.py — ``_find_current_slot_index``.
 """
 
 from __future__ import annotations
 
 import logging
 import math
-import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .optimizer_dp import (
-    DPPlanner,
     OptimizerConfig,
-    OptimizerInputs,
     OptimizerResult,
-    PlannerAction,
-    SlotContext,
 )
-from .slots import SlotBuilder
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _get_ha_timezone() -> str:
-    """Get Home Assistant timezone string.
-
-    Returns:
-        Timezone string (e.g., "Australia/Sydney") or "UTC" as fallback.
-
-    """
-    from homeassistant.util import dt as dt_util
-
-    try:
-        tz = dt_util.get_time_zone()
-        return str(tz) if tz else "UTC"
-    except Exception:
-        return "UTC"
-
-
-def _map_mode_to_action(mode: Any) -> PlannerAction | None:
-    """Map BatteryMode to PlannerAction for switching penalty calculation.
-
-    Args:
-        mode: BatteryMode enum value (or string).
-
-    Returns:
-        PlannerAction or None if mode is not actionable by optimizer.
-
-    """
-    from custom_components.localshift.const import BatteryMode
-
-    if mode == BatteryMode.SELF_CONSUMPTION:
-        return PlannerAction.HOLD
-    if mode == BatteryMode.GRID_CHARGING:
-        return PlannerAction.CHARGE_GRID_NORMAL
-    if mode == BatteryMode.BOOST_CHARGING:
-        return PlannerAction.CHARGE_GRID_BOOST
-    if mode == BatteryMode.PROACTIVE_EXPORT:
-        return PlannerAction.EXPORT_PROACTIVE
-
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-
-def run_optimizer(
-    data: Any,  # CoordinatorData — avoid circular import at module load
-    config_options: dict[str, Any],
-    planner: DPPlanner | None = None,
-) -> None:
-    """
-    Run the DP optimizer and write results into ``data``.
-
-    This function is SAFE to call every compute cycle. If the optimizer
-    encounters any error it exits cleanly without touching runtime
-    control fields.
-
-    Args:
-        data:           CoordinatorData instance (mutated for optimizer fields).
-        config_options: Integration options dict (from config_entry.options).
-        planner:        Optional pre-constructed DPPlanner (for testing / DI).
-
-    """
-    cycle_id = _make_cycle_id()
-    cycle_timestamp_iso = datetime.now(UTC).isoformat()
-
-    _LOGGER.debug(
-        "Optimizer starting cycle %s (%d legacy slots)",
-        cycle_id,
-        len(data.daily_forecast),
-    )
-
-    try:
-        _run(
-            data=data,
-            config_options=config_options,
-            cycle_id=cycle_id,
-            cycle_timestamp_iso=cycle_timestamp_iso,
-            planner=planner or DPPlanner(),
-        )
-    except Exception as exc:  # noqa: BLE001
-        _LOGGER.error("Optimizer failed for cycle %s: %s", cycle_id, exc, exc_info=True)
-        data.optimizer_summary = {
-            "enabled": True,
-            "planner_version": DPPlanner.VERSION,
-            "success": False,
-            "error_message": str(exc),
-            "cycle_id": cycle_id,
-        }
-
-
-# ---------------------------------------------------------------------------
-# Internal implementation
-# ---------------------------------------------------------------------------
-
-
-def _run(
-    data: Any,
-    config_options: dict[str, Any],
-    cycle_id: str,
-    cycle_timestamp_iso: str,
-    planner: DPPlanner,
-) -> None:
-    """Core optimizer run logic (separated for testability)."""
-
-    # 1. Build OptimizerInputs from coordinator data
-    optimizer_config = _build_optimizer_config(data, config_options)
-    slot_builder = SlotBuilder(
-        config_options=config_options, ha_timezone=_get_ha_timezone()
-    )
-    slots, slot_metadata = slot_builder.build_slots(
-        data, getattr(data, "adaptive_params", None)
-    )
-    parity_info = slot_metadata.to_parity_dict()  # backward-compat shim
-
-    if not slots:
-        _LOGGER.debug("Optimizer: no slots available, skipping cycle %s", cycle_id)
-        data.optimizer_summary = {
-            "enabled": True,
-            "planner_version": DPPlanner.VERSION,
-            "success": False,
-            "error_message": "no_slots_available",
-            "cycle_id": cycle_id,
-            "parity_completeness_pct": 0.0,
-        }
-        return
-
-    # 1b. Validate slot alignment (Phase B #403)
-    alignment = _validate_slot_alignment(data.daily_forecast, slots)
-    if not alignment["valid"]:
-        _LOGGER.warning(
-            "Optimizer slot alignment issues: %s",
-            alignment["issues"],
-        )
-
-    initial_soc_pct, soc_info = _normalize_initial_soc(data.soc, optimizer_config)
-    if initial_soc_pct is None:
-        data.optimizer_summary = {
-            "enabled": True,
-            "planner_version": DPPlanner.VERSION,
-            "success": False,
-            "error_message": "invalid_initial_soc",
-            "cycle_id": cycle_id,
-            "cycle_timestamp_iso": cycle_timestamp_iso,
-            "computed_at": cycle_timestamp_iso,
-            "initial_soc_info": soc_info,
-            "parity_completeness_pct": parity_info.get("completeness_pct", 0.0),
-            "alignment_valid": alignment.get("valid", False),
-        }
-        _LOGGER.warning(
-            "Optimizer skipped cycle %s due to invalid initial SOC: %s",
-            cycle_id,
-            soc_info,
-        )
-        return
-
-    inputs = OptimizerInputs(
-        cycle_id=cycle_id,
-        initial_soc_pct=initial_soc_pct,
-        current_action=_map_mode_to_action(data.active_mode),
-        slots=slots,
-        config=optimizer_config,
-        # Direct attribute access, not getattr: a renamed field or a slot
-        # builder returning other metadata must fail loudly, not switch the
-        # next-window tail off with every test still green.
-        next_demand_window_gap_min=slot_metadata.next_demand_window_gap_min,
-    )
-
-    # 2. Run DP optimizer (shadow — pure computation, no side effects)
-    result: OptimizerResult = planner.plan(inputs)
-
-    # 3. Write result fields
-    data.optimizer_result = _serialize_result(result)
-    data.optimizer_decisions = [_serialize_decision(d) for d in result.decisions]
-    data.optimizer_summary = _build_summary(
-        result,
-        cycle_id,
-        cycle_timestamp_iso,
-        parity_info,
-        alignment,
-        config_options,
-        soc_info,
-    )
-
-    _LOGGER.debug(
-        "Optimizer cycle %s complete: success=%s slots=%d solve=%.3fs net_cost=%.4f",
-        cycle_id,
-        result.success,
-        result.total_slots,
-        result.solve_time_seconds,
-        result.projected_net_cost,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +62,6 @@ def _build_optimizer_config(
         CONF_OPTIMIZATION_MODE,
         CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
         CONF_SPIKE_EXPORT_ENABLED,
-        CONF_STALE_SOLAR_CONFIDENCE_CEILING,
         CONF_STALE_SOLAR_CONSERVATIVE,
         CONF_SWITCHING_PENALTY,
         CONF_SWITCHING_PENALTY_PER_KWH,
@@ -278,7 +78,6 @@ def _build_optimizer_config(
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
         DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
-        DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING,
         DEFAULT_STALE_SOLAR_CONSERVATIVE,
         DEFAULT_SWITCHING_PENALTY,
         DEFAULT_SWITCHING_PENALTY_PER_KWH,
@@ -309,11 +108,6 @@ def _build_optimizer_config(
             CONF_STALE_SOLAR_CONSERVATIVE, DEFAULT_STALE_SOLAR_CONSERVATIVE
         )
     )
-    stale_solar_confidence_ceiling = float(
-        config_options.get(
-            CONF_STALE_SOLAR_CONFIDENCE_CEILING, DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING
-        )
-    )
 
     # Issue #1120: the state of switch.localshift_spike_discharge_enabled. The
     # fallback is the switch's own default, so the two cannot drift apart.
@@ -337,12 +131,6 @@ def _build_optimizer_config(
     )
 
     effective_cheap_price = float(getattr(data, "effective_cheap_price", 0.10))
-    self_consumption_value_per_kwh = float(
-        getattr(data, "general_price", effective_cheap_price)
-    )
-    if self_consumption_value_per_kwh <= 0.0:
-        self_consumption_value_per_kwh = max(0.10, effective_cheap_price)
-
     export_price_margin = float(
         config_options.get(CONF_EXPORT_PRICE_MARGIN, DEFAULT_EXPORT_PRICE_MARGIN)
     )
@@ -452,7 +240,6 @@ def _build_optimizer_config(
         demand_window_target_soc_pct=target_soc,  # User-configured target
         allow_dw_entry_under_target=allow_dw_entry_under_target,
         stale_solar_conservative=stale_solar_conservative,
-        stale_solar_confidence_ceiling=stale_solar_confidence_ceiling,
         spike_export_enabled=spike_export_enabled,
         precharge_runway_margin_min=precharge_runway_margin_min,
         # --- Objective weights (user-configurable via Number entities or Options Flow) ---
@@ -469,7 +256,6 @@ def _build_optimizer_config(
         soc_bins=50,
         # --- Optimization mode ---
         optimization_mode=optimization_mode,
-        self_consumption_value_per_kwh=self_consumption_value_per_kwh,
         effective_cheap_price=effective_cheap_price,
         base_cheap_price=base_cheap_price,
         max_precharge_price=max_precharge_price,
@@ -529,82 +315,6 @@ def _normalize_initial_soc(
 
     info["normalized_soc_pct"] = round(soc, 3)
     return soc, info
-
-
-def _compute_legacy_energy_totals(
-    legacy_slots: list[dict[str, Any]],
-) -> tuple[float, float]:
-    """Compute total legacy import/export kWh from forecast slot payload."""
-    total_import = 0.0
-    total_export = 0.0
-
-    for slot in legacy_slots:
-        try:
-            total_import += float(slot.get("grid_import_kwh", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            pass
-        try:
-            total_export += float(slot.get("grid_export_kwh", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            pass
-
-    return total_import, total_export
-
-
-def _validate_slot_alignment(
-    legacy_slots: list[dict[str, Any]],
-    contexts: list[SlotContext],
-) -> dict[str, Any]:
-    """
-    Validate alignment between legacy slots and SlotContexts.
-
-    Phase B (#403): Ensures 1:1 mapping and flag mismatches for debugging.
-
-    Returns:
-        Dict with validation results including any alignment issues.
-
-    """
-    issues: list[str] = []
-    warnings: list[str] = []
-
-    # Check count alignment
-    if len(legacy_slots) != len(contexts):
-        issues.append(
-            f"slot_count_mismatch: legacy={len(legacy_slots)} contexts={len(contexts)}"
-        )
-        return {
-            "valid": False,
-            "issues": issues,
-            "warnings": warnings,
-        }
-
-    # Check per-slot alignment
-    for idx, (legacy, ctx) in enumerate(zip(legacy_slots, contexts, strict=True)):
-        # Check slot_index
-        if ctx.slot_index != idx:
-            issues.append(f"slot_{idx}: index_mismatch ctx.slot_index={ctx.slot_index}")
-
-        # Check timestamp presence (warning only if missing)
-        if not ctx.timestamp_iso:
-            warnings.append(f"slot_{idx}: missing_timestamp")
-
-        # Check for negative prices (may indicate data issues)
-        if ctx.buy_price < 0:
-            warnings.append(f"slot_{idx}: negative_buy_price={ctx.buy_price}")
-
-        # Check for slot_interval_minutes consistency
-        legacy_minutes = legacy.get("slot_interval_minutes", 30)
-        if ctx.slot_interval_minutes != legacy_minutes:
-            issues.append(
-                f"slot_{idx}: interval_mismatch legacy={legacy_minutes} ctx={ctx.slot_interval_minutes}"
-            )
-
-    return {
-        "valid": len(issues) == 0,
-        "issues": issues,
-        "warnings": warnings,
-        "slots_checked": len(contexts),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -768,11 +478,6 @@ def _build_summary(
     )
 
     return summary
-
-
-def _make_cycle_id() -> str:
-    """Generate a short unique cycle identifier."""
-    return uuid.uuid4().hex[:12]
 
 
 # ---------------------------------------------------------------------------

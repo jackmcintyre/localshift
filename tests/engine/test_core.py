@@ -7,8 +7,7 @@ import pytest
 from custom_components.localshift.engine.constraints import _determine_export_actions
 from custom_components.localshift.engine.core import DPPlanner
 from custom_components.localshift.engine.negative_fit import (
-    compute_recoverability_floor_pct,
-    derive_negative_fit_avoidance_context,
+    assess_negative_fit_avoidance,
 )
 from custom_components.localshift.engine.penalties import (
     get_solar_opportunity_penalty_factor,
@@ -208,7 +207,7 @@ class TestDPPlanner:
 
 
 class TestNegativeFitAvoidanceContext:
-    """Test _derive_negative_fit_avoidance_context method (recoverability model)."""
+    """Test assess_negative_fit_avoidance context (recoverability model)."""
 
     @staticmethod
     def _make_slot(
@@ -239,7 +238,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=OptimizerConfig(),
         )
-        ctx = derive_negative_fit_avoidance_context(inputs)
+        ctx = assess_negative_fit_avoidance(inputs).context
         assert ctx is None
 
     def test_no_positive_slots_before_risk_returns_none(self):
@@ -253,7 +252,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=OptimizerConfig(),
         )
-        ctx = derive_negative_fit_avoidance_context(inputs)
+        ctx = assess_negative_fit_avoidance(inputs).context
         assert ctx is None
 
     def test_no_recovery_solar_returns_none(self):
@@ -268,7 +267,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = derive_negative_fit_avoidance_context(inputs)
+        ctx = assess_negative_fit_avoidance(inputs).context
         assert ctx is None
 
     def test_ha_style_case_with_solar_during_bad_fit_creates_context(self):
@@ -292,7 +291,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = derive_negative_fit_avoidance_context(inputs)
+        ctx = assess_negative_fit_avoidance(inputs).context
         assert ctx is not None
         assert isinstance(ctx, NegativeFitAvoidanceContext)
         assert ctx.risk_window_start_idx == 12
@@ -321,13 +320,9 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = derive_negative_fit_avoidance_context(inputs)
+        ctx = assess_negative_fit_avoidance(inputs).context
         assert ctx is not None
-        floor_pct = compute_recoverability_floor_pct(
-            slot_idx=5,
-            context=ctx,
-            config=config,
-        )
+        floor_pct = ctx.recoverability_floor_pct_by_slot[5]
         assert floor_pct < config.demand_window_target_soc_pct
         assert floor_pct >= config.min_soc_pct
 
@@ -353,13 +348,9 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = derive_negative_fit_avoidance_context(inputs)
+        ctx = assess_negative_fit_avoidance(inputs).context
         assert ctx is not None
-        floor_pct = compute_recoverability_floor_pct(
-            slot_idx=5,
-            context=ctx,
-            config=config,
-        )
+        floor_pct = ctx.recoverability_floor_pct_by_slot[5]
         assert floor_pct >= 80.0
 
     def test_context_stops_when_headroom_sufficient(self):
@@ -383,7 +374,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = derive_negative_fit_avoidance_context(inputs)
+        ctx = assess_negative_fit_avoidance(inputs).context
         assert ctx is None or ctx.required_headroom_kwh <= 0.5
 
     def test_heavy_overnight_load_returns_none(self):
@@ -413,7 +404,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = derive_negative_fit_avoidance_context(inputs)
+        ctx = assess_negative_fit_avoidance(inputs).context
         assert ctx is None
 
     def test_overnight_drain_above_floor_can_satisfy_headroom(self):
@@ -439,7 +430,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = derive_negative_fit_avoidance_context(inputs)
+        ctx = assess_negative_fit_avoidance(inputs).context
         assert ctx is None
 
     def test_light_overnight_load_still_builds_context(self):
@@ -460,7 +451,7 @@ class TestNegativeFitAvoidanceContext:
             slots=slots,
             config=config,
         )
-        ctx = derive_negative_fit_avoidance_context(inputs)
+        ctx = assess_negative_fit_avoidance(inputs).context
         assert ctx is not None
         assert ctx.required_headroom_kwh > 0
 
@@ -496,7 +487,6 @@ class TestCoreRegressionCoverage:
             risk_window_end_idx=5,
             required_headroom_kwh=1.0,
             recovery_deadline_idx=6,
-            conservative_recovery_kwh_by_slot=(5.0,) * 8,
             recoverability_floor_pct_by_slot=(20.0,) * 8,
         )
 
@@ -515,7 +505,6 @@ class TestCoreRegressionCoverage:
             risk_window_end_idx=6,
             required_headroom_kwh=2.0,
             recovery_deadline_idx=7,
-            conservative_recovery_kwh_by_slot=(5.0,) * 8,
             recoverability_floor_pct_by_slot=(10.0,) * 8,
         )
         config = OptimizerConfig(min_soc_pct=10.0)

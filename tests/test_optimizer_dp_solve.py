@@ -17,7 +17,7 @@ from custom_components.localshift.engine.constraints import (
 )
 from custom_components.localshift.engine.cost import stage_cost
 from custom_components.localshift.engine.negative_fit import (
-    derive_negative_fit_avoidance_context,
+    assess_negative_fit_avoidance,
 )
 from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
@@ -2826,7 +2826,6 @@ def test_negative_fit_context_type():
         risk_window_end_idx=15,
         required_headroom_kwh=5.0,
         recovery_deadline_idx=20,
-        conservative_recovery_kwh_by_slot=(10.0, 10.0, 10.0),
         recoverability_floor_pct_by_slot=(30.0, 30.0, 30.0),
     )
     assert ctx.risk_window_start_idx == 10
@@ -2864,7 +2863,7 @@ def test_negative_fit_context_no_window(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = derive_negative_fit_avoidance_context(inputs)
+    ctx = assess_negative_fit_avoidance(inputs).context
     assert ctx is None
 
 
@@ -2880,7 +2879,7 @@ def test_negative_fit_context_no_overflow(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = derive_negative_fit_avoidance_context(inputs)
+    ctx = assess_negative_fit_avoidance(inputs).context
     assert ctx is None
 
 
@@ -2896,7 +2895,7 @@ def test_negative_fit_context_no_positive_slots(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = derive_negative_fit_avoidance_context(inputs)
+    ctx = assess_negative_fit_avoidance(inputs).context
     assert ctx is None
 
 
@@ -2918,7 +2917,7 @@ def test_negative_fit_context_computes_floor(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = derive_negative_fit_avoidance_context(inputs)
+    ctx = assess_negative_fit_avoidance(inputs).context
     assert ctx is not None
     assert ctx.risk_window_start_idx == 4
     assert ctx.required_headroom_kwh > 0
@@ -2946,7 +2945,7 @@ def test_negative_fit_window_spans_scattered_negatives(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = derive_negative_fit_avoidance_context(inputs)
+    ctx = assess_negative_fit_avoidance(inputs).context
     assert ctx is not None
     assert ctx.risk_window_start_idx == 2
     assert ctx.risk_window_end_idx == 7
@@ -2971,7 +2970,7 @@ def test_negative_fit_context_survives_horizon_opening_mid_spill(default_config)
         slots=slots,
         config=default_config,
     )
-    ctx = derive_negative_fit_avoidance_context(inputs)
+    ctx = assess_negative_fit_avoidance(inputs).context
     assert ctx is not None
     assert ctx.risk_window_start_idx == 0
     assert ctx.risk_window_end_idx == 5
@@ -2995,7 +2994,7 @@ def test_negative_fit_window_bounded_by_recovery_deadline(default_config):
         slots=slots,
         config=default_config,
     )
-    ctx = derive_negative_fit_avoidance_context(inputs)
+    ctx = assess_negative_fit_avoidance(inputs).context
     assert ctx is not None
     assert ctx.risk_window_start_idx == 1
     assert ctx.risk_window_end_idx == 3
@@ -3016,4 +3015,4 @@ def test_negative_fit_context_none_when_no_positive_slot_in_window(default_confi
         slots=slots,
         config=default_config,
     )
-    assert derive_negative_fit_avoidance_context(inputs) is None
+    assert assess_negative_fit_avoidance(inputs).context is None
