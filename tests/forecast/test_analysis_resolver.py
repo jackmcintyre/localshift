@@ -127,69 +127,6 @@ class TestConfidenceResolver:
         )
         assert conf == pytest.approx(0.5)
 
-    def test_get_analysis_for_period_today(self):
-        """Test get_analysis_for_period returns today's analysis."""
-        today_analysis = SolcastAnalysis(
-            entity_id="today",
-            last_updated=datetime.now(timezone.utc),
-            day_confidence=0.8,
-            day_spread_kwh=0,
-            estimate10_kwh=0,
-            estimate90_kwh=0,
-            intervals=[
-                ConfidenceInterval(
-                    period_start=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
-                    spread_kwh=0,
-                    confidence=0.9,
-                ),
-            ],
-        )
-        resolver = ConfidenceResolver(today_analysis, None)
-        analysis = resolver.get_analysis_for_period(
-            datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc)
-        )
-        assert analysis == today_analysis
-
-    def test_get_analysis_for_period_tomorrow(self):
-        """Test get_analysis_for_period returns tomorrow's analysis."""
-        tomorrow_analysis = SolcastAnalysis(
-            entity_id="tomorrow",
-            last_updated=datetime.now(timezone.utc),
-            day_confidence=0.3,
-            day_spread_kwh=0,
-            estimate10_kwh=0,
-            estimate90_kwh=0,
-            intervals=[
-                ConfidenceInterval(
-                    period_start=datetime(2026, 3, 20, 10, 0, tzinfo=timezone.utc),
-                    spread_kwh=0,
-                    confidence=0.4,
-                ),
-            ],
-        )
-        resolver = ConfidenceResolver(None, tomorrow_analysis)
-        analysis = resolver.get_analysis_for_period(
-            datetime(2026, 3, 20, 10, 0, tzinfo=timezone.utc)
-        )
-        assert analysis == tomorrow_analysis
-
-    def test_get_analysis_for_period_no_match(self):
-        """Test get_analysis_for_period returns today when no match."""
-        today_analysis = SolcastAnalysis(
-            entity_id="today",
-            last_updated=datetime.now(timezone.utc),
-            day_confidence=0.6,
-            day_spread_kwh=0,
-            estimate10_kwh=0,
-            estimate90_kwh=0,
-            intervals=[],
-        )
-        resolver = ConfidenceResolver(today_analysis, None)
-        analysis = resolver.get_analysis_for_period(
-            datetime(2026, 3, 19, 15, 0, tzinfo=timezone.utc)
-        )
-        assert analysis == today_analysis
-
 
 # ─── absent_confidence threading tests ─────────────────────────────────────
 

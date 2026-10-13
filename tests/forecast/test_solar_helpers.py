@@ -9,7 +9,6 @@ import pytest
 from custom_components.localshift.forecast.solar import (
     _normalize_slot_time,
     _process_forecast_entry,
-    _get_period_estimate,
     _log_debug_forecast_entries,
     _log_debug_matched_entries,
     _parse_forecast_dt,
@@ -383,58 +382,6 @@ class TestNormalizeSlotTime:
         result = _normalize_slot_time(slot_start)
 
         assert result.tzinfo is not None
-
-
-class TestGetPeriodEstimate:
-    """Tests for _get_period_estimate helper."""
-
-    def test_pv_estimate_primary(self):
-        """Use pv_estimate as primary value."""
-        entry = {"pv_estimate": 2.0, "pv_estimate10": 1.0}
-
-        result = _get_period_estimate(entry)
-
-        assert result == 2.0
-
-    def test_estimate_fallback(self):
-        """Fall back to estimate if pv_estimate missing."""
-        entry = {"estimate": 1.8, "pv_estimate10": 1.0}
-
-        result = _get_period_estimate(entry)
-
-        assert result == 1.8
-
-    def test_pv_estimate10_fallback(self):
-        """Fall back to pv_estimate10 if others missing."""
-        entry = {"pv_estimate10": 1.0}
-
-        result = _get_period_estimate(entry)
-
-        assert result == 1.0
-
-    def test_estimate10_fallback(self):
-        """Fall back to estimate10 if others missing."""
-        entry = {"estimate10": 0.9}
-
-        result = _get_period_estimate(entry)
-
-        assert result == 0.9
-
-    def test_zero_fallback(self):
-        """Return 0.0 if no estimate fields present."""
-        entry = {}
-
-        result = _get_period_estimate(entry)
-
-        assert result == 0.0
-
-    def test_none_values_skipped(self):
-        """Skip None values and use next available."""
-        entry = {"pv_estimate": None, "estimate": None, "pv_estimate10": 1.0}
-
-        result = _get_period_estimate(entry)
-
-        assert result == 1.0
 
 
 class TestProcessForecastEntry:
