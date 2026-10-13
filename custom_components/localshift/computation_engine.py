@@ -1079,21 +1079,6 @@ class ComputationEngine:
         """
         return self._history_fetcher.get_cached_hourly_averages()
 
-    def _get_profile_for_day(
-        self, target_date: datetime
-    ) -> tuple[dict[int, float], dict[int, int], str]:
-        """Get day-aware consumption profile based on target day's day-of-week.
-
-        Args:
-            target_date: The date to get the profile for
-
-        Returns:
-            Tuple of (hourly_avg_kw, sample_counts, source) where source is
-            "weekday", "weekend", or "combined" (fallback).
-
-        """
-        return self._history_fetcher.get_profile_for_day(target_date)
-
     def _parse_time_option(self, key: str, default: str) -> time:
         """Parse a time string option (HH:MM:SS) into a time object."""
         time_str = str(self.entry.options.get(key, default))

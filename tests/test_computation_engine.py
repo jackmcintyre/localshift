@@ -845,14 +845,6 @@ class TestComputationEngineDelegations:
         assert computation_engine._recent_load_1hr_samples == 7
         assert computation_engine._recent_load_1hr_last_error == ""
 
-    def test_get_profile_for_day_delegates(self, computation_engine):
-        """Profile selection should delegate to history fetcher."""
-        computation_engine._history_fetcher.get_profile_for_day = MagicMock(
-            return_value=({1: 0.2}, {1: 3}, "weekday")
-        )
-        result = computation_engine._get_profile_for_day(datetime(2026, 2, 12))
-        assert result == ({1: 0.2}, {1: 3}, "weekday")
-
     def test_compute_derived_values_wires_daily_profiles_into_forecaster(
         self, computation_engine, coordinator_data
     ):

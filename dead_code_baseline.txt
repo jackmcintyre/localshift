@@ -50,7 +50,6 @@ function     engine/optimizer_runner.py  run_optimizer  # module docstring says 
 function     engine/price_calculator.py  get_price_for_slot_with_source
 function     forecast/solar.py  _get_period_estimate
 function     forecast/solcast_analysis.py  compute_weighted_confidence
-method       computation_engine.py  ComputationEngine._get_profile_for_day
 method       config_flow/__init__.py  LocalShiftConfigFlow._get_notify_services
 method       config_flow/__init__.py  LocalShiftConfigFlow._validate_entities
 method       config_flow/__init__.py  LocalShiftConfigFlow._validate_notify_service
