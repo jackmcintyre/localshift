@@ -141,7 +141,7 @@ The following workflows run on PRs:
 1. **Lint** (`.github/workflows/lint.yml`)
    - ruff lint check
    - ruff format check
-   - vulture (dead code)
+   - dead-code ratchet (`scripts/dead_code_gate.py`, blocking; see "Dead-code ratchet" in `docs/DEVELOPER_GUIDE.md`)
    - bandit (security)
    - pyright (types, non-blocking)
    - interrogate (docstrings)

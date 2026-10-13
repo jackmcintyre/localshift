@@ -23,6 +23,9 @@ include = ["custom_components.localshift*"]
 line-length = 88
 target-version = "py313"
 preview = true
+# vulture_whitelist.py is vulture input, not code: a list of bare attribute
+# expressions that ruff reads as F821/B018 on every line (issue #1073).
+extend-exclude = ["vulture_whitelist.py"]
 
 [tool.ruff.lint]
 select = [
@@ -37,8 +40,14 @@ select = [
 
 
 [tool.vulture]
-min_confidence = 80
-paths = ["custom_components/localshift"]
+# Dead-code ratchet (issue #986). The blocking check is
+# `uv run python scripts/dead_code_gate.py`, which reads this table; see
+# docs/DEVELOPER_GUIDE.md, "Dead-code ratchet". A bare `uv run vulture` uses
+# the same settings and is RED BY DESIGN: it prints the baseline (plus the
+# `_attr_*` / `async_step_*` names the gate scopes itself). The gate script
+# is the pass/fail.
+min_confidence = 60
+paths = ["custom_components/localshift", "vulture_whitelist.py"]
 exclude = ["tests/"]
 
 [tool.deptry]
