@@ -307,6 +307,7 @@ class TestUnchangedPlans:
         assert after.decisions == before.decisions
         assert after.next_window_tail_start_idx is None
 
+    @pytest.mark.allow_swallowed_failure("next_window_tail")
     def test_tail_failure_keeps_the_main_plan(self):
         slots = _slots(_PRE_DW_START, _HORIZON_END)
         before = _plan(slots, gap_min=None)
@@ -855,6 +856,7 @@ class TestStatusTelemetry:
         assert result.next_window_tail_status == "solve_unsuccessful"
         assert result.decisions == before.decisions
 
+    @pytest.mark.allow_swallowed_failure("next_window_tail")
     def test_failed(self):
         slots = _slots(_PRE_DW_START, _HORIZON_END)
         with patch.object(
@@ -935,6 +937,7 @@ class TestTailFailureLogging:
         ):
             return _plan(slots, gap_min=30.0)
 
+    @pytest.mark.allow_swallowed_failure("next_window_tail")
     def test_a_different_failure_the_same_day_is_a_warning_again(self, caplog):
         """Once a day is per failure, not per day: a second bug must not hide
         behind the first one's DEBUG repeats."""
@@ -965,6 +968,7 @@ class TestTailFailureLogging:
         ]
         assert all(r.exc_info for r in records)
 
+    @pytest.mark.allow_swallowed_failure("next_window_tail")
     def test_a_failure_whose_message_keeps_changing_is_capped(self, caplog):
         """A message carrying a number that moves every replan would otherwise
         be a WARNING every five minutes, which is what once-a-day prevents."""
@@ -982,6 +986,7 @@ class TestTailFailureLogging:
         assert len(warnings) == core._TAIL_FAILURE_MAX_WARNINGS_PER_DAY
         assert all(r.levelno == logging.DEBUG for r in records[len(warnings) :])
 
+    @pytest.mark.allow_swallowed_failure("next_window_tail")
     def test_warning_once_a_day_with_traceback_then_debug(self, caplog):
         import logging
 

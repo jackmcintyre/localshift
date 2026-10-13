@@ -39,6 +39,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.const import (
@@ -218,6 +219,7 @@ class TestPrechargeBackstop:
         assert data.active_mode == BatteryMode.SELF_CONSUMPTION
         assert data.optimizer_precharge_backstop_active is False
 
+    @pytest.mark.allow_swallowed_failure("precharge_backstop")
     def test_backstop_check_never_raises(self) -> None:
         """A malformed plan/result must degrade to "no backstop", not kill the cycle."""
         facade = OptimizerFacade()
@@ -748,6 +750,7 @@ class TestRunwayBackstop:
             is None
         )
 
+    @pytest.mark.allow_swallowed_failure("runway_backstop")
     def test_runway_check_never_raises(self) -> None:
         """A malformed SOC must degrade to "no backstop", not kill the cycle."""
         facade = OptimizerFacade()

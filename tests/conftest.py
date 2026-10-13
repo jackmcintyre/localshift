@@ -55,6 +55,7 @@ from custom_components.localshift.const import (
     CONF_PRICING_PRICE_SPIKE,
 )
 from custom_components.localshift.coordinator import CoordinatorData
+from tests import swallow_tripwire
 
 # Import realistic HA state simulation
 from tests.fixtures.ha_entities import (
@@ -68,6 +69,73 @@ from tests.fixtures.ha_entities import (
     create_unavailable_entity_states,
     create_unknown_entity_states,
 )
+
+# =============================================================================
+# SWALLOWED-FAILURE TRIPWIRE
+# =============================================================================
+# See tests/swallow_tripwire.py for what this guards and how it detects.
+
+# ``pytester`` runs a pytest session inside a test: the tripwire's own tests
+# (tests/test_swallow_tripwire.py) use it to prove the tripwire fails a test.
+pytest_plugins = ("pytester",)
+
+_TRIPWIRE_HITS = pytest.StashKey[list]()
+_TRIPWIRE_JUDGED = pytest.StashKey[int]()
+
+
+def _tripwire_allowed(item: pytest.Item) -> set[str]:
+    return {
+        str(arg)
+        for mark in item.iter_markers(swallow_tripwire.MARKER)
+        for arg in mark.args
+    }
+
+
+@pytest.fixture(autouse=True)
+def swallowed_failure_tripwire(request):
+    """Fail any test during which a guarded ``except`` swallowed a failure.
+
+    Opt in with ``@pytest.mark.allow_swallowed_failure("<path>")``. The body of
+    the test is judged in ``pytest_runtest_call`` below, so the result is an
+    ordinary test failure (and ``xfail`` sees it); only a trip during teardown
+    is reported from here.
+    """
+    hits = swallow_tripwire.begin()
+    request.node.stash[_TRIPWIRE_HITS] = hits
+    try:
+        yield
+    finally:
+        swallow_tripwire.end(hits)
+    judged = request.node.stash.get(_TRIPWIRE_JUDGED, 0)
+    problem = swallow_tripwire.verdict(
+        hits[judged:], _tripwire_allowed(request.node), final=False
+    )
+    if problem:
+        pytest.fail(problem, pytrace=False)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item: pytest.Item):
+    """Judge the tripwire once the test body has run and passed.
+
+    A test that already failed keeps its own failure: the ``yield`` re-raises
+    and nothing is added on top.
+    """
+    hits = item.stash.get(_TRIPWIRE_HITS, None)
+    try:
+        result = yield
+    finally:
+        # Whatever happened in the body has now been judged or superseded by
+        # the body's own failure; teardown only looks at what comes after.
+        if hits is not None:
+            item.stash[_TRIPWIRE_JUDGED] = len(hits)
+    if hits is not None:
+        problem = swallow_tripwire.verdict(hits, _tripwire_allowed(item), final=True)
+        if problem:
+            pytest.fail(problem, pytrace=False)
+    # A pluggy wrapper hands the wrapped result back by returning it.
+    return result  # noqa: B901
+
 
 # =============================================================================
 # PERFORMANCE FIXTURES

@@ -71,6 +71,10 @@ python_functions = ["test_*"]
 addopts = "-v --tb=short"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "allow_swallowed_failure(path, ...): this test means to reach the named swallow-and-continue except block(s); see tests/swallow_tripwire.py",
+  "replay_baseline: planner replay-baseline comparison (simulations/plan-baseline)",
+]
 
 [tool.coverage.report]
 exclude_lines = [
