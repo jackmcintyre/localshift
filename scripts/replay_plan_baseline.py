@@ -49,7 +49,8 @@ A run is byte-identical to the last one, in any capture order:
 
 * every clock the planning path reads is pinned to the capture's own instant
   (``pinned_clock``), including two it reads directly off the wall clock, and
-  Home Assistant's default time zone is pinned to UTC;
+  Home Assistant's default time zone and the process's own are pinned to the
+  live system's, Australia/Sydney;
 * every (capture, arm) gets a fresh engine and fresh coordinator data, so
   nothing carries over between replays;
 * a fresh ``CoordinatorData`` reports a forecast horizon of 0.0 hours, which
@@ -76,14 +77,17 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -103,6 +107,8 @@ BASELINE_DIR = SIMULATIONS / "plan-baseline"
 CAPTURE_DIRS = ("scenarios", "replay", "replay-nodw", "replay-1119", "replay-1120")
 
 FORMAT_VERSION = 1
+# The zone the live system runs in, and so the one every replay runs in.
+LIVE_TIME_ZONE = ZoneInfo("Australia/Sydney")
 _REAL_DATETIME = datetime
 
 # Strict demand-window entry on the live tuning of 2026-09-08 (read off
@@ -198,7 +204,6 @@ DATA_FIELDS = (
     "debug_mode_source",
     "debug_forecast_slot_found",
     "optimizer_last_apply_status",
-    "optimizer_safety_block_reason",
     "optimizer_apply_plan",
 )
 
@@ -339,6 +344,22 @@ def _pinned_datetime(instant: datetime) -> type:
 
 
 @contextmanager
+def _process_time_zone(name: str) -> Iterator[None]:
+    """Run the block with the C library's local zone set to ``name``."""
+    previous = os.environ.get("TZ")
+    os.environ["TZ"] = name
+    time.tzset()
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        time.tzset()
+
+
+@contextmanager
 def pinned_clock(instant: datetime) -> Iterator[None]:
     """Make every clock the planning path reads say ``instant``.
 
@@ -352,16 +373,25 @@ def pinned_clock(instant: datetime) -> Iterator[None]:
       slot. Every localshift module that has imported the ``datetime`` class
       gets a pinned stand-in, wherever those calls live now or move to.
 
-    Home Assistant's default time zone is pinned to UTC as well. It is a
-    process-wide global that anything may set, the test suite runs under UTC,
-    and two hand-written scenarios (the inverted-night pair) plan differently
-    under Australia/Sydney. The machine's own time zone is not pinned and does
-    not need to be: replaying every capture with the process in UTC and in
-    Australia/Sydney gives the same bytes.
+    Home Assistant's default time zone is pinned as well, to the zone the live
+    system runs in (``LIVE_TIME_ZONE``). It is a process-wide global that
+    anything may set, and it reaches the plan in one place: the slot builder
+    converts slot times to ``ha_timezone`` to decide which fall inside the
+    demand window, and falls back to this default when a capture carries no
+    ``ha_timezone`` of its own. Two captures do not (the inverted-night
+    scenarios); left on the suite's UTC default they are replayed in a state
+    live can never be in, and plan a 7 kWh grid import that Sydney does not.
+    The process's own time zone is pinned to the same zone, for the length of
+    the replay. ``SlotBuilder.build_slots`` converts "now" with a bare
+    ``astimezone()``, which is the zone of whichever machine is running, and
+    when the price feed does not cover "now" that value becomes the timestamp
+    of the synthetic first slot. One capture is in that state
+    (replay-1120/2026-10-04T213040), and without this pin its slot 0 reads
+    ``21:30:00+11:00`` on a laptop in Sydney and ``10:30:00+00:00`` on CI.
     """
     pinned = _pinned_datetime(instant)
     with ExitStack() as stack:
-        stack.enter_context(patch.object(dt_util, "DEFAULT_TIME_ZONE", UTC))
+        stack.enter_context(patch.object(dt_util, "DEFAULT_TIME_ZONE", LIVE_TIME_ZONE))
         dt_util.get_default_time_zone.cache_clear()
         stack.callback(dt_util.get_default_time_zone.cache_clear)
         stack.enter_context(patch("homeassistant.util.dt.now", return_value=instant))
@@ -375,6 +405,7 @@ def pinned_clock(instant: datetime) -> Iterator[None]:
                 and vars(module).get("datetime") is _REAL_DATETIME
             ):
                 stack.enter_context(patch.object(module, "datetime", pinned))
+        stack.enter_context(_process_time_zone(LIVE_TIME_ZONE.key))
         yield
 
 
@@ -690,9 +721,10 @@ def _check(captures: list[Path], stale: list[Path], full_diff: bool) -> int:
 def quiet_logging() -> None:
     """Keep the planner's narration off the terminal.
 
-    It logs every solve at INFO and WARNING, and none of that is the result.
-    The records still have to exist, because the swallowed-failure tripwire
-    reads them: so they are absorbed here rather than disabled.
+    It logs every solve at INFO and WARNING, and none of that is the result,
+    so the package's records are absorbed here instead of reaching stderr.
+    Swallowed failures are not lost with them: the tripwire notices those at
+    the log call itself (``tests/swallow_tripwire.py``), not from records.
     """
     package_logger = logging.getLogger("custom_components.localshift")
     package_logger.addHandler(logging.NullHandler())

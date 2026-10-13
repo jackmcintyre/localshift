@@ -303,6 +303,44 @@ def test_tripwire_matches_a_live_log_call(wire):
     )
 
 
+def _watched_logger_problem(wire) -> str | None:
+    """Why a tripwire is not watching the logger its module logs through."""
+    module = importlib.import_module(wire.logger)
+    if getattr(module, "_LOGGER", None) is logging.getLogger(wire.logger):
+        return None
+    return (
+        f"Tripwire '{wire.key}' wraps logging.getLogger({wire.logger!r}), but "
+        f"that module's _LOGGER is now {getattr(module, '_LOGGER', None)!r}. "
+        "Its log calls no longer pass through the wrapped logger, so the "
+        "tripwire is disarmed: point it at the logger the module really uses."
+    )
+
+
+@pytest.mark.parametrize("wire", swallow_tripwire.TRIPWIRES, ids=lambda wire: wire.key)
+def test_tripwire_watches_the_logger_the_module_logs_through(wire):
+    assert _watched_logger_problem(wire) is None
+
+
+@pytest.mark.parametrize(
+    "rebound",
+    [
+        lambda name: logging.getLogger(f"{name}.detail"),
+        lambda name: logging.LoggerAdapter(logging.getLogger(name), {}),
+    ],
+    ids=["child logger", "adapter"],
+)
+def test_a_rebound_module_logger_is_caught(monkeypatch, rebound):
+    """Rebinding ``_LOGGER`` would bypass the wrappers without a sound."""
+    wire = swallow_tripwire.TRIPWIRES[0]
+    module = importlib.import_module(wire.logger)
+    monkeypatch.setattr(module, "_LOGGER", rebound(wire.logger))
+
+    problem = _watched_logger_problem(wire)
+
+    assert problem is not None
+    assert "disarmed" in problem
+
+
 def test_tripwire_keys_are_unique():
     keys = [wire.key for wire in swallow_tripwire.TRIPWIRES]
     assert len(keys) == len(set(keys))

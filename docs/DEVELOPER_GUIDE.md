@@ -186,6 +186,98 @@ Key files:
 - `engine/cost.py` — Cost functions
 - `engine/types.py` — Type definitions
 
+### Proving a change is behaviour-neutral
+
+For dead-code removal, refactors and renames: changes that are meant to leave
+every plan and every command exactly as they were. Passing tests are not
+enough evidence here, for two reasons this repo has already paid for.
+
+- **The plan and command paths catch broadly and carry on.** A removed
+  constructor argument once made the inline optimizer raise on every cycle;
+  `OptimizerFacade.run_inline` logged a warning and the suite stayed green.
+- **Name-based "is it used?" analysis is unsound.** `SlotBuilder` reaches the
+  facade as an injected class reference, and the state machine dispatches
+  through string tables (`MODE_CONFIG_BUILDERS`, `MODE_EXECUTORS`) and
+  `getattr`. A `grep` for the call site finds nothing and proves nothing.
+
+Two gates cover it, and both run in CI (the second as its own workflow,
+`Replay baseline`).
+
+**1. The swallowed-failure tripwire** (`tests/swallow_tripwire.py`, wired in
+`tests/conftest.py`). Any test during which a guarded `except` block catches
+and logs a failure fails, naming the block and what was swallowed. It needs
+nothing from you unless a test is *about* that failure path, in which case it
+says so:
+
+```python
+@pytest.mark.allow_swallowed_failure("inline_optimizer")
+def test_run_inline_logs_and_swallows_unexpected_exception(): ...
+```
+
+An opt-in that the test never reaches fails too. If the tripwire fires on a
+test you did not expect, do not add the marker to make it pass: either the
+change broke something the production code hid, or the test's fixture was
+already broken and nobody could tell. The guarded blocks are listed in
+`TRIPWIRES`; add one when you add a swallow-and-continue `except` on the plan
+or command path.
+
+**2. The planner replay baseline** (`scripts/replay_plan_baseline.py`,
+baseline in `simulations/plan-baseline/`). Every tracked capture under
+`simulations/` is replayed through `ComputationEngine.compute_derived_values`
+under two configurations, and the plan (every slot's action, SOC and inputs,
+the commanded mode, the published summary) is compared with the checked-in
+one.
+
+```bash
+uv run scripts/replay_plan_baseline.py           # compare; exit 1 and a diff on any change (about 45 s)
+uv run scripts/replay_plan_baseline.py --write   # regenerate the baseline
+```
+
+How a deletion PR uses it:
+
+1. Before touching anything, run the comparison on a clean checkout of
+   `main`. It must report `plans identical`. If it does not, stop: the
+   baseline is stale and that is somebody else's change to explain.
+2. Make the deletion. Run the comparison again. It must still report
+   `plans identical`, with no baseline file modified. Quote that line in the
+   PR.
+3. If it reports a difference, the deletion was not dead code. Do not
+   regenerate the baseline to make it pass.
+
+A PR that *means* to change plans runs `--write` and commits the result; the
+baseline diff is then the reviewable statement of what changed, slot by slot.
+CI runs the full comparison on every PR (`.github/workflows/replay-baseline.yml`),
+so all 84 captures are enforced, on Linux, not only on the machine that wrote
+the baseline. `tests/test_replay_plan_baseline.py` also runs four captures of
+it inside the test suite (about three seconds), so a moved plan shows up in an
+ordinary local `pytest` run too.
+
+The replay pins every clock, Home Assistant's default time zone and the
+process's own time zone (all to Australia/Sydney, where the live system runs),
+and is byte-identical from run to run on the same code. Add a capture to one
+of the tracked directories and run `--write` to bring it under the gate.
+
+**What "plans identical" does not prove.** It is evidence about the path the
+replay drives, and that path has gaps:
+
+- **Hour-of-day load profiles are not exercised.** The replay empties the
+  load history, so every forecast falls back to the recent-load figure. A
+  deletion in `forecast/load.py`, `forecast/history.py` or the weekday,
+  weekend and per-day profile code would leave every plan untouched and still
+  be wrong. Those need their own tests.
+- **The decision-token gate is not covered.** Each replayed cycle is handed a
+  decision grant (`mode_decision_allowed=True`), so the commanded mode is what
+  the facade commits when it is allowed to decide. Whether the state machine
+  grants a decision at the right moments, and what is held while it does not,
+  is outside the replay.
+- **Nothing downstream of the plan is covered**: the state machine's
+  transitions, debounce, the commands sent to the battery, sensors and
+  services. The tripwire's `mode_transition` path and the state tests are the
+  cover there.
+- **It is 84 instants.** A code path none of them reaches is not held still
+  by any of this. The swallowed-failure column narrows that (a path that
+  newly fails is seen even if the plan survives), but does not close it.
+
 ### Changing Evaluation Triggers
 
 Evaluation triggers are defined in `services/evaluation_dispatcher.py`:
@@ -286,75 +378,6 @@ uv run pytest -vvs
 ```
 
 See [tests/AGENTS.md](tests/AGENTS.md) for test patterns.
-
-### Proving a change is behaviour-neutral
-
-For dead-code removal, refactors and renames: changes that are meant to leave
-every plan and every command exactly as they were. Passing tests are not
-enough evidence here, for two reasons this repo has already paid for.
-
-- **The plan and command paths catch broadly and carry on.** A removed
-  constructor argument once made the inline optimizer raise on every cycle;
-  `OptimizerFacade.run_inline` logged a warning and the suite stayed green.
-- **Name-based "is it used?" analysis is unsound.** `SlotBuilder` reaches the
-  facade as an injected class reference, and the state machine dispatches
-  through string tables (`MODE_CONFIG_BUILDERS`, `MODE_EXECUTORS`) and
-  `getattr`. A `grep` for the call site finds nothing and proves nothing.
-
-Two gates cover it. Both run in CI; a deletion PR also runs the second one in
-full, locally.
-
-**1. The swallowed-failure tripwire** (`tests/swallow_tripwire.py`, wired in
-`tests/conftest.py`). Any test during which a guarded `except` block catches
-and logs a failure fails, naming the block and what was swallowed. It needs
-nothing from you unless a test is *about* that failure path, in which case it
-says so:
-
-```python
-@pytest.mark.allow_swallowed_failure("inline_optimizer")
-def test_run_inline_logs_and_swallows_unexpected_exception(): ...
-```
-
-An opt-in that the test never reaches fails too. If the tripwire fires on a
-test you did not expect, do not add the marker to make it pass: either the
-change broke something the production code hid, or the test's fixture was
-already broken and nobody could tell. The guarded blocks are listed in
-`TRIPWIRES`; add one when you add a swallow-and-continue `except` on the plan
-or command path.
-
-**2. The planner replay baseline** (`scripts/replay_plan_baseline.py`,
-baseline in `simulations/plan-baseline/`). Every tracked capture under
-`simulations/` is replayed through `ComputationEngine.compute_derived_values`
-under two configurations, and the plan (every slot's action, SOC and inputs,
-the commanded mode, the published summary) is compared with the checked-in
-one.
-
-```bash
-uv run scripts/replay_plan_baseline.py           # compare; exit 1 and a diff on any change (about 45 s)
-uv run scripts/replay_plan_baseline.py --write   # regenerate the baseline
-```
-
-How a deletion PR uses it:
-
-1. Before touching anything, run the comparison on a clean checkout of
-   `main`. It must report `plans identical`. If it does not, stop: the
-   baseline is stale and that is somebody else's change to explain.
-2. Make the deletion. Run the comparison again. It must still report
-   `plans identical`, with no baseline file modified. Quote that line in the
-   PR.
-3. If it reports a difference, the deletion was not dead code. Do not
-   regenerate the baseline to make it pass.
-
-A PR that *means* to change plans runs `--write` and commits the result; the
-baseline diff is then the reviewable statement of what changed, slot by slot.
-`tests/test_replay_plan_baseline.py` runs three captures of the comparison on
-every test run (about two seconds) and fails CI if any of the three plans
-moves. That is a smoke check, not the proof: only the full script covers all
-84 captures, and CI does not run it.
-
-The replay pins every clock and Home Assistant's default time zone, and is
-byte-identical from run to run on the same code. Add a capture to one of the
-tracked directories and run `--write` to bring it under the gate.
 
 ## Architecture Overview
 

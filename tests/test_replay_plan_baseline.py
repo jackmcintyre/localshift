@@ -1,16 +1,19 @@
 """The planner replay baseline (scripts/replay_plan_baseline.py), held in CI.
 
 The full comparison is a script run: 84 captures under two arms takes about
-45 seconds, too slow for every test run. What runs here is a three-capture
-subset chosen to cover the three things the planner does that matter most (a
-grid pre-charge ahead of the demand window, a spike export, a boost charge on
-a hand-written scenario), plus the checks that make the baseline trustworthy:
+45 seconds, too slow for every test run. CI runs it as its own workflow
+(``.github/workflows/replay-baseline.yml``). What runs here is a four-capture
+subset (a grid pre-charge ahead of the demand window, a spike export, a boost
+charge on a hand-written scenario, and the one capture whose first slot is
+synthetic), plus the checks that make the baseline trustworthy:
 
 * it notices. The historical failure (a constructor argument removed from
   ``SlotBuilder``, swallowed by the facade) and a quiet change to a plan both
   have to come out as a readable diff;
 * it is complete: every tracked capture has a baseline and nothing else does;
 * the files are exactly what the script writes, so a hand edit cannot pass;
+* it does not depend on the time zone of the machine replaying it, or on
+  Home Assistant's default zone, and records nothing scheduled for deletion;
 * the script reaches the engine only through ``compute_derived_values``, so
   it keeps working, unchanged, while the code around it is deleted.
 """
@@ -19,9 +22,12 @@ from __future__ import annotations
 
 import ast
 import json
+import time
+from datetime import UTC
 from pathlib import Path
 
 import pytest
+from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.engine.slots import SlotBuilder
 from scripts import replay_plan_baseline as rpb
@@ -31,7 +37,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PRECHARGE_DAY = "simulations/replay/2026-08-25.json"
 SPIKE_INSTANT = "simulations/replay-1119/2026-10-12T151530.json"
 BOOST_SCENARIO = "simulations/scenarios/cloudy-day.json"
-CI_SUBSET = (PRECHARGE_DAY, SPIKE_INSTANT, BOOST_SCENARIO)
+# The price feed starts after "now", so slot 0 is synthesised from the clock.
+SYNTHETIC_SLOT = "simulations/replay-1120/2026-10-04T213040.json"
+# No ``ha_timezone`` of its own: the demand window falls back to HA's default.
+NO_ZONE_SCENARIO = "simulations/scenarios/inverted-night.json"
+CI_SUBSET = (PRECHARGE_DAY, SPIKE_INSTANT, BOOST_SCENARIO, SYNTHETIC_SLOT)
 
 
 @pytest.mark.replay_baseline
@@ -45,6 +55,44 @@ def test_plan_matches_baseline(capture):
         "`uv run scripts/replay_plan_baseline.py --write` and commit the diff. "
         "If it is not, it is not behaviour-neutral."
     )
+
+
+class TestTheReplayIgnoresWhereItRuns:
+    """Written on a laptop in Sydney, checked on CI in UTC: same bytes."""
+
+    @pytest.fixture
+    def machine_zone(self, monkeypatch):
+        def set_zone(name: str) -> None:
+            monkeypatch.setenv("TZ", name)
+            time.tzset()
+
+        yield set_zone
+        monkeypatch.undo()
+        time.tzset()
+
+    @pytest.mark.parametrize("zone", ["UTC", "America/New_York"])
+    def test_the_machine_time_zone_does_not_reach_the_plan(self, machine_zone, zone):
+        """``SlotBuilder`` stamps a synthetic slot 0 with the machine's zone."""
+        machine_zone(zone)
+        assert rpb.compare(REPO_ROOT / SYNTHETIC_SLOT) == []
+
+    def test_the_machine_time_zone_is_put_back(self, machine_zone):
+        machine_zone("America/New_York")
+        rpb.compare(REPO_ROOT / SYNTHETIC_SLOT)
+        assert time.tzname[0] == "EST"
+
+    def test_home_assistants_default_zone_does_not_reach_the_plan(self, monkeypatch):
+        """The suite's default is UTC; live is Sydney; a test may leave either."""
+        monkeypatch.setattr(dt_util, "DEFAULT_TIME_ZONE", UTC)
+        assert rpb.compare(REPO_ROOT / NO_ZONE_SCENARIO) == []
+
+    def test_the_replay_runs_in_the_live_zone(self):
+        assert rpb.LIVE_TIME_ZONE.key == "Australia/Sydney"
+        capture = REPO_ROOT / NO_ZONE_SCENARIO
+        document = json.loads(rpb.baseline_path(capture).read_text())
+        # Under UTC this scenario plans about 7 kWh of grid import, a state
+        # the live system cannot be in.
+        assert document["arms"]["captured"]["result"]["projected_import_kwh"] == 0.0
 
 
 class TestTheBaselineNotices:
@@ -149,6 +197,87 @@ class TestTheBaselineIsComplete:
                     without_plan.append(path.name)
                     assert record["commanded_mode"] == "manual", (path.name, arm)
         assert sorted(set(without_plan)) == ["manual-override-bypass.json"]
+
+
+DEAD_CODE_BASELINE = REPO_ROOT / "dead_code_baseline.txt"
+
+
+def _dead_names(text: str) -> dict[str, str]:
+    """Leaf names in a dead-code baseline, each with the line that lists it.
+
+    Lines read ``<kind> <file> <qualified name>  [# note]``; the leaf of
+    ``data.optimizer_safety_block_reason@2`` is ``optimizer_safety_block_reason``.
+    """
+    names: dict[str, str] = {}
+    for line in text.splitlines():
+        entry = line.split("#", 1)[0].split()
+        if len(entry) < 3:
+            continue
+        leaf = entry[2].rsplit(".", 1)[-1].split("@", 1)[0]
+        names.setdefault(leaf, " ".join(entry))
+    return names
+
+
+def _keys(value, found: set[str]) -> None:
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            found.add(key)
+            _keys(inner, found)
+    elif isinstance(value, list):
+        for inner in value:
+            _keys(inner, found)
+
+
+def _recorded_names() -> set[str]:
+    """Every field name the baseline holds still, in the script or on disk."""
+    found = set(rpb.DATA_FIELDS) | set(rpb.DECISION_COLUMNS)
+    for path in sorted(rpb.BASELINE_DIR.glob("*/*.json")):
+        for record in json.loads(path.read_text())["arms"].values():
+            for section in ("result", "summary", "data"):
+                _keys(record[section], found)
+    return found
+
+
+class TestTheBaselineRecordsNothingScheduledForDeletion:
+    """A field on the dead-code list must not be part of the before-state.
+
+    If it were, the PR that deletes it would change every baseline file, and
+    "plans identical" could not be shown for exactly the change it exists to
+    cover. ``optimizer_safety_block_reason`` was recorded at first and would
+    have flipped ``"" -> null`` in all 168 records.
+    """
+
+    def test_dead_names_are_read_from_the_baseline_format(self):
+        names = _dead_names(
+            "# comment\n"
+            "\n"
+            "attribute    engine/optimizer_facade.py  data.optimizer_safety_block_reason@2\n"
+            "unread-field coordinator/data.py  CoordinatorData.spike_end_time  # note\n"
+            "function     engine/optimizer_runner.py  run_optimizer\n"
+        )
+        assert set(names) == {
+            "optimizer_safety_block_reason",
+            "spike_end_time",
+            "run_optimizer",
+        }
+
+    def test_the_recorded_names_cover_all_three_sections(self):
+        recorded = _recorded_names()
+        assert "dw_entry_soc_pct" in recorded
+        assert "planner_export_floor_pct" in recorded
+        assert "predicted_soc_pct" in recorded
+        assert "optimizer_safety_block_reason" not in recorded
+
+    def test_no_recorded_field_is_on_the_dead_code_list(self):
+        if not DEAD_CODE_BASELINE.exists():
+            pytest.skip("dead_code_baseline.txt is not on this branch yet")
+        dead = _dead_names(DEAD_CODE_BASELINE.read_text())
+        overlap = {name: dead[name] for name in sorted(_recorded_names() & set(dead))}
+        assert not overlap, (
+            "The replay baseline records fields that are scheduled for deletion: "
+            f"{overlap}. Drop them from scripts/replay_plan_baseline.py and "
+            "regenerate, or the PR that deletes them cannot show identical plans."
+        )
 
 
 def test_the_script_reaches_the_engine_only_through_the_cycle_entry_point():
