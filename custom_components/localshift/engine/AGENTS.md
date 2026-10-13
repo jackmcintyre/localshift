@@ -13,7 +13,7 @@ terminal_cost()    → What MUST I achieve? (deadline)
 | File | Purpose |
 |------|---------|
 | `optimizer_facade.py` | **Live entry point.** `OptimizerFacade.run_inline` is what `computation_engine.py` calls every cycle: builds slots, runs the planner, writes the `optimizer_*` fields, runs the shadow comparison. Change execution behaviour here |
-| `optimizer_runner.py` | Helpers the facade imports: `_build_optimizer_config`, `_build_summary`, `OptimizerSafetyGate`, result serialization. Its own `run_optimizer` entry point is not called by the integration |
+| `optimizer_runner.py` | Helpers, no entry point: `_build_optimizer_config`, `_build_summary`, `OptimizerSafetyGate`, result serialization. Imported by `optimizer_facade.py`, `computation_engine.py` and `forecast/load_deviation.py` |
 | `core.py` | `DPPlanner`, the DP solver |
 | `constraints.py` | `feasible_actions()` and the solar gates |
 | `cost.py` | `stage_cost()` and `terminal_cost()` |

@@ -19,7 +19,7 @@ import pytest
 from custom_components.localshift.coordinator.data import CoordinatorData
 from custom_components.localshift.engine.constraints import feasible_actions
 from custom_components.localshift.engine.negative_fit import (
-    derive_negative_fit_avoidance_context,
+    assess_negative_fit_avoidance,
 )
 from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
@@ -161,7 +161,7 @@ def test_negative_fit_avoidance_export_is_not_offered_when_unavailable():
     """The avoidance branch admitted the live export; it has to honour the flag."""
     slots = _live_horizon(block_off_peak=True)
     inputs = _inputs(slots)
-    context = derive_negative_fit_avoidance_context(inputs)
+    context = assess_negative_fit_avoidance(inputs).context
     assert context is not None, "the live horizon has a negative-FIT spill ahead"
 
     blocked = feasible_actions(
@@ -178,11 +178,11 @@ def test_negative_fit_avoidance_export_is_not_offered_when_unavailable():
 
 def test_no_avoidance_context_when_every_export_chance_is_unavailable():
     slots = _live_horizon(block_off_peak=False)
-    assert derive_negative_fit_avoidance_context(_inputs(slots)) is not None
+    assert assess_negative_fit_avoidance(_inputs(slots)).context is not None
     for slot in slots:
         slot.export_available = False
 
-    assert derive_negative_fit_avoidance_context(_inputs(slots)) is None
+    assert assess_negative_fit_avoidance(_inputs(slots)).context is None
 
 
 class TestSlotBuilderFlag:

@@ -282,18 +282,6 @@ class TestSafetyGateFailureDefaultsToSelfConsumption:
             "optimizer_runtime_mode should have been removed in Phase 6 (#448)"
         )
 
-    def test_optimizer_runner_class_exists(self):
-        """OptimizerRunner (renamed) should be importable from optimizer_runner."""
-        from custom_components.localshift.engine.optimizer_runner import (
-            OptimizerSafetyGate,
-            _derive_runtime_apply_plan,
-            run_optimizer,
-        )
-
-        assert OptimizerSafetyGate is not None
-        assert _derive_runtime_apply_plan is not None
-        assert run_optimizer is not None
-
     def test_optimizer_shadow_runner_module_does_not_exist(self):
         """optimizer_shadow_runner module must not exist after Phase 6."""
         import importlib

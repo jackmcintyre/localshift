@@ -15,8 +15,6 @@ from custom_components.localshift.engine.optimizer_runner import (
     _build_optimizer_config,
     _build_summary,
     _normalize_initial_soc,
-    _validate_slot_alignment,
-    run_optimizer,
 )
 
 # ---------------------------------------------------------------------------
@@ -26,7 +24,7 @@ from custom_components.localshift.engine.optimizer_runner import (
 
 @pytest.fixture
 def mock_coordinator_data():
-    """Create mock coordinator data with typical daily_forecast slots."""
+    """Create mock coordinator data."""
 
     class MockData:
         def __init__(self):
@@ -94,41 +92,6 @@ def mock_coordinator_data():
             self.solcast_tomorrow = []
             self.load_forecast_slots = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
             self.adaptive_params = None
-            self.daily_forecast = [
-                {
-                    "timestamp_iso": "2025-01-15T06:00:00Z",
-                    "slot_interval_minutes": 30,
-                    "buy_price": 0.25,
-                    "sell_price": 0.08,
-                    "solar_kwh": 0.5,
-                    "consumption_kwh": 1.2,
-                    "is_demand_window_entry": False,
-                    "is_demand_window": False,
-                    "price_source": "5min",
-                },
-                {
-                    "timestamp_iso": "2025-01-15T06:30:00Z",
-                    "slot_interval_minutes": 30,
-                    "buy_price": 0.22,
-                    "sell_price": 0.08,
-                    "solar_kwh": 1.5,
-                    "consumption_kwh": 0.8,
-                    "is_demand_window_entry": False,
-                    "is_demand_window": False,
-                    "price_source": "5min",
-                },
-                {
-                    "timestamp_iso": "2025-01-15T07:00:00Z",
-                    "slot_interval_minutes": 30,
-                    "buy_price": 0.35,
-                    "sell_price": 0.08,
-                    "solar_kwh": 3.0,
-                    "consumption_kwh": 0.6,
-                    "is_demand_window_entry": True,
-                    "is_demand_window": True,
-                    "price_source": "5min",
-                },
-            ]
             self.optimizer_summary = None
             self.optimizer_result = None
             self.optimizer_decisions = None
@@ -241,7 +204,6 @@ class TestBuildOptimizerConfig:
         """Verify self-consumption economic inputs are mapped."""
         config = _build_optimizer_config(mock_coordinator_data, config_options)
         assert config.effective_cheap_price == pytest.approx(0.12)
-        assert config.self_consumption_value_per_kwh == pytest.approx(0.26)
         assert config.export_price_margin == pytest.approx(0.10)
 
 

@@ -347,18 +347,6 @@ def _existing_headroom_kwh(inputs: OptimizerInputs, risk_start_idx: int) -> floa
     return (config.max_soc_pct - soc_at_risk_pct) / 100.0 * battery_capacity_kwh
 
 
-def derive_negative_fit_avoidance_context(
-    inputs: OptimizerInputs,
-) -> NegativeFitAvoidanceContext | None:
-    """Derive context for recoverability-based negative-FIT avoidance.
-
-    Thin wrapper over ``assess_negative_fit_avoidance`` for callers that only
-    need the context; the planner uses the assessment so it can publish why a
-    window was dropped.
-    """
-    return assess_negative_fit_avoidance(inputs).context
-
-
 def assess_negative_fit_avoidance(inputs: OptimizerInputs) -> NegativeFitAssessment:
     """Derive the avoidance context, with the figures that explain the outcome.
 
@@ -492,38 +480,3 @@ def assess_negative_fit_avoidance(inputs: OptimizerInputs) -> NegativeFitAssessm
         recovery_solar_factor=solar_factor,
         floor_now_pct=floor_by_slot[0],
     )
-
-
-def compute_recoverability_floor_pct(
-    *,
-    slot_idx: int,
-    context: NegativeFitAvoidanceContext,
-    config: OptimizerConfig,
-) -> float:
-    """Compute the minimum SOC that still allows recovery to target.
-
-    The recoverability floor is how low SOC can go now while still being
-    able to recover to demand_window_target_soc_pct by the deadline using
-    conservative future solar estimates.
-
-    Kept in step with ``compute_floor_by_slot`` — same ``target - recoverable``
-    anchor — so the scalar and precomputed forms cannot disagree.
-
-    This is the planner-side guardrail. The Tesla-side PROACTIVE_EXPORT
-    throttling (SOC - 5%, min 4%) remains the actuator guardrail.
-    """
-    battery_capacity_kwh = config.battery_capacity_kwh
-    target_kwh = config.demand_window_target_soc_pct / 100.0 * battery_capacity_kwh
-    min_floor_kwh = config.discharge_floor_pct / 100.0 * battery_capacity_kwh
-
-    if slot_idx >= len(context.conservative_recovery_kwh_by_slot):
-        return config.demand_window_target_soc_pct
-
-    recoverable_kwh = context.conservative_recovery_kwh_by_slot[slot_idx]
-
-    floor_kwh = target_kwh - recoverable_kwh
-    floor_kwh = max(floor_kwh, min_floor_kwh)
-    floor_kwh = min(floor_kwh, target_kwh)
-
-    floor_pct = floor_kwh / battery_capacity_kwh * 100.0
-    return floor_pct

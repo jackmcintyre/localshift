@@ -194,26 +194,6 @@ def test_active_mode_forecast_driven(
         "homeassistant.util.dt.now",
         return_value=test_time,
     ):
-        # Mock forecast entry with hour/minute fields for matching
-        # Set grid_import_kwh=0 to prevent forecast-driven modes from activating
-        # (this tests the logic when forecast flags are set but conditions not met)
-        test_time_iso = test_time.isoformat()
-        coordinator_data.daily_forecast = [
-            {
-                "timestamp": test_time_iso,
-                "hour": 16,
-                "minute": 0,
-                "grid_charge_boost": grid_charge_boost,
-                "grid_charge": grid_charge,
-                "proactive_export": proactive_export,
-                "grid_import_kwh": 0.0,  # Prevent activation of forecast-driven modes
-                "export_amount_kwh": 0.0,  # Prevent proactive export activation
-                "predicted_soc": 95.0,  # SOC above target to prevent proactive export
-                "buy_price": 0.30,  # High buy price to prevent grid charging
-                "sell_price": 0.05,  # Low sell price to prevent proactive export
-            }
-        ]
-
         # Mock conditions
         coordinator_data.price_spike = price_spike
         coordinator_data.manual_override = manual_override

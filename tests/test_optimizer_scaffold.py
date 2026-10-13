@@ -378,142 +378,60 @@ def test_dp_planner_runtime_budget(multi_slots):
     )
 
 
-def test_optimizer_no_actuation():
-    """Phase 6 acceptance: optimizer execution makes zero calls to battery/state-machine actuation.
-
-    The optimizer runner produces only data mutations, never actual control commands.
-    """
-    from dataclasses import dataclass, field
-    from typing import Any
-
-    from custom_components.localshift.engine.optimizer_runner import (
-        run_optimizer,
-    )
-
-    @dataclass
-    class MockCoordinatorData:
-        soc: float = 50.0
-        daily_forecast: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_result: dict[str, Any] | None = None
-        optimizer_decisions: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_summary: dict[str, Any] = field(default_factory=dict)
-        forecast_net_cost: float = 0.0
-        forecast_import_cost: float = 0.0
-        forecast_export_revenue: float = 0.0
-
-    data = MockCoordinatorData(
-        daily_forecast=[
-            {
-                "timestamp_iso": "2026-01-03T10:00:00",
-                "slot_interval_minutes": 30,
-                "buy_price": 0.12,
-                "sell_price": 0.08,
-                "solar_kwh": 1.0,
-                "consumption_kwh": 0.5,
-            }
-        ]
-    )
-
-    # Run optimizer — should NOT call any battery/state-machine methods
-    run_optimizer(data, {})
-
-    # Verify result was produced (mutation on data)
-    assert data.optimizer_summary is not None
-    assert data.optimizer_summary.get("enabled") is True
-
-
-def test_optimizer_failure_fallback(default_config):
-    """Phase 6 acceptance: optimizer exceptions never block coordinator completion.
-
-    Error state is captured in telemetry without propagating.
-    """
-    from dataclasses import dataclass, field
-    from typing import Any
-
-    from custom_components.localshift.engine.optimizer_runner import (
-        run_optimizer,
-    )
-
-    @dataclass
-    class MockCoordinatorData:
-        soc: float = 50.0
-        daily_forecast: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_result: dict[str, Any] | None = None
-        optimizer_decisions: list[dict[str, Any]] = field(default_factory=list)
-        optimizer_summary: dict[str, Any] = field(default_factory=dict)
-        forecast_net_cost: float = 0.0
-        forecast_import_cost: float = 0.0
-        forecast_export_revenue: float = 0.0
-
-    # Empty slots — should handle gracefully
-    data = MockCoordinatorData(daily_forecast=[])
-
-    # Should not raise, even with empty slots
-    run_optimizer(data, {})
-
-    # Verify error state is captured in summary
-    assert data.optimizer_summary is not None
-    assert data.optimizer_summary.get("success") is False
-    assert "error_message" in data.optimizer_summary
-
-
-def test_optimizer_result_serialization_safe(default_config, multi_slots):
+def test_optimizer_result_serialization_safe(multi_slots):
     """Phase 6 acceptance: optimizer result is JSON-serializable for HA state attributes.
 
     All output fields must be serializable to JSON for storage in
     CoordinatorData and exposure via sensor attributes.
     """
     import json
+    from dataclasses import replace
+    from datetime import UTC, datetime
 
     from custom_components.localshift.coordinator.data import CoordinatorData
-    from custom_components.localshift.engine.optimizer_runner import (
-        run_optimizer,
-    )
+    from custom_components.localshift.engine.optimizer_facade import OptimizerFacade
+    from custom_components.localshift.engine.slots import SlotBuildMetadata
 
     # Issue #1059: a real CoordinatorData. The partial mock this test used to
     # build made the run fail on a missing attribute, so the test serialized
     # only a failure summary and an empty decision list.
-    data = CoordinatorData(
-        soc=50.0,
-        daily_forecast=[
-            {
-                "timestamp_iso": f"2026-01-03T{(i // 2):02d}:{(i % 2) * 30:02d}:00",
-                "slot_interval_minutes": 30,
-                "buy_price": 0.10 + 0.01 * (i % 10),
-                "sell_price": 0.06,
-                "solar_kwh": max(0.0, 2.5 - abs(i - 24) * 0.1),
-                "consumption_kwh": 0.35,
-            }
-            for i in range(48)
-        ]
-    )
+    data = CoordinatorData(soc=50.0)
 
-    # Slot building needs live forecast entities, so hand the runner real
+    # Slot building needs live forecast entities, so hand the facade real
     # slots; the real planner and the real serializer then produce what is
-    # checked below.
-    from unittest.mock import patch
-
-    from custom_components.localshift.engine.slots import SlotBuildMetadata
-
+    # checked below. The live slot builder emits timezone-aware timestamps
+    # and the facade's current-slot lookup requires them.
+    slots = [
+        replace(slot, timestamp_iso=f"{slot.timestamp_iso}+00:00")
+        for slot in multi_slots
+    ]
     metadata = SlotBuildMetadata(
-        total_slots=len(multi_slots),
+        total_slots=len(slots),
         five_min_slots=0,
-        thirty_min_slots=len(multi_slots),
+        thirty_min_slots=len(slots),
         horizon_hours=24.0,
         solar_confidence_factor=1.0,
         slots_with_defaulted_solar=0,
         slots_with_defaulted_price=0,
     )
-    with patch(
-        "custom_components.localshift.engine.optimizer_runner.SlotBuilder"
-    ) as mock_builder:
-        mock_builder.return_value.build_slots.return_value = (multi_slots, metadata)
-        run_optimizer(data, {})
+
+    class _RealSlots:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def build_slots(self, _data, _adaptive_params, now_dt=None):
+            return slots, metadata
+
+    OptimizerFacade(slot_builder_cls=_RealSlots).run_inline(
+        data=data,
+        now_dt=datetime(2026, 1, 3, 0, 0, tzinfo=UTC),
+        config_options={},
+    )
 
     # An empty summary and an empty decision list are trivially serializable:
     # prove the run produced a real plan before serializing it.
     assert data.optimizer_summary["success"] is True
-    assert len(data.optimizer_decisions) == len(multi_slots) == 48
+    assert len(data.optimizer_decisions) == len(slots) == 48
 
     try:
         json_str = json.dumps(data.optimizer_summary)

@@ -32,7 +32,6 @@ from custom_components.localshift.const import (
 )
 from custom_components.localshift.engine.negative_fit import (
     assess_negative_fit_avoidance,
-    derive_negative_fit_avoidance_context,
 )
 from custom_components.localshift.engine.optimizer_dp import (
     DPPlanner,
@@ -138,7 +137,7 @@ def _avoidance_exports(result) -> list[str]:
 def test_trivial_negative_window_produces_no_context_and_no_exports():
     inputs = _inputs(_horizon(TRIVIAL), min_spill_cost=MIN_SPILL_COST)
 
-    assert derive_negative_fit_avoidance_context(inputs) is None
+    assert assess_negative_fit_avoidance(inputs).context is None
 
     result = DPPlanner().plan(inputs)
     assert result.success
@@ -155,7 +154,7 @@ def test_trivial_window_is_the_only_thing_the_gate_removes():
     some other early return."""
     inputs = _inputs(_horizon(TRIVIAL), min_spill_cost=0.0)
 
-    assert derive_negative_fit_avoidance_context(inputs) is not None
+    assert assess_negative_fit_avoidance(inputs).context is not None
 
     result = DPPlanner().plan(inputs)
     assert _avoidance_exports(result) != []
@@ -165,7 +164,7 @@ def test_trivial_window_is_the_only_thing_the_gate_removes():
 def test_material_negative_window_still_pre_discharges():
     inputs = _inputs(_horizon(MATERIAL), min_spill_cost=MIN_SPILL_COST)
 
-    context = derive_negative_fit_avoidance_context(inputs)
+    context = assess_negative_fit_avoidance(inputs).context
     assert context is not None
     assert context.required_headroom_kwh > 0
 
