@@ -224,14 +224,63 @@ or command path.
 **2. The planner replay baseline** (`scripts/replay_plan_baseline.py`,
 baseline in `simulations/plan-baseline/`). Every tracked capture under
 `simulations/` is replayed through `ComputationEngine.compute_derived_values`
-under two configurations, and the plan (every slot's action, SOC and inputs,
-the commanded mode, the published summary) is compared with the checked-in
-one.
+under three arms, and the plan (every slot's action, SOC and inputs, the
+commanded mode, the published summary) is compared with the checked-in one.
 
 ```bash
-uv run scripts/replay_plan_baseline.py           # compare; exit 1 and a diff on any change (about 45 s)
+uv run scripts/replay_plan_baseline.py           # compare; exit 1 and a diff on any change (about 90 s)
 uv run scripts/replay_plan_baseline.py --write   # regenerate the baseline
 ```
+
+What each arm covers:
+
+| Arm | Inputs | What it reaches that the others do not |
+|---|---|---|
+| `captured` | The capture, with the configuration recorded in it. | The planner as each capture's own settings drive it, including under-target demand-window entry. |
+| `strict` | The capture, with strict demand-window entry and the live tuning of 2026-09-08. | The hard target floor, the urgency window, the pre-charge backstops, the next-window tail. |
+| `live_like` | The `strict` arm, plus the learned inputs the live planner always has and a bare capture lacks: a seeded `SolarAccuracyTracker`, load history, a Solcast analysis for today and tomorrow, and the day's weather. | Solar bias correction (`OptimizerFacade._apply_bias_correction_to_slots`, `SolarAccuracyTracker.apply_bias_correction` and its context ladder), the accuracy discount (`engine/solar.get_forecast_accuracy` and its readers), the accuracy confidence ceiling and the over-forecast cap, the slot builder's "correction is ready" branch, per-day and weekday/weekend load profiles (`LoadForecaster._resolve_daily_profile`, every rung), the load-forecast ceiling, and one evaluation with no decision grant (`no_grant`). |
+
+The first two arms have no tracker and no load history, so before the third
+arm existed a deletion anywhere in that last cell left `plans identical`
+untouched. The live system has 800-odd solar samples with correction active,
+so it runs that code on every cycle.
+
+The `live_like` inputs come from fixed tables at the top of the script and
+are dated from each capture's own instant; nothing is random and no clock is
+read. Its record carries a `coverage` section (how many slots bias correction
+moved, the measured accuracy, the confidence ceiling stamped, how many load
+slots each profile rung fed) and the script adds those up across the run,
+prints them, and **fails a full run that falls below `COVERAGE_FLOORS`**. An
+arm whose plans still match but which has stopped exercising the code it is
+there for is a failure, not a pass. If you change the seed tables, run
+`--write` and expect every `live_like` record to move; the first two arms
+must not.
+
+What is still **not** proven by `plans identical`, on any arm:
+
+- **The state machine and the command path.** The replay ends at the mode the
+  facade commits. `state/machine.py`, the coordinator's handlers, the mode
+  executors and anything that talks to the Powerwall are not run. The
+  `no_grant` evaluation covers the facade's side of the decision token only
+  (the mode is held, the plan's mode is published as pending); the state
+  machine's side, which decides when a grant is raised and consumes it, is
+  not.
+- **Anything that needs more than one cycle of real time.** Each replay is one
+  instant, evaluated two or three times. Dwell timers, the backstop hold
+  across cycles, the daily latch reset, the tracker's own record/backfill
+  loop and the recorder fetch that builds the load profiles are seeded or
+  skipped, not exercised.
+- **Solar confidence where the capture has no spread.** Most replay captures
+  carry a P10 equal to the median, so the confidence ceiling is stamped and
+  recorded but has nothing to blend toward. It moves plans only on the
+  captures that have a spread (the hand-written scenarios, mainly).
+- **Weather-driven load, away mode, cloud events.** No weather correlation is
+  attached, no away profile is injected, and no cloud-event scale factor is
+  set.
+- **Sensors, services, config flow, storage.** Not on this path at all.
+
+For a deletion in one of those areas, the replay passing is necessary and
+not sufficient: say in the PR what else shows the code was unreachable.
 
 How a deletion PR uses it:
 
@@ -239,8 +288,8 @@ How a deletion PR uses it:
    `main`. It must report `plans identical`. If it does not, stop: the
    baseline is stale and that is somebody else's change to explain.
 2. Make the deletion. Run the comparison again. It must still report
-   `plans identical`, with no baseline file modified. Quote that line in the
-   PR.
+   `plans identical`, with no baseline file modified. Quote that line, and the
+   `live_like coverage` block under it, in the PR.
 3. If it reports a difference, the deletion was not dead code. Do not
    regenerate the baseline to make it pass.
 
@@ -249,8 +298,12 @@ baseline diff is then the reviewable statement of what changed, slot by slot.
 CI runs the full comparison on every PR (`.github/workflows/replay-baseline.yml`),
 so all 84 captures are enforced, on Linux, not only on the machine that wrote
 the baseline. `tests/test_replay_plan_baseline.py` also runs four captures of
-it inside the test suite (about three seconds), so a moved plan shows up in an
-ordinary local `pytest` run too.
+it, under all three arms, inside the test suite (about five seconds), so a
+moved plan shows up in an ordinary local `pytest` run too. The same file
+checks that the `live_like` arm is sensitive to its seeds (halving the seeded
+solar bias, swapping the weekday and weekend load shapes, or never attaching
+the tracker each change a plan) and that the script names nothing on the
+dead-code list.
 
 The replay pins every clock, Home Assistant's default time zone and the
 process's own time zone (all to Australia/Sydney, where the live system runs),
