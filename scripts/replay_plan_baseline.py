@@ -24,7 +24,7 @@ Each cycle is given a decision grant, as the state machine gives one when the
 price or window context moves, so the commanded mode recorded is the one the
 facade commits for that plan rather than the mode the capture started in.
 
-Each capture runs under two arms, so both families of planner behaviour are
+Each capture runs under three arms, so each family of planner behaviour is
 covered:
 
   captured   the configuration recorded with the capture
@@ -32,6 +32,42 @@ covered:
              tuning of 2026-09-08 (``STRICT_OVERRIDES``). The hard target
              floor, the urgency window, the pre-charge backstops and the
              next-window tail only run with strict entry.
+  live_like  the strict arm, given the learned inputs the live planner always
+             has and a bare capture does not (see "The live-like arm").
+
+The live-like arm
+-----------------
+The first two arms plan from a capture alone: no solar accuracy tracker, no
+load history, no Solcast analysis. The live system has all three, so whole
+branches of the planner that run on every live cycle never ran in a replay,
+and deleting code on them left "plans identical" untouched. This arm supplies
+them, each from a fixed table in this file (no randomness, no wall clock):
+
+* a ``SolarAccuracyTracker``, attached through
+  ``ComputationEngine.set_solar_accuracy_tracker`` as the coordinator attaches
+  it, and seeded through its own ``record_forecast`` / ``backfill_actual``
+  with ``SOLAR_SEED_DAYS`` days of half-hourly periods ending the day before
+  the capture. The forecast error varies by time of day and by weather
+  (``SOLAR_BIAS``), so bias correction rescales slot solar, the measured
+  accuracy discounts solar sufficiency, and the accuracy ceiling and the
+  over-forecast cap lower solar confidence;
+* load history on the history fetcher: distinct weekday and weekend shapes
+  with a per-day factor (``WEEKDAY_LOAD_KW``, ``WEEKEND_LOAD_KW``,
+  ``DAY_LOAD_FACTOR``). Days differ in how many samples they hold
+  (``DAY_LOAD_SAMPLES``, ``SUNDAY_HOURS_WITHOUT_SAMPLES``), so the day-specific
+  rung, both aggregate rungs and the combined fallback are all resolved, and
+  the forecast ceiling has a peak to measure against;
+* a ``SolcastAnalysis`` for today and tomorrow, built from the capture's own
+  P10/P90 columns, so the confidence ceiling has something to be stamped on;
+* the day's weather (``WEATHER_CYCLE``), so bias is looked up by weather.
+
+Its record carries two sections the others do not. ``coverage`` says what
+those inputs did to this plan (slots rescaled, the accuracy and confidence
+figures, which profile rung fed how many load slots). A full run adds these
+up, prints them and fails if any falls below ``COVERAGE_FLOORS``: an arm
+that has quietly stopped exercising what it is there for is a failure, not a
+pass. ``no_grant`` is a third evaluation of the same cycle without a decision
+grant, recording the mode the facade holds when it may not re-decide.
 
 What is compared
 ----------------
@@ -53,6 +89,8 @@ A run is byte-identical to the last one, in any capture order:
   live system's, Australia/Sydney;
 * every (capture, arm) gets a fresh engine and fresh coordinator data, so
   nothing carries over between replays;
+* the live-like arm's seeds are dated from the capture's own instant, in the
+  live zone, and read no clock;
 * a fresh ``CoordinatorData`` reports a forecast horizon of 0.0 hours, which
   live never sees (the previous cycle's value carries over) and which
   collapses the cheap-price percentile and applies the short-horizon penalty
@@ -83,7 +121,7 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -99,6 +137,13 @@ from custom_components.localshift.computation_engine import (  # noqa: E402
 )
 from custom_components.localshift.const import BatteryMode  # noqa: E402
 from custom_components.localshift.coordinator import CoordinatorData  # noqa: E402
+from custom_components.localshift.forecast.solar_accuracy import (  # noqa: E402
+    SolarAccuracyTracker,
+)
+from custom_components.localshift.forecast.solcast_analysis import (  # noqa: E402
+    ConfidenceInterval,
+    SolcastAnalysis,
+)
 from custom_components.localshift.pricing.types import ForecastSlot  # noqa: E402
 from tests import swallow_tripwire  # noqa: E402
 
@@ -134,9 +179,104 @@ STRICT_SWITCHES: dict[str, bool] = {
     "allow_dw_entry_under_target": False,
     "demand_window_block": True,
 }
+LIVE_LIKE = "live_like"
 ARMS: dict[str, tuple[dict[str, Any], dict[str, bool]]] = {
     "captured": ({}, {}),
     "strict": (STRICT_OVERRIDES, STRICT_SWITCHES),
+    LIVE_LIKE: (STRICT_OVERRIDES, STRICT_SWITCHES),
+}
+
+# --------------------------------------------------------------------------
+# Live-like inputs: fixed tables, dated from the capture, no clock read
+# --------------------------------------------------------------------------
+
+# The weather on a day is its position in this cycle (by calendar ordinal), for
+# the seeded history and for the capture's own day alike. Eleven long so that
+# it does not line up with the week: captures on different dates see a
+# different mix of weather behind them, and so a different measured accuracy.
+WEATHER_CYCLE: tuple[str, ...] = (
+    "sunny",
+    "sunny",
+    "cloudy",
+    "sunny",
+    "rainy",
+    "sunny",
+    "cloudy",
+    "cloudy",
+    "sunny",
+    "sunny",
+    "rainy",
+)
+
+# Days of solar history behind each capture: 26 daylight periods a day, so 364
+# records, past the tracker's activation threshold of 20 and across both of
+# its look-back windows (7 days).
+SOLAR_SEED_DAYS = 14
+SOLAR_SEED_FIRST_HOUR = 6
+# Forecast energy (kWh) for each half hour from 06:00 to 18:30, clear sky.
+SOLAR_SEED_KWH: tuple[float, ...] = (
+    0.05, 0.15, 0.35, 0.60, 0.90, 1.20, 1.50, 1.75, 1.95, 2.10, 2.20, 2.25, 2.25,
+    2.20, 2.10, 1.95, 1.75, 1.50, 1.20, 0.90, 0.60, 0.35, 0.18, 0.08, 0.03, 0.02,
+)  # fmt: skip
+# How much of the clear-sky figure was forecast at all on a day of each kind.
+SOLAR_WEATHER_FORECAST_SCALE: dict[str, float] = {
+    "sunny": 1.0,
+    "cloudy": 0.6,
+    "rainy": 0.3,
+}
+# Forecast error, (forecast - actual) / forecast, by weather and time of day.
+# Positive is an over-forecast. The shape is the live one (mornings come in
+# over the forecast, afternoons under it, cloud is over-forecast throughout);
+# the sizes are chosen so that every consumer has something to act on.
+SOLAR_BIAS: dict[str, dict[str, float]] = {
+    "sunny": {"morning": -0.10, "afternoon": 0.08, "evening": 0.15},
+    "cloudy": {"morning": 0.12, "afternoon": 0.30, "evening": 0.40},
+    "rainy": {"morning": 0.35, "afternoon": 0.50, "evening": 0.60},
+}
+# Solcast's P10 as a share of its median, by weather.
+SOLAR_P10_RATIO: dict[str, float] = {"sunny": 0.85, "cloudy": 0.55, "rainy": 0.35}
+
+# Mean household load (kW) by hour of day, 00:00 to 23:00.
+WEEKDAY_LOAD_KW: tuple[float, ...] = (
+    0.32, 0.30, 0.29, 0.29, 0.30, 0.36, 0.62, 0.88, 0.74, 0.52, 0.46, 0.44,
+    0.45, 0.44, 0.46, 0.55, 0.78, 1.15, 1.45, 1.38, 1.10, 0.82, 0.55, 0.38,
+)  # fmt: skip
+WEEKEND_LOAD_KW: tuple[float, ...] = (
+    0.36, 0.33, 0.31, 0.30, 0.30, 0.32, 0.40, 0.58, 0.86, 1.02, 0.98, 0.92,
+    0.95, 0.90, 0.84, 0.82, 0.90, 1.08, 1.30, 1.26, 1.05, 0.86, 0.62, 0.44,
+)  # fmt: skip
+# Each day of the week (Monday first) against its weekday or weekend shape.
+DAY_LOAD_FACTOR: tuple[float, ...] = (1.00, 0.94, 1.05, 0.97, 1.10, 1.06, 0.92)
+# Samples each day holds for an hour of the day: a day needs 3 to be forecast
+# from its own profile and a weekday/weekend aggregate needs 6. Wednesday and
+# Friday fall short and take the weekday aggregate (4 + 4 + 2 + 4 + 2 = 16);
+# Sunday falls short and takes the weekend aggregate (4 + 2 = 6).
+DAY_LOAD_SAMPLES: tuple[int, ...] = (4, 4, 2, 4, 2, 4, 2)
+# Sunday holds nothing at all before 06:00, which leaves the weekend aggregate
+# short there too (4), so those hours take the combined profile.
+SUNDAY_HOURS_WITHOUT_SAMPLES = range(6)
+# One week against the next, applied to every sample of that week.
+WEEK_LOAD_FACTOR: tuple[float, ...] = (0.94, 1.00, 1.06, 1.02)
+# The forecaster clamps a slot at this multiple of the profile's peak hour. It
+# is restated here, not imported, only to count the slots that sit on it.
+LOAD_CEILING_MULTIPLE = 3.0
+
+# What a full run must add up to across every capture, or it fails. Set well
+# below what the tables above produce today, so an honest change to a plan
+# does not trip them and an arm that has gone quiet does.
+COVERAGE_FLOORS: dict[str, int] = {
+    "captures_with_solar_bias_applied": 40,
+    "slots_with_solar_bias_applied": 600,
+    "captures_with_accuracy_discount": 70,
+    "captures_with_confidence_ceiling": 60,
+    "load_slots_from_day_profile": 2500,
+    "load_slots_from_weekday_aggregate": 700,
+    "load_slots_from_weekend_aggregate": 400,
+    "load_slots_from_combined_profile": 150,
+    "load_slots_on_ceiling": 1,
+    "weekday_captures": 20,
+    "weekend_captures": 10,
+    "no_grant_modes_held": 1,
 }
 
 # Options every replay starts from, before the capture's own overrides.
@@ -409,6 +549,256 @@ def pinned_clock(instant: datetime) -> Iterator[None]:
         yield
 
 
+def _weather_on(day: date) -> str:
+    return WEATHER_CYCLE[day.toordinal() % len(WEATHER_CYCLE)]
+
+
+def _seed_time_of_day(hour: int) -> str:
+    """Which column of ``SOLAR_BIAS`` a seeded period reads its error from."""
+    if hour < 12:
+        return "morning"
+    return "afternoon" if hour < 18 else "evening"
+
+
+def _seeded_tracker(hass: Any, today: date) -> SolarAccuracyTracker:
+    """A tracker holding ``SOLAR_SEED_DAYS`` days of history ending yesterday.
+
+    Filled the way live fills it: a forecast is recorded for a period, then
+    the period's actual is backfilled against it. The tracker classifies each
+    record itself (time of day, season, weather) and keeps its own metrics.
+    """
+    tracker = SolarAccuracyTracker(hass, "replay-baseline")
+    for days_back in range(SOLAR_SEED_DAYS, 0, -1):
+        day = today - timedelta(days=days_back)
+        weather = _weather_on(day)
+        for index, clear_sky_kwh in enumerate(SOLAR_SEED_KWH):
+            start = datetime(
+                day.year,
+                day.month,
+                day.day,
+                SOLAR_SEED_FIRST_HOUR + index // 2,
+                30 * (index % 2),
+                tzinfo=LIVE_TIME_ZONE,
+            )
+            forecast = clear_sky_kwh * SOLAR_WEATHER_FORECAST_SCALE[weather]
+            bias = SOLAR_BIAS[weather][_seed_time_of_day(start.hour)]
+            tracker.record_forecast(
+                start,
+                forecast,
+                weather,
+                forecast_p10_kwh=forecast * SOLAR_P10_RATIO[weather],
+            )
+            tracker.backfill_actual(start, forecast * (1.0 - bias))
+    return tracker
+
+
+def _count_bias_corrections(tracker: SolarAccuracyTracker) -> dict[str, int]:
+    """Count the slots whose solar the tracker's correction actually moved."""
+    counter = {"moved": 0}
+    correct = tracker.apply_bias_correction
+
+    def counted(forecast_kwh: float, *args: Any, **kwargs: Any) -> float:
+        corrected = correct(forecast_kwh, *args, **kwargs)
+        if abs(corrected - forecast_kwh) > 1e-9:
+            counter["moved"] += 1
+        return corrected
+
+    tracker.apply_bias_correction = counted  # type: ignore[method-assign]
+    return counter
+
+
+def _hourly_means(
+    samples_by_hour: list[list[float]],
+) -> tuple[dict[int, float], dict[int, int]]:
+    means: dict[int, float] = {}
+    counts: dict[int, int] = {}
+    for hour, samples in enumerate(samples_by_hour):
+        if samples:
+            means[hour] = sum(samples) / len(samples)
+            counts[hour] = len(samples)
+    return means, counts
+
+
+def load_history() -> dict[str, Any]:
+    """The seeded load history, as the profiles a recorder fetch would leave."""
+    by_day: list[list[list[float]]] = []
+    for day_of_week in range(7):
+        shape = WEEKEND_LOAD_KW if day_of_week >= 5 else WEEKDAY_LOAD_KW
+        hours: list[list[float]] = []
+        for hour in range(24):
+            weeks = DAY_LOAD_SAMPLES[day_of_week]
+            if day_of_week == 6 and hour in SUNDAY_HOURS_WITHOUT_SAMPLES:
+                weeks = 0
+            hours.append([
+                shape[hour] * DAY_LOAD_FACTOR[day_of_week] * WEEK_LOAD_FACTOR[week]
+                for week in range(weeks)
+            ])
+        by_day.append(hours)
+
+    def merged(days: range) -> list[list[float]]:
+        return [[s for day in days for s in by_day[day][hour]] for hour in range(24)]
+
+    daily = [_hourly_means(hours) for hours in by_day]
+    weekday_avg, weekday_counts = _hourly_means(merged(range(5)))
+    weekend_avg, weekend_counts = _hourly_means(merged(range(5, 7)))
+    combined_avg, combined_counts = _hourly_means(merged(range(7)))
+    return {
+        "daily_avg": {day: daily[day][0] for day in range(7)},
+        "daily_counts": {day: daily[day][1] for day in range(7)},
+        "weekday_avg": weekday_avg,
+        "weekday_counts": weekday_counts,
+        "weekend_avg": weekend_avg,
+        "weekend_counts": weekend_counts,
+        "combined_avg": combined_avg,
+        "combined_counts": combined_counts,
+    }
+
+
+def _seed_load_history(history: Any) -> dict[str, Any]:
+    """Leave the history fetcher as a completed recorder fetch leaves it."""
+    profiles = load_history()
+    history._historical_load_cache = profiles["combined_avg"]
+    history._historical_load_sample_counts = profiles["combined_counts"]
+    history._historical_load_source = "statistics"
+    history._weekday_hourly_avg_kw = profiles["weekday_avg"]
+    history._weekday_sample_counts = profiles["weekday_counts"]
+    history._weekend_hourly_avg_kw = profiles["weekend_avg"]
+    history._weekend_sample_counts = profiles["weekend_counts"]
+    history._daily_hourly_avg_kw = profiles["daily_avg"]
+    history._daily_sample_counts = profiles["daily_counts"]
+    history._profile_source = "weekday_weekend"
+    return profiles
+
+
+def _load_ceilings(profiles: dict[str, Any]) -> set[float]:
+    """Every value the forecast ceiling can take, to the forecaster's rounding.
+
+    The ceiling is ``LOAD_CEILING_MULTIPLE`` times the peak hour across the
+    profile resolved for the slot's day and the combined profile. No peak
+    falls in the hours Sunday borrows from the combined profile, so the
+    resolved profile's peak is always that of one whole seeded profile.
+    """
+    combined_peak = max(profiles["combined_avg"].values())
+    resolved = [
+        *profiles["daily_avg"].values(),
+        profiles["weekday_avg"],
+        profiles["weekend_avg"],
+    ]
+    return {
+        round(LOAD_CEILING_MULTIPLE * max(combined_peak, *profile.values()), 3)
+        for profile in resolved
+    }
+
+
+def _solcast_analysis(
+    entity_key: str, entries: list[dict[str, Any]], instant: datetime
+) -> SolcastAnalysis | None:
+    """The analysis Solcast publishes beside a forecast, from its P10/P90.
+
+    Confidence is one minus the spread over the P90, per period and for the
+    day, as the Solcast integration computes it. A capture that carries no
+    P90 is read as having none above its median.
+    """
+    intervals: list[ConfidenceInterval] = []
+    total_p10 = total_p90 = 0.0
+    for entry in entries:
+        if not isinstance(entry.get("period_start"), str):
+            continue
+        median = float(entry.get("pv_estimate") or 0.0)
+        p10 = float(entry.get("pv_estimate10", median) or 0.0)
+        p90 = max(float(entry.get("pv_estimate90", median) or 0.0), median, p10)
+        total_p10 += p10 / 2.0
+        total_p90 += p90 / 2.0
+        intervals.append(
+            ConfidenceInterval(
+                period_start=datetime.fromisoformat(entry["period_start"]),
+                spread_kwh=(p90 - p10) / 2.0,
+                confidence=1.0 - (p90 - p10) / p90 if p90 > 0 else 1.0,
+            )
+        )
+    if not intervals:
+        return None
+    spread = total_p90 - total_p10
+    return SolcastAnalysis(
+        entity_id=ENTITY_IDS[entity_key],
+        last_updated=instant,
+        day_confidence=1.0 - spread / total_p90 if total_p90 > 0 else 1.0,
+        day_spread_kwh=spread,
+        estimate10_kwh=total_p10,
+        estimate90_kwh=total_p90,
+        intervals=intervals,
+    )
+
+
+def _coverage(
+    data: CoordinatorData,
+    tracker: SolarAccuracyTracker,
+    bias_slots: int,
+    profiles: dict[str, Any],
+    today: date,
+) -> dict[str, Any]:
+    """What the live-like inputs did to the plan just made."""
+    load_slots = {
+        "day": 0,
+        "aggregate_weekday": 0,
+        "aggregate_weekend": 0,
+        "combined": 0,
+    }
+    for source, count in data.forecast_consumption_source_counts.items():
+        # The forecaster suffixes a slot's source with the rung that fed it
+        # (":day_5", ":aggregate_weekend"); a bare source is the combined
+        # profile.
+        _, tagged, rung = source.rpartition(":")
+        if not tagged:
+            rung = "combined"
+        elif rung.startswith("day_"):
+            rung = "day"
+        load_slots[rung] = load_slots.get(rung, 0) + count
+    ceilings = _load_ceilings(profiles)
+    today_analysis = data.solcast_analysis_today
+    tomorrow_analysis = data.solcast_analysis_tomorrow
+    return {
+        "weather": _weather_on(today),
+        "day_type": "weekend" if today.weekday() >= 5 else "weekday",
+        "solar_samples": tracker.metrics.sample_count,
+        "solar_accuracy": tracker.metrics.accuracy / 100.0,
+        "solar_bias_slots": bias_slots,
+        "solar_absent_confidence": data.solar_absent_confidence,
+        "confidence_ceiling_today": getattr(today_analysis, "confidence_ceiling", None),
+        "confidence_ceiling_tomorrow": getattr(
+            tomorrow_analysis, "confidence_ceiling", None
+        ),
+        "load_slots": load_slots,
+        "load_slots_on_ceiling": sum(
+            1 for kw in data.load_forecast_slots if kw in ceilings
+        ),
+    }
+
+
+def _evaluate_without_grant(
+    engine: ComputationEngine, data: CoordinatorData, start_mode: BatteryMode | None
+) -> dict[str, Any]:
+    """Run the cycle once more with no decision grant; record what is held.
+
+    The state machine grants a decision only when the price or window context
+    moves. Between grants the facade must leave the commanded mode alone and
+    publish the mode the plan wants as pending; only a pre-charge backstop may
+    still commit.
+    """
+    if start_mode is not None:
+        data.active_mode = start_mode
+    data.mode_decision_allowed = False
+    engine.compute_derived_values(data)
+    mode = data.active_mode
+    return {
+        "commanded_mode": getattr(mode, "value", mode),
+        "plan_mode_pending": data.debug_plan_mode_pending,
+        "mode_source": data.debug_mode_source,
+        "apply_status": data.optimizer_last_apply_status,
+        "precharge_backstop_active": data.optimizer_precharge_backstop_active,
+    }
+
+
 def replay(scenario: dict[str, Any], arm: str) -> dict[str, Any]:
     """Replay one capture under one arm; return the canonical record of its plan."""
     arm_options, arm_switches = ARMS[arm]
@@ -434,20 +824,37 @@ def replay(scenario: dict[str, Any], arm: str) -> dict[str, Any]:
         data.active_mode = start_mode
     _seed_horizon(data, payload)
 
+    hass = _hass(payload)
     engine = ComputationEngine(
-        _hass(payload),
+        hass,
         entry,
         lambda key: ENTITY_IDS.get(key, f"sensor.{key}"),
         lambda key: switches.get(key, False),
     )
-    # No load history: the forecast falls back to the recent-load figure, as it
-    # does in every other replay harness here.
     history = engine._history_fetcher
-    history._historical_load_cache = {}
-    history._historical_load_sample_counts = {}
-    history._historical_load_source = "none"
+    live_like = arm == LIVE_LIKE
+    if live_like:
+        today = test_time.astimezone(LIVE_TIME_ZONE).date()
+        profiles = _seed_load_history(history)
+        tracker = _seeded_tracker(hass, today)
+        bias = _count_bias_corrections(tracker)
+        engine.set_solar_accuracy_tracker(tracker)
+        data.weather_condition = _weather_on(today)
+        data.solcast_analysis_today = _solcast_analysis(
+            "solcast_today", data.solcast_today, test_time
+        )
+        data.solcast_analysis_tomorrow = _solcast_analysis(
+            "solcast_tomorrow", data.solcast_tomorrow, test_time
+        )
+    else:
+        # No load history: the forecast falls back to the recent-load figure,
+        # as it does in every other replay harness here.
+        history._historical_load_cache = {}
+        history._historical_load_sample_counts = {}
+        history._historical_load_source = "none"
     history._recent_load_1hr_kw = payload.get("load_power_kw", 0.5)
 
+    extra: dict[str, Any] = {}
     hits = swallow_tripwire.begin()
     try:
         with pinned_clock(test_time):
@@ -459,30 +866,41 @@ def replay(scenario: dict[str, Any], arm: str) -> dict[str, Any]:
                 if start_mode is not None:
                     data.active_mode = start_mode
                 data.mode_decision_allowed = True
+                if live_like:
+                    bias["moved"] = 0
                 engine.compute_derived_values(data)
+            record = _record(data)
+            if live_like:
+                extra["coverage"] = _coverage(
+                    data, tracker, bias["moved"], profiles, today
+                )
+                extra["no_grant"] = _evaluate_without_grant(engine, data, start_mode)
     finally:
         swallow_tripwire.end(hits)
 
-    return _record(data, hits)
+    record.update(extra)
+    record["swallowed_failures"] = sorted({hit.key for hit in hits})
+    return _canonical(record)
 
 
-def _record(data: CoordinatorData, hits: list[Any]) -> dict[str, Any]:
+def _record(data: CoordinatorData) -> dict[str, Any]:
+    """The plan as it stands on ``data`` now, before anything else runs."""
     result = getattr(data, "optimizer_result", None)
     summary = getattr(data, "optimizer_summary", None) or {}
     decisions = getattr(data, "optimizer_decisions", None) or []
     mode = getattr(data, "active_mode", None)
     skip = VOLATILE_KEYS | ECHO_KEYS
-    record = {
+    # Reduced to plain values here, not by the caller: a later evaluation of
+    # the same data must not be able to reach back into this record.
+    return _canonical({
         "optimizer_result_present": result is not None,
         "commanded_mode": getattr(mode, "value", mode),
         "slot0_action": decisions[0].get("action") if decisions else None,
-        "swallowed_failures": sorted({hit.key for hit in hits}),
         "result": {k: v for k, v in (result or {}).items() if k not in skip},
         "summary": {k: v for k, v in summary.items() if k not in skip},
         "data": {name: getattr(data, name, None) for name in DATA_FIELDS},
         "decisions": [[d.get(col) for col in DECISION_COLUMNS] for d in decisions],
-    }
-    return _canonical(record)
+    })
 
 
 def _canonical(value: Any) -> Any:
@@ -676,11 +1094,86 @@ def _rel(path: Path) -> str:
     return path.relative_to(REPO_ROOT).as_posix()
 
 
-def _write(captures: list[Path], stale: list[Path]) -> int:
+def coverage_totals(documents: list[dict[str, Any]]) -> dict[str, int]:
+    """What the live-like arm exercised, added up over a set of replays."""
+    totals = {
+        "captures_with_solar_bias_applied": 0,
+        "slots_with_solar_bias_applied": 0,
+        "captures_with_accuracy_discount": 0,
+        "captures_with_confidence_ceiling": 0,
+        "load_slots_from_day_profile": 0,
+        "load_slots_from_weekday_aggregate": 0,
+        "load_slots_from_weekend_aggregate": 0,
+        "load_slots_from_combined_profile": 0,
+        "load_slots_on_ceiling": 0,
+        "weekday_captures": 0,
+        "weekend_captures": 0,
+        "no_grant_modes_held": 0,
+    }
+    for document in documents:
+        record = document["arms"][LIVE_LIKE]
+        coverage, no_grant = record["coverage"], record["no_grant"]
+        planned = record["optimizer_result_present"]
+        totals[f"{coverage['day_type']}_captures"] += 1
+        totals["captures_with_solar_bias_applied"] += coverage["solar_bias_slots"] > 0
+        totals["slots_with_solar_bias_applied"] += coverage["solar_bias_slots"]
+        totals["captures_with_accuracy_discount"] += (
+            planned and coverage["solar_accuracy"] < 1.0
+        )
+        ceiling = coverage["confidence_ceiling_today"]
+        totals["captures_with_confidence_ceiling"] += (
+            ceiling is not None and ceiling < 1.0
+        )
+        load_slots = coverage["load_slots"]
+        totals["load_slots_from_day_profile"] += load_slots["day"]
+        totals["load_slots_from_weekday_aggregate"] += load_slots["aggregate_weekday"]
+        totals["load_slots_from_weekend_aggregate"] += load_slots["aggregate_weekend"]
+        totals["load_slots_from_combined_profile"] += load_slots["combined"]
+        totals["load_slots_on_ceiling"] += coverage["load_slots_on_ceiling"]
+        totals["no_grant_modes_held"] += (
+            no_grant["commanded_mode"] != record["commanded_mode"]
+        )
+    return totals
+
+
+def coverage_shortfalls(totals: dict[str, int]) -> list[str]:
+    """The coverage floors a full run has not met."""
+    return [
+        f"{name}: {totals.get(name, 0)}, floor {floor}"
+        for name, floor in COVERAGE_FLOORS.items()
+        if totals.get(name, 0) < floor
+    ]
+
+
+def _report_coverage(documents: list[dict[str, Any]], enforce: bool) -> int:
+    """Print the live-like arm's coverage; on a full run, fail below a floor."""
+    totals = coverage_totals(documents)
+    print(f"{LIVE_LIKE} coverage over {len(documents)} capture(s):")
+    for name, value in totals.items():
+        floor = COVERAGE_FLOORS.get(name)
+        note = f"  (floor {floor})" if enforce and floor is not None else ""
+        print(f"    {name}: {value}{note}")
+    if not enforce:
+        return 0
+    short = coverage_shortfalls(totals)
+    if short:
+        print(
+            f"\nThe {LIVE_LIKE} arm no longer exercises what it is there for:\n    "
+            + "\n    ".join(short)
+            + "\nIts plans matching proves nothing about that code until it does."
+        )
+        return 1
+    return 0
+
+
+def _write(captures: list[Path], stale: list[Path], everything: bool) -> int:
+    documents = []
     for capture in captures:
         path = baseline_path(capture)
         path.parent.mkdir(parents=True, exist_ok=True)
-        text = dumps(build(capture))
+        document = build(capture)
+        documents.append(document)
+        text = dumps(document)
         if not path.exists() or path.read_text() != text:
             path.write_text(text)
             print(f"wrote    {_rel(path)}")
@@ -688,13 +1181,22 @@ def _write(captures: list[Path], stale: list[Path]) -> int:
         path.unlink()
         print(f"removed  {_rel(path)}")
     print(f"baseline covers {len(captures)} capture(s) x {len(ARMS)} arms")
-    return 0
+    return _report_coverage(documents, enforce=everything)
 
 
-def _check(captures: list[Path], stale: list[Path], full_diff: bool) -> int:
+def _check(
+    captures: list[Path], stale: list[Path], full_diff: bool, everything: bool
+) -> int:
     failed = 0
+    documents = []
     for capture in captures:
-        lines = compare(capture)
+        document = build(capture)
+        documents.append(document)
+        path = baseline_path(capture)
+        if path.exists():
+            lines = diff(json.loads(path.read_text()), document)
+        else:
+            lines = [f"no baseline at {_rel(path)}: run --write"]
         if not lines:
             continue
         failed += 1
@@ -713,9 +1215,10 @@ def _check(captures: list[Path], stale: list[Path], full_diff: bool) -> int:
             "change was meant to alter plans, regenerate with --write and commit "
             "the diff; otherwise the change is not behaviour-neutral."
         )
+        _report_coverage(documents, enforce=False)
         return 1
     print(f"plans identical: {len(captures)} capture(s) x {len(ARMS)} arms")
-    return 0
+    return _report_coverage(documents, enforce=everything)
 
 
 def quiet_logging() -> None:
@@ -770,9 +1273,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # A partial run cannot tell an orphan from a capture it was told to skip.
     stale = [] if args.only else orphans(everything)
+    # Nor can it say what every capture adds up to, so the floors wait too.
+    everything_ran = not args.only
     if args.write:
-        return _write(captures, stale)
-    return _check(captures, stale, args.full_diff)
+        return _write(captures, stale, everything_ran)
+    return _check(captures, stale, args.full_diff, everything_ran)
 
 
 if __name__ == "__main__":
