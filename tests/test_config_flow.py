@@ -1106,40 +1106,34 @@ class TestInvalidInputFormats:
 
     @pytest.mark.asyncio
     async def test_entity_id_with_special_characters(self, mock_hass):
-        """Test handling of entity IDs with special characters."""
+        """An entity ID with special characters is looked up as given and refused."""
         flow = LocalShiftConfigFlow()
         flow.hass = mock_hass
 
-        # Mock state for entity with special characters
+        # No such entity exists in the state machine
         mock_hass.states.get = MagicMock(return_value=None)
+        entity_id = "sensor.test@special!chars"
 
-        entities = {
-            "test_sensor": ("sensor.test@special!chars", "sensor"),
-        }
+        result = await flow._validate_entities({"test_sensor": (entity_id, "sensor")})
 
-        result = await flow._validate_entities(entities)
-
-        # Should reject or handle gracefully
-        assert result is not None or True  # Depends on implementation
+        # The ID reaches the state lookup unaltered and comes back as an error
+        # against its config key, quoted in full.
+        mock_hass.states.get.assert_called_once_with(entity_id)
+        assert result == {"test_sensor": f"Entity '{entity_id}' does not exist"}
 
     @pytest.mark.asyncio
     async def test_very_long_entity_id(self, mock_hass):
-        """Test handling of very long entity IDs."""
+        """A very long entity ID is looked up as given and refused, untruncated."""
         flow = LocalShiftConfigFlow()
         flow.hass = mock_hass
 
-        # Create very long entity ID
         long_entity = "sensor." + "a" * 250
         mock_hass.states.get = MagicMock(return_value=None)
 
-        entities = {
-            "test_sensor": (long_entity, "sensor"),
-        }
+        result = await flow._validate_entities({"test_sensor": (long_entity, "sensor")})
 
-        result = await flow._validate_entities(entities)
-
-        # Should handle gracefully (reject or accept)
-        assert result is not None or True
+        mock_hass.states.get.assert_called_once_with(long_entity)
+        assert result == {"test_sensor": f"Entity '{long_entity}' does not exist"}
 
 
 # =============================================================================

@@ -361,11 +361,19 @@ class ComputationEngine:
             data.last_target_reset_date = today
             # The DW-entry actual (2026-07-27) is a once-per-day capture and shares
             # this latch: clearing it here re-arms tomorrow's capture.
-            data.dw_entry_actual_soc_pct = None
-            data.dw_entry_actual_at = None
-            data.dw_entry_actual_target_pct = None
-            data.dw_entry_actual_shortfall_pct = None
-            data.dw_entry_actual_date = None
+            #
+            # A record already dated today is kept (Issue #1142). That can only
+            # be one restored from the daily snapshot after a restart: the latch
+            # date above starts as None on every start, so the first evaluation
+            # always lands here, and without this test it would blank the
+            # record the restore had just brought back. Any other record is
+            # from an earlier day, or blank, and is cleared as before.
+            if data.dw_entry_actual_date != today:
+                data.dw_entry_actual_soc_pct = None
+                data.dw_entry_actual_at = None
+                data.dw_entry_actual_target_pct = None
+                data.dw_entry_actual_shortfall_pct = None
+                data.dw_entry_actual_date = None
 
     def _capture_dw_entry_actual(
         self, data: CoordinatorData, ctx: _DerivedValuesContext
@@ -1262,6 +1270,19 @@ class ComputationEngine:
     # ========================================================================
     # WEATHER CORRELATION (Issue #61)
     # ========================================================================
+
+    async def async_save_weather_correlation(self) -> None:
+        """Persist the weather correlation data, if it has been loaded.
+
+        The learning loop saves once an hour; this is for the final save on
+        shutdown and unload (Issue #1142). A correlation that has not finished
+        loading is skipped, so a stop during startup cannot write empty data
+        over what is stored.
+        """
+        correlation = self._weather_correlation
+        if correlation is None or not getattr(correlation, "_initialized", False):
+            return
+        await correlation.async_save()
 
     async def async_initialize_weather_correlation(self) -> None:
         """Initialize weather correlation system.

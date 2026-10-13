@@ -485,7 +485,7 @@ def test_scenario(scenario_path, request):
 
 def test_scenario_discovery():
     """Verify that scenario discovery works."""
-    assert len(SCENARIO_PATHS) >= 0, "No scenarios discovered"
+    assert len(SCENARIO_PATHS) > 0, "No scenarios discovered"
 
     for path in SCENARIO_PATHS:
         scenario = Scenario.from_json(path)

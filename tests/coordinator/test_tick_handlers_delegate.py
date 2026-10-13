@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from custom_components.localshift.utils.costs import DAILY_ACCUMULATOR_FIELDS
+
 _COORDINATOR_DIR = (
     Path(__file__).resolve().parents[2]
     / "custom_components"
@@ -30,6 +32,7 @@ _COORDINATOR_DIR = (
 )
 _COORDINATOR_PY = _COORDINATOR_DIR / "coordinator.py"
 _TICK_SCHEDULER_PY = _COORDINATOR_DIR / "tick_scheduler.py"
+_COSTS_PY = _COORDINATOR_DIR.parent / "utils" / "costs.py"
 
 
 def _class_def(path: Path, class_name: str) -> ast.ClassDef:
@@ -106,18 +109,40 @@ def test_coordinator_handler_delegates_to_scheduler(scheduler_handler: str) -> N
 # Fields whose reset is owned by CostTracker.reset_daily_accumulators. An inline
 # assignment to any of them inside handle_midnight_reset is the #968 defect
 # reappearing: a second copy of the reset that will drift from the tracker's.
-_COST_TRACKER_OWNED_FIELDS = frozenset({
-    "grid_import_cost",
-    "grid_export_revenue",
-    "battery_savings",
-    "battery_charge_cost",
-    "target_reached_today",
-    "grid_import_kwh_today",
-    "grid_export_kwh_today",
-    "grid_to_battery_kwh_today",
-    "soc_gain_during_grid_charge_kwh_today",
-    "export_while_battery_not_full_kwh_today",
-})
+#
+# Derived from the tracker's own list of day-to-date totals so a total added
+# there is guarded here without anyone remembering to add it (a hand-written
+# copy of this set went stale and left solar_kwh_today unguarded, #1131).
+# target_reached_today is the one deliberate extra: it is cleared by
+# reset_daily_accumulators but is a control input, not a snapshotted total, so
+# it is absent from DAILY_ACCUMULATOR_FIELDS by design.
+_COST_TRACKER_OWNED_FIELDS = frozenset(DAILY_ACCUMULATOR_FIELDS) | {
+    "target_reached_today"
+}
+
+
+def test_cost_tracker_owned_fields_cover_every_daily_total() -> None:
+    """The guard set tracks what reset_daily_accumulators actually clears.
+
+    Read from the tracker's source, so a field the reset zeroes but the guard
+    set does not name fails here instead of leaving it silently unguarded.
+    """
+    tracker = _methods(_class_def(_COSTS_PY, "CostTracker"))
+    reset_by_tracker = {
+        target.attr
+        for name in (
+            "reset_daily_accumulators",
+            "_reset_daily_totals",
+            "_reset_energy_accumulators",
+        )
+        for node in ast.walk(tracker[name])
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Attribute)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "data"
+    }
+    assert reset_by_tracker == _COST_TRACKER_OWNED_FIELDS
 
 
 def test_midnight_reset_delegates_to_cost_tracker() -> None:
