@@ -29,12 +29,6 @@ attribute    engine/optimizer_facade.py  data.shadow_decision
 attribute    engine/optimizer_facade.py  data.shadow_decision@2
 attribute    engine/spike_analyzer.py  data.spike_end_time
 attribute    engine/spike_analyzer.py  data.spike_end_time@2
-attribute    forecast/history_store.py  ForecastHistoryStore._loaded
-attribute    forecast/history_store.py  ForecastHistoryStore._loaded@2
-attribute    learning/correlation.py  WeatherCorrelation._pending_observations
-attribute    select.py  BatteryModeSelect._previous_mode
-attribute    select.py  BatteryModeSelect._previous_mode@2
-attribute    select.py  BatteryModeSelect._previous_mode@3
 attribute    state/reader.py  data.primary_decision
 attribute    state/reader.py  data.shadow_decision
 attribute    utils/validation.py  health.last_check
@@ -60,9 +54,6 @@ method       computation_engine.py  ComputationEngine._compute_solar_battery_for
 method       computation_engine.py  ComputationEngine._get_profile_for_day
 method       computation_engine.py  ComputationEngine._max_forecast_price
 method       computation_engine.py  ComputationEngine._scan_forecast_for_spike
-method       config_flow/__init__.py  LocalShiftConfigFlow._get_notify_services
-method       config_flow/__init__.py  LocalShiftConfigFlow._validate_entities
-method       config_flow/__init__.py  LocalShiftConfigFlow._validate_notify_service
 method       coordinator/coordinator.py  LocalShiftCoordinator._check_entity_health
 method       coordinator/coordinator.py  LocalShiftCoordinator._handle_periodic_tick  # marked DEPRECATED in its own docstring; superseded by the tiered tick handlers
 method       engine/optimizer_facade.py  OptimizerFacade._floor_suppressed_by_solar
@@ -106,28 +97,20 @@ unread-field coordinator/data.py  CoordinatorData.proactive_export_active
 unread-field coordinator/data.py  CoordinatorData.shadow_decision
 unread-field coordinator/data.py  CoordinatorData.spike_end_time
 unread-field coordinator/data.py  CoordinatorData.surplus_ratio
-variable     const.py  BOOST_CHARGE_MAX_SOC
-variable     const.py  DISCHARGE_EARLIEST_HOUR
 variable     const.py  LEARNING_MIN_OBSERVATIONS
 variable     const.py  LEARNING_UPDATE_INTERVAL_HOURS
-variable     const.py  MAX_NEGATIVE_FIT_HEADROOM_PCT
 variable     const.py  OPTIMIZABLE_PARAMS
-variable     const.py  PROACTIVE_EXPORT_MIN_RESERVE_PERCENT
 variable     coordinator/coordinator.py  PERIODIC_INTERVAL
 variable     coordinator/data.py  ChargingDecision.charge_amount_kwh
 variable     coordinator/data.py  ChargingDecision.price_per_kwh
 variable     coordinator/data.py  ChargingDecision.should_boost
 variable     coordinator/data.py  ChargingDecision.should_grid_charge
 variable     coordinator/data.py  PhysicalResponseWatch.baseline_power_kw
-variable     engine/outcomes.py  ACTION_TO_LEGACY_MODE
-variable     engine/slot_schedule.py  MAX_5MIN_FORECAST_HOURS
 variable     engine/types.py  NegativeFitAvoidanceContext.risk_window_start_idx
 variable     engine/types.py  PlannedSlotDecision.is_solar_opportunity
-variable     engine/types.py  PlannerReasonCode.DEMAND_WINDOW_CONSTRAINT
 variable     learning/anomaly.py  WeatherAnomalyResult.deviation_sigma
 variable     learning/anomaly.py  WeatherAnomalyResult.mean_temperature
 variable     learning/anomaly.py  WeatherAnomalyResult.std_temperature
-variable     learning/correlation.py  CONFIDENCE_LOW_THRESHOLD
 variable     utils/validation.py  EntityHealth.last_check  # write-only; decide together with last_valid_value (#1076)
 variable     utils/validation.py  EntityHealth.last_valid_value  # write-only; decide together with last_check (#1076)
 variable     utils/validation.py  ValidationResult.warning_message
