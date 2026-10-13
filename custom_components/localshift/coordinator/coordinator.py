@@ -150,6 +150,7 @@ class LocalShiftCoordinator:
         # outlive an unload (a timer, a queued task, a sleeping retry) would
         # otherwise evaluate or re-subscribe on this instance.
         self._stopped = False
+        self._stopped_refusal_logged = False
 
     # ------------------------------------------------------------------
     # Entity ID helpers (read from config entry data)
@@ -535,9 +536,14 @@ class LocalShiftCoordinator:
         # Issue #1149: first, and before anything awaits. From here on this
         # instance must not evaluate: after a reload a new coordinator is
         # commanding the same battery.
+        _LOGGER.info("LocalShift coordinator stopping")
         self._stopped = True
         if self._evaluation_dispatcher is not None:
             self._evaluation_dispatcher.stop()
+        if self._state_machine is not None:
+            self._state_machine.stop()
+        if self._forecast_bootstrapper is not None:
+            self._forecast_bootstrapper.stop()
         if self._subscription_manager is not None:
             self._subscription_manager.stop()
         if self._unsub_homeassistant_stop is not None:
@@ -936,7 +942,7 @@ class LocalShiftCoordinator:
         Called when options are updated to pick up new notification time
         without requiring a restart.
         """
-        if self._subscription_manager is None:
+        if self._subscription_manager is None or self._stopped:
             return
 
         dw_end = self._parse_time_option(
@@ -951,8 +957,15 @@ class LocalShiftCoordinator:
             # Issue #1149: every evaluation path ends here (the coalesce
             # timer, the ticks, the Solcast startup retry, an options change),
             # so this one check covers a task or a sleeping retry that was
-            # already queued when the entry was unloaded.
-            _LOGGER.debug("Skipping evaluation: coordinator is stopped")
+            # already queued when the entry was unloaded. The first refusal
+            # is a warning: a straggler is harmless, but if this instance is
+            # still the live one it has no battery control, and that must
+            # not be silent.
+            _LOGGER.log(
+                logging.DEBUG if self._stopped_refusal_logged else logging.WARNING,
+                "Skipping evaluation: coordinator is stopped",
+            )
+            self._stopped_refusal_logged = True
             return
         if self._state_machine is not None and self._computation_engine is not None:
             await self._state_machine.evaluate_state_machine(

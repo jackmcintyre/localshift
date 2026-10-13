@@ -1,26 +1,34 @@
 """Nothing evaluates on a coordinator after it is unloaded (Issue #1149).
 
 A reload or removal unloads the config entry and builds a new coordinator. The
-old one must go quiet: a timer armed in its last seconds, or a task already
-queued, must not run the old state machine next to the new one, because both
-would be commanding the same battery.
+old one must go quiet: a timer armed in its last seconds, a task already
+queued, or an evaluation waiting its turn must not run the old state machine
+next to the new one, because both would be commanding the same battery.
 
-These go through the real ``async_start`` and ``async_stop``. Home Assistant's
-timer is replaced by a small fake so the test can move the clock.
+The other half matters as much: a coordinator that is still the live one must
+never be left stopped. Home Assistant shutting down, or a platform that
+refuses to unload, must leave it evaluating.
+
+These go through the real ``async_start``, ``async_stop`` and
+``async_unload_entry``. Home Assistant's timer is replaced by a small fake so
+the test can move the clock.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+import asyncio
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.util import dt as dt_util
 
+from custom_components.localshift import _async_options_updated, async_unload_entry
 from custom_components.localshift.const import STATE_CHANGE_COALESCE_SECONDS
 
 _SUBSCRIPTIONS = "custom_components.localshift.services.subscription_manager"
 _DISPATCHER = "custom_components.localshift.services.evaluation_dispatcher"
+_COORDINATOR_LOG = "custom_components.localshift.coordinator.coordinator"
 
 
 class _FakeTimers:
@@ -62,8 +70,7 @@ class _FakeTimers:
             timer["action"](dt_util.now())
 
 
-@pytest.mark.usefixtures("mock_storage", "mock_recorder")
-class TestUnloadStopsEvaluation:
+class _Base:
     @pytest.fixture(autouse=True)
     def _frozen_clock(self):
         frozen = datetime(2026, 10, 13, 16, 40, tzinfo=dt_util.DEFAULT_TIME_ZONE)
@@ -107,7 +114,6 @@ class TestUnloadStopsEvaluation:
         machine = coordinator._state_machine
         evaluate = AsyncMock(wraps=machine.evaluate_state_machine)
         machine.evaluate_state_machine = evaluate
-        coordinator.hass.services.async_call.reset_mock()
         return on_state_change, tasks, evaluate
 
     @staticmethod
@@ -115,16 +121,21 @@ class TestUnloadStopsEvaluation:
         while tasks:
             await tasks.pop(0)
 
+    async def _assert_still_evaluates(self, on_state_change, tasks, evaluate, timers):
+        """A price update still reaches the state machine."""
+        on_state_change(MagicMock())
+        assert timers.advance(STATE_CHANGE_COALESCE_SECONDS + 1) == 1
+        await self._run(tasks)
+        evaluate.assert_awaited_once()
+
+
+@pytest.mark.usefixtures("mock_storage", "mock_recorder")
+class TestUnloadStopsEvaluation(_Base):
     async def test_armed_timer_evaluates_while_running(self, coordinator, timers):
         """Control: without an unload the armed timer does evaluate."""
         on_state_change, tasks, evaluate = await self._start(coordinator)
 
-        on_state_change(MagicMock())
-        assert len(timers.armed) == 1
-        assert timers.advance(STATE_CHANGE_COALESCE_SECONDS + 1) == 1
-        await self._run(tasks)
-
-        evaluate.assert_awaited_once()
+        await self._assert_still_evaluates(on_state_change, tasks, evaluate, timers)
 
     async def test_unload_cancels_the_armed_coalesce_timer(self, coordinator, timers):
         on_state_change, tasks, evaluate = await self._start(coordinator)
@@ -137,7 +148,6 @@ class TestUnloadStopsEvaluation:
         assert timers.advance(STATE_CHANGE_COALESCE_SECONDS + 1) == 0
         await self._run(tasks)
         evaluate.assert_not_awaited()
-        coordinator.hass.services.async_call.assert_not_called()
 
     async def test_callback_that_beats_the_cancel_does_not_evaluate(
         self, coordinator, timers
@@ -150,7 +160,6 @@ class TestUnloadStopsEvaluation:
         await self._run(tasks)
 
         evaluate.assert_not_awaited()
-        coordinator.hass.services.async_call.assert_not_called()
 
     async def test_state_change_after_unload_arms_nothing(self, coordinator, timers):
         on_state_change, tasks, evaluate = await self._start(coordinator)
@@ -177,24 +186,60 @@ class TestUnloadStopsEvaluation:
         await self._run(tasks)
 
         evaluate.assert_not_awaited()
-        coordinator.hass.services.async_call.assert_not_called()
 
-    async def test_solcast_retry_after_unload_does_not_evaluate(
+    async def test_evaluation_waiting_on_the_lock_at_unload_does_nothing(
         self, coordinator, timers
     ):
-        """The startup Solcast retry sleeps, then evaluates. It is not
-        cancelled on unload, so the evaluation itself has to refuse."""
+        """A tick during a transition queues an evaluation behind the lock.
+
+        It is already past the coordinator's stopped check when the unload
+        happens, so the state machine has to refuse it when the lock frees.
+        """
+        _, _, evaluate = await self._start(coordinator)
+        machine = coordinator._state_machine
+        machine._evaluate_core = AsyncMock()
+        controller = MagicMock()
+        machine._battery_controller = controller
+        engine = coordinator._computation_engine
+
+        await machine._evaluate_lock.acquire()  # the transition in flight
+        waiter = asyncio.ensure_future(coordinator._evaluate_state_machine())
+        await asyncio.sleep(0)
+        evaluate.assert_awaited_once()
+        assert not waiter.done()
+
+        with patch.object(engine, "compute_derived_values") as compute:
+            await coordinator.async_stop()
+            machine._evaluate_lock.release()
+            await waiter
+
+        machine._evaluate_core.assert_not_awaited()
+        compute.assert_not_called()
+        assert controller.mock_calls == []
+
+    async def test_solcast_retry_that_wakes_after_unload_ends_the_chain(
+        self, coordinator, timers, caplog
+    ):
+        """The startup Solcast retry sleeps, then recomputes and evaluates.
+        Nothing cancels it on unload, so it has to stop itself."""
         _, tasks, evaluate = await self._start(coordinator)
         bootstrapper = coordinator._forecast_bootstrapper
-        # Out of retries: the next pass computes and evaluates straight away.
+        bootstrapper._retry_delay = timedelta(0)
+        # Out of retries: the pass after the sleep would compute and evaluate.
         bootstrapper._retry_count = bootstrapper._max_retries
+        engine = coordinator._computation_engine
 
         await coordinator.async_stop()
-        await bootstrapper.wait_for_solcast_and_compute()
-        await self._run(tasks)
+        with (
+            patch.object(engine, "compute_derived_values") as compute,
+            caplog.at_level("INFO"),
+        ):
+            await bootstrapper._retry_solcast_check()
+            await self._run(tasks)
 
+        compute.assert_not_called()
         evaluate.assert_not_awaited()
-        coordinator.hass.services.async_call.assert_not_called()
+        assert "Solcast data not available" not in caplog.text
 
     async def test_watch_listener_is_not_subscribed_again_after_unload(
         self, coordinator, timers
@@ -218,7 +263,148 @@ class TestUnloadStopsEvaluation:
         track.assert_not_called()
         assert coordinator._unsub_battery_power_listener is None
 
-    async def test_stop_before_start_is_safe(self, coordinator):
+
+@pytest.mark.usefixtures("mock_storage", "mock_recorder")
+class TestOptionsUpdateAroundUnload(_Base):
+    """Home Assistant removes the options listener only after the unload
+    returns, so an update can still reach the old coordinator."""
+
+    async def test_options_update_while_running_re_arms_and_evaluates(
+        self, coordinator, timers
+    ):
+        """Control."""
+        _, _, evaluate = await self._start(coordinator)
+        coordinator.entry.runtime_data = coordinator
+
+        with patch(f"{_SUBSCRIPTIONS}.async_track_time_change") as track:
+            await _async_options_updated(coordinator.hass, coordinator.entry)
+
+        track.assert_called_once()
+        evaluate.assert_awaited_once()
+
+    async def test_options_update_after_unload_subscribes_nothing(
+        self, coordinator, timers
+    ):
+        """Otherwise the old instance would send a stale daily summary every
+        day until Home Assistant restarts: nothing is left to cancel it."""
+        _, _, evaluate = await self._start(coordinator)
+        coordinator.entry.runtime_data = coordinator
+
+        await coordinator.async_stop()
+        with patch(f"{_SUBSCRIPTIONS}.async_track_time_change") as track:
+            await _async_options_updated(coordinator.hass, coordinator.entry)
+
+        track.assert_not_called()
+        assert coordinator._subscription_manager._unsub_daily_summary is None
+        evaluate.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("mock_storage", "mock_recorder")
+class TestALiveCoordinatorIsNeverLeftStopped(_Base):
+    async def test_home_assistant_shutdown_does_not_stop_the_coordinator(
+        self, coordinator, timers
+    ):
+        """Shutdown saves; it does not unload. If the shutdown is abandoned
+        or slow, the battery must still be under control."""
+        on_state_change, tasks, evaluate = await self._start(coordinator)
+
+        await coordinator._handle_homeassistant_stop(MagicMock())
+
+        assert coordinator._stopped is False
+        assert coordinator._state_machine._stopped is False
+        await self._assert_still_evaluates(on_state_change, tasks, evaluate, timers)
+
+    async def test_platforms_that_refuse_to_unload_leave_it_running(
+        self, coordinator, timers
+    ):
+        """Home Assistant keeps the entry when the unload fails. Stopping the
+        coordinator first would leave it loaded with no battery control."""
+        on_state_change, tasks, evaluate = await self._start(coordinator)
+        hass, entry = coordinator.hass, coordinator.entry
+        entry.runtime_data = coordinator
+        hass.config_entries.async_unload_platforms = AsyncMock(return_value=False)
+
+        assert await async_unload_entry(hass, entry) is False
+
+        assert coordinator._stopped is False
+        await self._assert_still_evaluates(on_state_change, tasks, evaluate, timers)
+
+    async def test_platform_unload_that_raises_leaves_it_running(
+        self, coordinator, timers
+    ):
+        on_state_change, tasks, evaluate = await self._start(coordinator)
+        hass, entry = coordinator.hass, coordinator.entry
+        entry.runtime_data = coordinator
+        hass.config_entries.async_unload_platforms = AsyncMock(
+            side_effect=RuntimeError("platform teardown failed")
+        )
+
+        with pytest.raises(RuntimeError):
+            await async_unload_entry(hass, entry)
+
+        assert coordinator._stopped is False
+        await self._assert_still_evaluates(on_state_change, tasks, evaluate, timers)
+
+    async def test_successful_unload_stops_it_after_the_platforms(
+        self, coordinator, timers
+    ):
+        on_state_change, tasks, evaluate = await self._start(coordinator)
+        hass, entry = coordinator.hass, coordinator.entry
+        entry.runtime_data = coordinator
+        stopped_during_platform_unload: list[bool] = []
+
+        async def _unload_platforms(*_args):
+            stopped_during_platform_unload.append(coordinator._stopped)
+            return True
+
+        hass.config_entries.async_unload_platforms = AsyncMock(
+            side_effect=_unload_platforms
+        )
+        on_state_change(MagicMock())
+
+        assert await async_unload_entry(hass, entry) is True
+
+        assert stopped_during_platform_unload == [False]
+        assert coordinator._stopped is True
+        assert timers.advance(STATE_CHANGE_COALESCE_SECONDS + 1) == 0
+        await self._run(tasks)
+        evaluate.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("mock_storage", "mock_recorder")
+class TestAStoppedCoordinatorIsVisibleInTheLog(_Base):
+    async def test_first_refused_evaluation_warns_once(
+        self, coordinator, timers, caplog
+    ):
+        """A coordinator that is stopped but still being asked to evaluate is
+        either a harmless straggler or a live instance wrongly stopped. One
+        warning makes the second case findable; more would be noise."""
+        await self._start(coordinator)
         await coordinator.async_stop()
 
-        await coordinator._evaluate_state_machine()
+        with caplog.at_level("DEBUG", logger=_COORDINATOR_LOG):
+            for _ in range(3):
+                await coordinator._evaluate_state_machine()
+
+        refusals = [
+            r
+            for r in caplog.records
+            if r.name == _COORDINATOR_LOG and "coordinator is stopped" in r.getMessage()
+        ]
+        assert [r.levelname for r in refusals] == ["WARNING", "DEBUG", "DEBUG"]
+
+    async def test_stopping_is_logged_before_the_final_save(
+        self, coordinator, timers, caplog
+    ):
+        await self._start(coordinator)
+        logged_when_saving: list[bool] = []
+        coordinator._daily_totals_store._store.async_save.side_effect = (
+            lambda *_a, **_k: logged_when_saving.append(
+                "LocalShift coordinator stopping" in caplog.text
+            )
+        )
+
+        with caplog.at_level("INFO", logger=_COORDINATOR_LOG):
+            await coordinator.async_stop()
+
+        assert logged_when_saving == [True]
