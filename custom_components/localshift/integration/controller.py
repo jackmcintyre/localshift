@@ -826,10 +826,6 @@ class BatteryController:
         """Read a float value from an entity's state."""
         return self._validator.read_float(entity_id, default=default)
 
-    def _read_str(self, entity_id: str, default: str = "") -> str:
-        """Read a string value from an entity's state."""
-        return self._validator.read_str(entity_id, default=default)
-
     def _read_bool(self, entity_id: str, default: bool = False) -> bool:
         """Read a boolean value from an entity's state (switch on/off)."""
         return self._validator.read_bool(entity_id, default=default)

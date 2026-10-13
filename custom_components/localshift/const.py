@@ -59,16 +59,8 @@ BACKUP_RESERVE_MAX_VALID = (
     80  # Maximum reserve that Tesla firmware accepts in backup mode
 )
 
-# Issue #309: Maximum SOC for boost charging
-# Powerwall throttles charge rate above 80%, making boost charging inefficient.
-# When SOC >= 80%, use normal grid charging (3.3kW) instead of boost (5kW).
-BOOST_CHARGE_MAX_SOC = 80.0
-
 # Powerwall capacity
 BATTERY_CAPACITY_KWH = 13.5
-
-# Force discharge time window (dummy tariff limitation)
-DISCHARGE_EARLIEST_HOUR = 6
 
 # -----------------------------------------------------------------------------
 # Consumption Prediction Settings
@@ -126,8 +118,6 @@ CONF_TESLEMETRY_STORM_WATCH = "teslemetry_storm_watch"
 # Issue #1097: Tesla's stored sell tariff, which decides whether autonomous
 # mode exports. Not in the config flow; resolved through DEFAULT_ENTITY_IDS.
 CONF_TESLEMETRY_SELL_TARIFF = "teslemetry_sell_tariff"
-
-CONF_TESLEMETRY_SOLAR_ENERGY = "teslemetry_solar_energy"
 
 # Pricing entities
 CONF_PRICING_GENERAL_PRICE = "pricing_general_price"
@@ -208,7 +198,6 @@ DEFAULT_ENTITY_IDS = {
     CONF_TESLEMETRY_GRID_SERVICES: "binary_sensor.my_home_grid_services_enabled",
     CONF_TESLEMETRY_STORM_WATCH: "binary_sensor.my_home_storm_watch_active",
     CONF_TESLEMETRY_SELL_TARIFF: "calendar.my_home_sell_tariff",
-    CONF_TESLEMETRY_SOLAR_ENERGY: "sensor.my_home_solar_energy",
     CONF_PRICING_GENERAL_PRICE: "",  # Empty - discovered during config flow
     CONF_PRICING_FEED_IN_PRICE: "",  # Empty - discovered during config flow
     CONF_PRICING_GENERAL_FORECAST: "",  # Empty - discovered during config flow
@@ -228,19 +217,15 @@ DEFAULT_ENTITY_IDS = {
 
 CONF_CHEAP_PRICE_PERCENTILE = "cheap_price_percentile"
 CONF_MAX_PRECHARGE_PRICE = "max_pre_charge_price"
-CONF_CHEAP_PRICE_DEADBAND = "cheap_price_deadband"
-CONF_FORECAST_LOOKAHEAD_HOURS = "forecast_lookahead_hours"
 CONF_BATTERY_TARGET = "battery_target"
 CONF_DEMAND_WINDOW_START = "demand_window_start"
 CONF_DEMAND_WINDOW_END = "demand_window_end"
-CONF_EXPORT_MIN_SPREAD = "export_min_spread"
 CONF_MIN_CYCLE_SAVING = "min_cycle_saving"
 CONF_MIN_HOLD_SAVING = "min_hold_saving"
 CONF_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 CONF_STALE_SOLAR_CONSERVATIVE = "stale_solar_conservative"
 CONF_STALE_SOLAR_CONFIDENCE_CEILING = "stale_solar_confidence_ceiling"
 CONF_PRECHARGE_RUNWAY_MARGIN_MIN = "precharge_runway_margin_min"
-CONF_SPIKE_PRICE_PERCENTILE = "spike_price_percentile"
 CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 # Not an options-flow setting: the key under which the state of
 # switch.localshift_spike_discharge_enabled reaches the planner (issue #1120).
@@ -362,33 +347,12 @@ THRESHOLD_RANGES = {
         "unit": "$/kWh",
         "icon": "mdi:tag-arrow-up-outline",
     },
-    CONF_CHEAP_PRICE_DEADBAND: {
-        "min": 0.00,
-        "max": 0.10,
-        "step": 0.01,
-        "unit": "$/kWh",
-        "icon": "mdi:arrow-left-right",
-    },
-    CONF_FORECAST_LOOKAHEAD_HOURS: {
-        "min": 1.0,
-        "max": 8.0,
-        "step": 0.5,
-        "unit": "hours",
-        "icon": "mdi:clock-fast",
-    },
     CONF_BATTERY_TARGET: {
         "min": 50,
         "max": 100,
         "step": 5,
         "unit": "%",
         "icon": "mdi:battery-check",
-    },
-    CONF_EXPORT_MIN_SPREAD: {
-        "min": 0.00,
-        "max": 0.30,
-        "step": 0.01,
-        "unit": "$/kWh",
-        "icon": "mdi:swap-horizontal",
     },
     CONF_MIN_CYCLE_SAVING: {
         "min": 0.00,
@@ -410,13 +374,6 @@ THRESHOLD_RANGES = {
         "step": 0.05,
         "unit": "$/kWh",
         "icon": "mdi:swap-horizontal-variant",
-    },
-    CONF_SPIKE_PRICE_PERCENTILE: {
-        "min": 50,
-        "max": 95,
-        "step": 5,
-        "unit": "%",
-        "icon": "mdi:chart-line",
     },
     CONF_MINIMUM_TARGET_SOC: {
         "min": 5,
@@ -715,10 +672,6 @@ VALIDATION_RESERVE_RETRY_TIMEOUT_SECONDS = 10
 # Proactive Export Constants
 # -----------------------------------------------------------------------------
 
-# Minimum SOC buffer for proactive export to prevent deep discharge.
-# 4% ensures battery can handle essential loads during grid outage.
-PROACTIVE_EXPORT_MIN_RESERVE_PERCENT = 4.0
-
 # Buffer above current SOC for proactive export reserve setting.
 # 5% prevents immediate discharge below reserve threshold.
 PROACTIVE_EXPORT_SOC_BUFFER_PERCENT = 5.0
@@ -767,9 +720,6 @@ EXPORT_INVERSION_HOLDOFF_MINUTES = 60
 # -----------------------------------------------------------------------------
 # Negative FIT Avoidance Constants (Issue #719)
 # -----------------------------------------------------------------------------
-
-# Maximum headroom below battery target for negative-FIT avoidance (percentage points)
-MAX_NEGATIVE_FIT_HEADROOM_PCT: Final[float] = 20.0
 
 # Conservative buffer factor for overflow estimates (0.8 = use 80% of forecast)
 NEGATIVE_FIT_OVERFLOW_BUFFER_FACTOR: Final[float] = 0.8

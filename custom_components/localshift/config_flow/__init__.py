@@ -17,12 +17,10 @@ from ..const import (
     CONF_ALLOW_DW_ENTRY_UNDER_TARGET,
     CONF_AWAY_ENTITY,
     CONF_BATTERY_TARGET,
-    CONF_CHEAP_PRICE_DEADBAND,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_COMPARISON_MODE,
     CONF_DEMAND_WINDOW_END,
     CONF_DEMAND_WINDOW_START,
-    CONF_FORECAST_LOOKAHEAD_HOURS,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
     CONF_MAX_PRECHARGE_PRICE,
     CONF_MIN_CYCLE_SAVING,
@@ -52,12 +50,10 @@ from ..const import (
     DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET,
     DEFAULT_AWAY_ENTITY,
     DEFAULT_BATTERY_TARGET,
-    DEFAULT_CHEAP_PRICE_DEADBAND,
     DEFAULT_CHEAP_PRICE_PERCENTILE,
     DEFAULT_COMPARISON_MODE,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
-    DEFAULT_FORECAST_LOOKAHEAD_HOURS,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MAX_PRECHARGE_PRICE,
     DEFAULT_MIN_CYCLE_SAVING,
@@ -94,20 +90,6 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for LocalShift."""
 
     VERSION = 1
-
-    async def _validate_entities(
-        self, entities: dict[str, tuple[str, str]]
-    ) -> dict[str, str] | None:
-        """Validate entities exist, are available, and have correct domains."""
-        return await validate_all_entities(self.hass, entities)
-
-    async def _validate_notify_service(self, notify_service: str) -> str | None:
-        """Validate that a notify service exists."""
-        return await validate_notify_service(self.hass, notify_service)
-
-    async def _get_notify_services(self) -> list[str]:
-        """Get list of available notify services."""
-        return await get_notify_services(self.hass)
 
     async def _discover_pricing_defaults(self, pricing_source: str) -> dict[str, str]:
         """Discover pricing entity defaults based on pricing source."""
@@ -328,8 +310,6 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_NOTIFY_SERVICE: user_input[CONF_NOTIFY_SERVICE],
                 CONF_CHEAP_PRICE_PERCENTILE: DEFAULT_CHEAP_PRICE_PERCENTILE,
                 CONF_MAX_PRECHARGE_PRICE: DEFAULT_MAX_PRECHARGE_PRICE,
-                CONF_CHEAP_PRICE_DEADBAND: DEFAULT_CHEAP_PRICE_DEADBAND,
-                CONF_FORECAST_LOOKAHEAD_HOURS: DEFAULT_FORECAST_LOOKAHEAD_HOURS,
                 CONF_BATTERY_TARGET: DEFAULT_BATTERY_TARGET,
                 CONF_DEMAND_WINDOW_START: DEFAULT_DEMAND_WINDOW_START,
                 CONF_DEMAND_WINDOW_END: DEFAULT_DEMAND_WINDOW_END,

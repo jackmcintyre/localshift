@@ -538,18 +538,6 @@ class TestSolarAccuracyTracker:
         correction = tracker.get_bias_correction("morning", "sunny", "summer")
         assert correction == pytest.approx(1.5)
 
-    def test_get_additive_correction_returns_0_with_insufficient_samples(self, tracker):
-        """Test get_additive_correction returns 0.0 with fewer than 20 samples."""
-        # Add 19 samples (below threshold)
-        for i in range(19):
-            period_start = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
-            tracker.record_forecast(period_start, 2.0, "sunny")
-            tracker.backfill_actual(period_start, 1.5)
-
-        # With <20 samples, should return 0.0 (no correction)
-        correction = tracker.get_additive_correction("morning", "sunny", "summer")
-        assert correction == 0.0
-
     def test_has_sufficient_samples_false_when_not_enough(self, tracker):
         """Test has_sufficient_samples returns False with <20 samples."""
         # Add 19 samples
@@ -639,37 +627,6 @@ class TestSolarAccuracyTracker:
         # Correction = 1.0 - (-1.0) = 2.0, clamped to [0.5, 1.5]
         assert correction == pytest.approx(1.5, rel=0.1)
 
-    def test_get_additive_correction_no_data(self, tracker):
-        """Test get_additive_correction returns 0.0 (deprecated, always returns 0)."""
-        correction = tracker.get_additive_correction("morning", "sunny", "summer")
-        assert correction == 0.0
-
-    def test_get_additive_correction_with_data(self, tracker):
-        """Test get_additive_correction still returns 0.0 (deprecated, always returns 0)."""
-        # Add historical data (need 20+ samples)
-        # Use month 1 (January) = summer in Southern hemisphere
-        for i in range(20):
-            period_start = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
-            tracker.record_forecast(period_start, 2.0, "sunny")
-            tracker.backfill_actual(period_start, 1.5)
-
-        # Deprecated - always returns 0.0 regardless of data
-        correction = tracker.get_additive_correction("morning", "sunny", "summer")
-        assert correction == 0.0
-
-    def test_get_additive_correction_clamps_to_bounds(self, tracker):
-        """Test get_additive_correction returns 0.0 (deprecated, always returns 0)."""
-        # Add historical data with extreme bias (need 20+ samples)
-        # Use month 1 (January) = summer in Southern hemisphere
-        for i in range(20):
-            period_start = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
-            tracker.record_forecast(period_start, 3.0, "sunny")
-            tracker.backfill_actual(period_start, 0.0)
-
-        # Deprecated - always returns 0.0 regardless of data
-        correction = tracker.get_additive_correction("morning", "sunny", "summer")
-        assert correction == 0.0
-
     def test_apply_bias_correction_uses_multiplicative_only(self, tracker):
         """Test apply_bias_correction uses multiplicative only (issue #760)."""
         # Add historical data (need 20+ samples)
@@ -697,28 +654,6 @@ class TestSolarAccuracyTracker:
         # corrected = 0.2 * 0.5 = 0.1 (floors at 0.0 is still valid edge case)
         corrected = tracker.apply_bias_correction(0.2, "morning", "sunny", "summer")
         assert corrected == pytest.approx(0.1, rel=0.1)
-
-    def test_get_additive_correction_is_context_specific(self, tracker):
-        """Test get_additive_correction returns 0.0 (deprecated, always returns 0)."""
-        # Add historical data for different contexts (need 20+ samples for each)
-        # Use month 1 (January) = summer in Southern hemisphere
-        for i in range(20):
-            morning = datetime(2026, 1, 1 + i, 10, 0, tzinfo=UTC)
-            afternoon = datetime(2026, 1, 1 + i, 14, 0, tzinfo=UTC)
-
-            tracker.record_forecast(morning, 2.0, "sunny")
-            tracker.backfill_actual(morning, 1.5)
-            tracker.record_forecast(afternoon, 2.0, "cloudy")
-            tracker.backfill_actual(afternoon, 1.9)
-
-        # Deprecated - always returns 0.0 regardless of context
-        sunny_correction = tracker.get_additive_correction("morning", "sunny", "summer")
-        cloudy_correction = tracker.get_additive_correction(
-            "afternoon", "cloudy", "summer"
-        )
-
-        assert sunny_correction == 0.0
-        assert cloudy_correction == 0.0
 
     @pytest.mark.asyncio
     async def test_async_load_no_data(self, tracker, mock_hass):
@@ -1339,8 +1274,15 @@ class TestOverforecastConfidenceCap:
         assert expected_ratio < 0.85
 
 
-class TestComputeContextBias:
-    """Tests for _compute_context_bias method."""
+def _context_bias(tracker, time_of_day, weather, season):
+    """The bias lookup exactly as ``_resolve_bias_scope`` makes it."""
+    return tracker._compute_context_metric(
+        time_of_day, weather, season, lambda record: record.bias
+    )
+
+
+class TestComputeContextMetric:
+    """Tests for _compute_context_metric, the lookup behind bias correction."""
 
     @pytest.fixture
     def tracker_with_data(self, mock_hass):
@@ -1363,7 +1305,7 @@ class TestComputeContextBias:
 
     def test_finds_matching_context(self, tracker_with_data):
         """Test finding bias for matching context."""
-        result = tracker_with_data._compute_context_bias("morning", "sunny", "summer")
+        result = _context_bias(tracker_with_data, "morning", "sunny", "summer")
         assert result is not None
         weighted_bias, count = result
         assert count == 3
@@ -1371,26 +1313,17 @@ class TestComputeContextBias:
 
     def test_no_matching_context(self, tracker_with_data):
         """Test when no matching context exists."""
-        result = tracker_with_data._compute_context_bias("evening", "sunny", "summer")
+        result = _context_bias(tracker_with_data, "evening", "sunny", "summer")
         assert result is None
 
     def test_no_season_filter(self, tracker_with_data):
         """Test without season filter."""
-        result = tracker_with_data._compute_context_bias("morning", "sunny", None)
+        result = _context_bias(tracker_with_data, "morning", "sunny", None)
         assert result is not None
         _, count = result
         assert count == 3
 
-    def test_compute_context_additive_bias(self, tracker_with_data):
-        result = tracker_with_data._compute_context_additive_bias(
-            "morning", "sunny", "summer"
-        )
-        assert result is not None
-        weighted_bias, count = result
-        assert count == 3
-        assert weighted_bias == pytest.approx(0.5, rel=0.1)
-
-    def test_compute_context_bias_uses_true_half_life_weighting(
+    def test_compute_context_metric_uses_true_half_life_weighting(
         self, tracker_with_data
     ):
         tracker_with_data._period_records.clear()
@@ -1419,9 +1352,7 @@ class TestComputeContextBias:
                 "custom_components.localshift.forecast.solar_accuracy.dt_util.now",
                 lambda: now,
             )
-            result = tracker_with_data._compute_context_bias(
-                "morning", "sunny", "summer"
-            )
+            result = _context_bias(tracker_with_data, "morning", "sunny", "summer")
 
         assert result is not None
         weighted_bias, count = result
