@@ -1849,3 +1849,150 @@ class TestDwEntryTelemetryClockGate:
         assert "31.0 points short" in message
         assert "did not execute" not in message
         assert "Pre-charge" not in message
+
+
+# ─── A restored DW-entry record survives the restart (#1142) ────────────────
+
+
+class TestRestoredDwEntryRecord:
+    """The daily snapshot restores the entry record before the first
+    evaluation. That evaluation runs the date latch with a blank
+    ``last_target_reset_date`` (it always is after a start), and must neither
+    blank the record nor capture over it."""
+
+    _engine = staticmethod(TestDwEntryTelemetryClockGate._engine)
+    _set_soc = staticmethod(TestDwEntryTelemetryClockGate._set_soc)
+    _full_tick = staticmethod(TestDwEntryTelemetryClockGate._full_tick)
+
+    ENTRY_AT = datetime(2026, 10, 12, 15, 0, 20, tzinfo=UTC)
+
+    def _restore(self, data, at=None) -> None:
+        """What DailyTotalsStore.async_restore leaves on a fresh data object."""
+        at = at or self.ENTRY_AT
+        assert data.last_target_reset_date is None
+        data.dw_entry_actual_soc_pct = 64.0
+        data.dw_entry_actual_at = at
+        data.dw_entry_actual_target_pct = 95.0
+        data.dw_entry_actual_shortfall_pct = 31.0
+        data.dw_entry_actual_date = at.date()
+
+    def _assert_record_untouched(self, data) -> None:
+        assert data.dw_entry_actual_soc_pct == 64.0
+        assert data.dw_entry_actual_at == self.ENTRY_AT
+        assert data.dw_entry_actual_target_pct == 95.0
+        assert data.dw_entry_actual_shortfall_pct == 31.0
+        assert data.dw_entry_actual_date == self.ENTRY_AT.date()
+
+    @pytest.mark.parametrize(
+        "restart_at",
+        [
+            # Inside the capture grace: a capture here would overwrite the
+            # record and warn a second time.
+            datetime(2026, 10, 12, 15, 2, tzinfo=UTC),
+            # Past the grace: the deploy-mid-window case from the issue.
+            datetime(2026, 10, 12, 16, 41, tzinfo=UTC),
+            # After the window has closed.
+            datetime(2026, 10, 12, 22, 5, tzinfo=UTC),
+        ],
+    )
+    def test_first_evaluations_after_a_restart_keep_the_record(
+        self, computation_engine, coordinator_data, caplog, restart_at
+    ):
+        engine = self._engine(computation_engine, block_on=False)
+        self._set_soc(engine, "40.0")
+        self._restore(coordinator_data)
+
+        with caplog.at_level("INFO"):
+            for minute in range(3):
+                self._full_tick(
+                    engine, coordinator_data, restart_at + timedelta(minutes=minute)
+                )
+
+        self._assert_record_untouched(coordinator_data)
+        assert "ENTERED UNDER TARGET" not in caplog.text
+        assert "entry SOC not recorded" not in caplog.text
+
+    def test_the_target_latch_is_still_reset_on_the_first_evaluation(
+        self, computation_engine, coordinator_data
+    ):
+        """Keeping the record must not skip the control half of the latch."""
+        engine = self._engine(computation_engine, block_on=False)
+        self._set_soc(engine, "40.0")
+        self._restore(coordinator_data)
+        coordinator_data.target_reached_today = True
+
+        engine._reset_daily_precharge_latch(coordinator_data, self.ENTRY_AT.date())
+
+        assert coordinator_data.target_reached_today is False
+        assert coordinator_data.last_target_reset_date == self.ENTRY_AT.date()
+        self._assert_record_untouched(coordinator_data)
+
+    def test_restored_record_is_cleared_the_next_day(
+        self, computation_engine, coordinator_data
+    ):
+        engine = self._engine(computation_engine, block_on=False)
+        self._set_soc(engine, "40.0")
+        self._restore(coordinator_data)
+        self._full_tick(
+            engine, coordinator_data, datetime(2026, 10, 12, 23, 59, tzinfo=UTC)
+        )
+        self._assert_record_untouched(coordinator_data)
+
+        self._full_tick(
+            engine, coordinator_data, datetime(2026, 10, 13, 0, 0, tzinfo=UTC)
+        )
+
+        assert coordinator_data.dw_entry_actual_soc_pct is None
+        assert coordinator_data.dw_entry_actual_at is None
+        assert coordinator_data.dw_entry_actual_target_pct is None
+        assert coordinator_data.dw_entry_actual_shortfall_pct is None
+        assert coordinator_data.dw_entry_actual_date is None
+
+    def test_next_day_capture_works_after_a_restored_record(
+        self, computation_engine, coordinator_data
+    ):
+        engine = self._engine(computation_engine, block_on=False)
+        self._restore(coordinator_data)
+        self._set_soc(engine, "40.0")
+        self._full_tick(
+            engine, coordinator_data, datetime(2026, 10, 12, 16, 41, tzinfo=UTC)
+        )
+
+        self._set_soc(engine, "96.0")
+        at = datetime(2026, 10, 13, 15, 0, tzinfo=UTC)
+        self._full_tick(engine, coordinator_data, at)
+
+        assert coordinator_data.dw_entry_actual_soc_pct == 96.0
+        assert coordinator_data.dw_entry_actual_at == at
+        assert coordinator_data.dw_entry_actual_date == at.date()
+
+    def test_a_record_from_an_earlier_day_is_cleared_on_the_first_evaluation(
+        self, computation_engine, coordinator_data
+    ):
+        """Only a record dated today is kept; anything older goes as before."""
+        engine = self._engine(computation_engine, block_on=False)
+        self._set_soc(engine, "40.0")
+        self._restore(coordinator_data)
+
+        self._full_tick(
+            engine, coordinator_data, datetime(2026, 10, 13, 9, 0, tzinfo=UTC)
+        )
+
+        assert coordinator_data.dw_entry_actual_soc_pct is None
+        assert coordinator_data.dw_entry_actual_date is None
+
+    def test_blank_record_after_a_mid_window_restart_stays_blank(
+        self, computation_engine, coordinator_data, caplog
+    ):
+        """Nothing was recorded before the restart, so nothing is invented."""
+        engine = self._engine(computation_engine, block_on=False)
+        self._set_soc(engine, "40.0")
+
+        with caplog.at_level("INFO"):
+            self._full_tick(
+                engine, coordinator_data, datetime(2026, 10, 12, 16, 41, tzinfo=UTC)
+            )
+
+        assert coordinator_data.dw_entry_actual_soc_pct is None
+        assert coordinator_data.dw_entry_actual_date is None
+        assert caplog.text.count("entry SOC not recorded") == 1
