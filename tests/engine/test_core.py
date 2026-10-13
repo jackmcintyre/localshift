@@ -487,7 +487,6 @@ class TestCoreRegressionCoverage:
             risk_window_end_idx=5,
             required_headroom_kwh=1.0,
             recovery_deadline_idx=6,
-            conservative_recovery_kwh_by_slot=(5.0,) * 8,
             recoverability_floor_pct_by_slot=(20.0,) * 8,
         )
 
@@ -506,7 +505,6 @@ class TestCoreRegressionCoverage:
             risk_window_end_idx=6,
             required_headroom_kwh=2.0,
             recovery_deadline_idx=7,
-            conservative_recovery_kwh_by_slot=(5.0,) * 8,
             recoverability_floor_pct_by_slot=(10.0,) * 8,
         )
         config = OptimizerConfig(min_soc_pct=10.0)

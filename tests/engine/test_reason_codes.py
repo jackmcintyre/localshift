@@ -136,7 +136,6 @@ class TestClassifyExportReason:
             risk_window_end_idx=10,
             required_headroom_kwh=5.0,
             recovery_deadline_idx=11,
-            conservative_recovery_kwh_by_slot=(5.0,) * 12,
             recoverability_floor_pct_by_slot=(20.0,) * 12,
         )
         result = classify_export_reason(

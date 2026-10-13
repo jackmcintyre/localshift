@@ -470,7 +470,6 @@ def assess_negative_fit_avoidance(inputs: OptimizerInputs) -> NegativeFitAssessm
             risk_window_end_idx=risk_end_idx,
             required_headroom_kwh=required_headroom_kwh,
             recovery_deadline_idx=recovery_deadline_idx,
-            conservative_recovery_kwh_by_slot=tuple(recovery_by_slot),
             recoverability_floor_pct_by_slot=tuple(floor_by_slot),
         ),
         spill_cost=spill_cost,

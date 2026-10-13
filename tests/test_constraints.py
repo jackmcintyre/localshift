@@ -63,7 +63,6 @@ def _make_context(
         risk_window_end_idx=risk_end,
         required_headroom_kwh=5.0,
         recovery_deadline_idx=14,
-        conservative_recovery_kwh_by_slot=tuple(recovery_by_slot),
         recoverability_floor_pct_by_slot=tuple(floor_by_slot),
     )
 

@@ -2826,7 +2826,6 @@ def test_negative_fit_context_type():
         risk_window_end_idx=15,
         required_headroom_kwh=5.0,
         recovery_deadline_idx=20,
-        conservative_recovery_kwh_by_slot=(10.0, 10.0, 10.0),
         recoverability_floor_pct_by_slot=(30.0, 30.0, 30.0),
     )
     assert ctx.risk_window_start_idx == 10
