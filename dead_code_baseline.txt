@@ -14,7 +14,6 @@
 # site of the same attribute). Sorted; no line numbers on purpose. Notes
 # survive --update.
 
-attribute    computation_engine.py  ComputationEngine._baseline_avg_kw
 attribute    coordinator/coordinator.py  LocalShiftCoordinator._listeners
 attribute    coordinator/coordinator.py  self.data.hybrid_solar_accuracy
 attribute    coordinator/coordinator.py  self.data.hybrid_solar_accuracy@2
@@ -51,15 +50,7 @@ function     engine/optimizer_runner.py  run_optimizer  # module docstring says 
 function     engine/price_calculator.py  get_price_for_slot_with_source
 function     forecast/solar.py  _get_period_estimate
 function     forecast/solcast_analysis.py  compute_weighted_confidence
-method       computation_engine.py  ComputationEngine._analyze_spike
-method       computation_engine.py  ComputationEngine._compute_effective_cheap_price
-method       computation_engine.py  ComputationEngine._compute_effective_cheap_price_preliminary
-method       computation_engine.py  ComputationEngine._compute_excess_solar_signals
-method       computation_engine.py  ComputationEngine._compute_load_forecast_slots
-method       computation_engine.py  ComputationEngine._compute_solar_battery_forecast
 method       computation_engine.py  ComputationEngine._get_profile_for_day
-method       computation_engine.py  ComputationEngine._max_forecast_price
-method       computation_engine.py  ComputationEngine._scan_forecast_for_spike
 method       config_flow/__init__.py  LocalShiftConfigFlow._get_notify_services
 method       config_flow/__init__.py  LocalShiftConfigFlow._validate_entities
 method       config_flow/__init__.py  LocalShiftConfigFlow._validate_notify_service

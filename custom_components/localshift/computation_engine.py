@@ -70,10 +70,8 @@ from .coordinator import CoordinatorData
 from .engine import (
     ExcessSolarSignalsEngine,
     WeatherDiagnosticsEngine,
-    max_forecast_price,
     parse_forecast_dt,
     percentile,
-    scan_forecast_for_spike,
 )
 from .engine.excess_solar import ExcessSolarEngine
 from .engine.optimizer_dp import DPPlanner
@@ -96,7 +94,6 @@ from .forecast import (
     sum_solar_before_target,
 )
 from .learning.correlation import SLIDING_WINDOW_DAYS, WeatherCorrelation
-from .pricing.types import ForecastSlot
 from .utils.away import (
     async_get_away_intervals,
     away_local_hour_keys,
@@ -242,9 +239,6 @@ class ComputationEngine:
         # Local cache properties (delegated to history_fetcher for storage)
         self._previous_active_mode = None
         self._last_decision_log_time: datetime | None = None
-
-        # Baseline load profile for Issue #137 (set by coordinator)
-        self._baseline_avg_kw: dict[int, float] = {}
 
     def set_solar_accuracy_tracker(self, tracker: Any) -> None:
         """Set the solar accuracy tracker for bias correction.
@@ -882,71 +876,6 @@ class ComputationEngine:
     # SOLAR & BATTERY FORECASTING
     # ========================================================================
 
-    def _compute_solar_battery_forecast(
-        self,
-        data: CoordinatorData,
-        now_dt: datetime,
-        target_hour: int,
-        before_dw: bool,
-        after_dw: bool,
-    ) -> None:
-        """Compute solar battery SOC forecast."""
-        target_pct = float(
-            self.entry.options.get(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-        )
-        self._forecast_pipeline.compute_solar_battery_forecast(
-            data=data,
-            now_dt=now_dt,
-            target_hour=target_hour,
-            before_dw=before_dw,
-            after_dw=after_dw,
-            target_pct=target_pct,
-        )
-
-    def _compute_load_forecast_slots(
-        self,
-        data: CoordinatorData,
-        now_dt: datetime,
-        historical_avg_kw: dict[int, float],
-        recent_load_kw: float,
-    ) -> None:
-        """Populate data.load_forecast_slots with per-slot kW estimates."""
-        self._forecast_pipeline.compute_load_forecast_slots(
-            data=data,
-            now_dt=now_dt,
-            historical_avg_kw=historical_avg_kw,
-            recent_load_kw=recent_load_kw,
-            total_slots=TOTAL_SLOTS,
-        )
-
-    def _compute_effective_cheap_price_preliminary(
-        self,
-        data: CoordinatorData,
-        now_dt: datetime,
-        before_dw: bool,
-        target_hour: int,
-        target_pct: float,
-    ) -> None:
-        """Compute preliminary effective cheap price threshold."""
-        self._price_signals.compute_effective_cheap_price_preliminary(
-            data=data,
-            now_dt=now_dt,
-            before_dw=before_dw,
-            target_hour=target_hour,
-            target_pct=target_pct,
-        )
-
-    def _compute_effective_cheap_price(
-        self, data: CoordinatorData, now_dt: datetime, before_dw: bool, target_hour: int
-    ) -> None:
-        """Compute final effective cheap price threshold."""
-        self._price_signals.compute_effective_cheap_price(
-            data=data,
-            now_dt=now_dt,
-            before_dw=before_dw,
-            target_hour=target_hour,
-        )
-
     def _get_dp_decision_at_demand_window(
         self, data: CoordinatorData, target_hour: int
     ) -> dict | None:
@@ -1194,24 +1123,6 @@ class ComputationEngine:
         return sum_solar_before_target(solcast, now_dt, target_hour)
 
     @staticmethod
-    def _scan_forecast_for_spike(
-        forecasts: list[ForecastSlot],
-        now_dt: datetime,
-        cutoff: datetime,
-    ) -> bool:
-        """Return True if any forecast has spike_status == 'spike' in window (delegates to utils)."""
-        return scan_forecast_for_spike(forecasts, now_dt, cutoff)
-
-    @staticmethod
-    def _max_forecast_price(
-        forecasts: list[ForecastSlot],
-        now_dt: datetime,
-        cutoff: datetime,
-    ) -> float:
-        """Return maximum per_kwh price from forecasts within window (delegates to utils)."""
-        return max_forecast_price(forecasts, now_dt, cutoff)
-
-    @staticmethod
     def _percentile(
         prices: list[float],
         percentile_value: float,
@@ -1453,30 +1364,6 @@ class ComputationEngine:
     def weather_correlation(self) -> WeatherCorrelation | None:
         """Get the weather correlation instance for external access."""
         return self._weather_correlation
-
-    # ========================================================================
-    # SPIKE ANALYSIS (Conservative Spike Discharge)
-    # ========================================================================
-
-    def _analyze_spike(
-        self,
-        data: CoordinatorData,
-        now_dt: datetime,
-    ) -> None:
-        """Analyze feed-in forecast for spike window details."""
-        self._price_signals.analyze_spike(data, now_dt)
-
-    # ========================================================================
-    # EXCESS SOLAR LOAD SHIFTING (backlog-high-017)
-    # ========================================================================
-
-    def _compute_excess_solar_signals(
-        self,
-        data: CoordinatorData,
-        now_dt: datetime,
-    ) -> None:
-        """Compute excess solar load shifting signals."""
-        self._forecast_pipeline.compute_excess_solar_signals(data, now_dt)
 
     # ========================================================================
     # FORECAST ACCURACY TRACKING (Issue #37 Phase 2)
