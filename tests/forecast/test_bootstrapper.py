@@ -85,3 +85,60 @@ async def test_forecast_bootstrapper_max_retries_fallback():
     notify_listeners.assert_called_once()
     evaluate_state_machine.assert_awaited_once()
     hass.async_create_task.assert_not_called()
+
+
+def _unready_bootstrapper(max_retries: int):
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+    states = MockStates({
+        "sensor.solcast_pv_forecast_forecast_today": MockState(
+            entity_id="sensor.solcast_pv_forecast_forecast_today",
+            state="unknown",
+            attributes={},
+        )
+    })
+    hass.states.get = states.get
+    read_state = MagicMock()
+    compute_derived_values = MagicMock()
+    evaluate_state_machine = AsyncMock()
+    bootstrapper = ForecastBootstrapper(
+        hass,
+        CoordinatorData(),
+        lambda _key: "sensor.solcast_pv_forecast_forecast_today",
+        read_state,
+        compute_derived_values,
+        MagicMock(),
+        evaluate_state_machine,
+        timedelta(seconds=0),
+        max_retries,
+    )
+    return bootstrapper, read_state, compute_derived_values, evaluate_state_machine
+
+
+@pytest.mark.asyncio
+async def test_retry_after_the_sleep_computes_when_running():
+    """Control: out of retries, the pass after the sleep computes."""
+    bootstrapper, read_state, compute, evaluate = _unready_bootstrapper(0)
+
+    await bootstrapper._retry_solcast_check()
+
+    read_state.assert_called_once()
+    compute.assert_called_once()
+    evaluate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_retry_that_wakes_after_stop_ends_the_chain(caplog):
+    """Issue #1149: stopped while the retry slept. It must not read state,
+    recompute, evaluate, queue another retry or report Solcast as missing."""
+    bootstrapper, read_state, compute, evaluate = _unready_bootstrapper(0)
+
+    bootstrapper.stop()
+    with caplog.at_level("INFO"):
+        await bootstrapper._retry_solcast_check()
+
+    read_state.assert_not_called()
+    compute.assert_not_called()
+    evaluate.assert_not_awaited()
+    bootstrapper.hass.async_create_task.assert_not_called()
+    assert "Solcast data not available" not in caplog.text

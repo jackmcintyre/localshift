@@ -23,7 +23,7 @@ def test_planner_action_values():
 
 
 def test_planner_reason_code_count():
-    assert len(PlannerReasonCode) == 11
+    assert len(PlannerReasonCode) == 10
 
 
 def test_objective_terms_net_cost():

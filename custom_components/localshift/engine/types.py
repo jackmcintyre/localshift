@@ -80,9 +80,6 @@ class PlannerReasonCode(StrEnum):
     SOC_CEILING_CONSTRAINT = "SOC_CEILING_CONSTRAINT"
     """Action constrained by maximum SOC (battery full)."""
 
-    DEMAND_WINDOW_CONSTRAINT = "DEMAND_WINDOW_CONSTRAINT"
-    """Action constrained by demand window entry requirements."""
-
     IDLE = "IDLE"
     """No economic or constraint reason to act; holding in self-consumption."""
 
