@@ -4,7 +4,7 @@ Tests that the optimizer penalizes overnight grid charging when
 tomorrow's solar forecast is available beyond the price horizon.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -751,12 +751,9 @@ class TestSolarOpportunityPenaltyStrengthened:
         )
 
 
-def test_short_horizon_aware_of_future_solar_holds():
-    """
-    Test that when the demand window is beyond the horizon, the DP
-    accounts for solar between now and then. (Issue #619)
-    """
-    config = OptimizerConfig(
+def _short_horizon_config() -> OptimizerConfig:
+    """10 kWh battery, 10% floor, 80% demand-window target, 50 SOC bins."""
+    return OptimizerConfig(
         battery_capacity_kwh=10.0,
         min_soc_pct=10.0,
         max_soc_pct=100.0,
@@ -769,94 +766,103 @@ def test_short_horizon_aware_of_future_solar_holds():
         discharge_efficiency=0.95,
     )
 
-    now = datetime(2026, 1, 3, 23, 0, 0)
-    slots = [
-        make_slot(i, (23 + i // 2) % 24, (i % 2) * 30, buy_price=0.14)
-        for i in range(10)
+
+def _overnight_slots() -> list[SlotContext]:
+    """Ten cheap half-hour slots from 23:00 on 3 Jan to 04:00 on 4 Jan.
+
+    make_slot stamps every slot with 3 Jan, which would send the timestamps
+    backwards at midnight, so the real start time is written over it.
+    """
+    start = datetime(2026, 1, 3, 23, 0, 0)
+    slots = []
+    for i in range(10):
+        slot = make_slot(i, 0, buy_price=0.14)
+        slot.timestamp_iso = (start + timedelta(minutes=30 * i)).isoformat()
+        slots.append(slot)
+    return slots
+
+
+def _grid_charge_decisions(result) -> list:
+    """Every decision that charges from the grid, at either rate."""
+    return [
+        d
+        for d in result.decisions
+        if d.action
+        in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
     ]
-    # Target 80% at 17:00 tomorrow (well beyond horizon ending at 04:00 AM)
-    # Force terminal_penalty_idx to 9
-    slots[-1].is_demand_window_slot = True
 
-    # Solar tomorrow morning: 16 kWh available (starts at 08:00, beyond 04:00 AM)
-    all_solcast = [make_solcast_entry(8 + i, 4.0) for i in range(8)]
 
+@pytest.mark.parametrize(
+    ("all_solcast", "waits_for_solar"),
+    [
+        # 16 kWh tomorrow morning, after the horizon ends at 04:00.
+        ([make_solcast_entry(8 + i, 4.0) for i in range(8)], True),
+        # 1 kWh tomorrow morning: nothing worth waiting for.
+        ([make_solcast_entry(9, 2.0)], False),
+    ],
+    ids=["ample-solar", "scant-solar"],
+)
+def test_short_horizon_aware_of_future_solar_holds(all_solcast, waits_for_solar):
+    """With the demand window beyond the horizon, cheap power is not bought (#619).
+
+    No slot in the horizon is a demand-window slot, so the planner has no
+    target to fund overnight and must not grid-charge at any rate, however
+    cheap the slots. What the solar forecast changes is why it holds: with
+    ample solar coming it is waiting for that solar; with almost none it is
+    simply idle. The second case is the contrast that shows the forecast, not
+    the fixture, drives the reason.
+    """
     inputs = OptimizerInputs(
         cycle_id="test-horizon-aware",
         initial_soc_pct=20.0,
-        slots=slots,
-        config=config,
+        slots=_overnight_slots(),
+        config=_short_horizon_config(),
         all_solcast=all_solcast,
     )
 
-    planner = DPPlanner()
-    result = planner.plan(inputs)
+    result = DPPlanner().plan(inputs)
     assert result.success
 
-    # Should HOLD because future solar covers shortfall
-    charge_slots = [
-        d for d in result.decisions if d.action == PlannerAction.CHARGE_GRID_NORMAL
-    ]
-    assert len(charge_slots) == 0
+    assert _grid_charge_decisions(result) == []
 
-    # Reason should be SOLAR_OPPORTUNITY_WAIT (since price is cheap and solar is coming)
-    assert result.decisions[0].reason_code == PlannerReasonCode.SOLAR_OPPORTUNITY_WAIT
+    first_reason = result.decisions[0].reason_code
+    waiting = first_reason == PlannerReasonCode.SOLAR_OPPORTUNITY_WAIT
+    assert waiting is waits_for_solar
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#1131: the plan holds at the 10% floor for the whole horizon and enters "
-        "the demand window 70 points under its 80% target. It still holds with no "
-        "solar forecast at all and with the shortfall penalty raised to 100, so "
-        "the hold is not a marginal-economics choice. Until #1131 this test ended "
-        "in `assert len(charge_slots) >= 0`, which cannot fail, so the #619 "
-        "behaviour it is named for has had no test."
-    ),
-)
 def test_short_horizon_still_charges_if_future_solar_insufficient():
-    """It still charges from the grid when the future solar is not enough (#619)."""
-    config = OptimizerConfig(
-        battery_capacity_kwh=10.0,
-        min_soc_pct=10.0,
-        max_soc_pct=100.0,
-        demand_window_target_soc_pct=80.0,
-        target_shortfall_penalty_per_pct=1.0,
-        soc_bins=50,
-        optimization_mode="self_consumption",
-        effective_cheap_price=0.17,
-        charge_efficiency=0.92,
-        discharge_efficiency=0.95,
-    )
+    """With the window inside the horizon and little solar, it grid-charges (#619).
 
-    now = datetime(2026, 1, 3, 23, 0, 0)
-    slots = [
-        make_slot(i, (23 + i // 2) % 24, (i % 2) * 30, buy_price=0.14)
-        for i in range(10)
-    ]
+    The last slot is the demand-window entry. Production always sets the slot
+    flag and the entry flag together (engine/slots.py); the planner finds the
+    window from the entry flag alone, so a fixture that sets only the slot flag
+    never tells it a target exists.
+    """
+    slots = _overnight_slots()
     slots[-1].is_demand_window_slot = True
-
-    # Tiny solar tomorrow morning: 1 kWh available
-    all_solcast = [make_solcast_entry(9, 2.0)]
+    slots[-1].is_demand_window_entry = True
+    config = _short_horizon_config()
 
     inputs = OptimizerInputs(
         cycle_id="test-insufficient-future-solar",
         initial_soc_pct=10.0,
         slots=slots,
         config=config,
-        all_solcast=all_solcast,
+        # Tiny solar tomorrow morning: 1 kWh, after the window has opened.
+        all_solcast=[make_solcast_entry(9, 2.0)],
     )
 
-    planner = DPPlanner()
-    result = planner.plan(inputs)
+    result = DPPlanner().plan(inputs)
     assert result.success
 
-    # 1 kWh of solar tomorrow cannot close a 70-point shortfall on a 10 kWh
-    # battery, so waiting for it is not an option: some slot must grid-charge.
-    charge_slots = [
-        d
-        for d in result.decisions
-        if d.action
-        in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
-    ]
+    # 1 kWh of solar cannot close a 70-point shortfall on a 10 kWh battery, so
+    # waiting is not an option: the plan must grid-charge before the window.
+    charge_slots = _grid_charge_decisions(result)
     assert len(charge_slots) > 0
+    assert all(d.slot_index < slots[-1].slot_index for d in charge_slots)
+
+    # And it must charge enough: the SOC going into the entry slot is within
+    # one SOC bin of the target (the grid cannot resolve finer than that).
+    soc_bin_pct = (config.max_soc_pct - config.min_soc_pct) / (config.soc_bins - 1)
+    entry_soc = result.decisions[-2].predicted_soc_pct
+    assert entry_soc >= config.demand_window_target_soc_pct - soc_bin_pct
