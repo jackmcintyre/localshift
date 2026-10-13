@@ -10,6 +10,11 @@ from custom_components.localshift.config_flow import (
     LocalShiftConfigFlow,
     LocalShiftOptionsFlow,
 )
+from custom_components.localshift.config_flow.validators import (
+    get_notify_services,
+    validate_all_entities,
+    validate_notify_service,
+)
 from custom_components.localshift.const import (
     CONF_AWAY_ENTITY,
     CONF_BATTERY_TARGET,
@@ -88,7 +93,7 @@ def create_mock_state(entity_id: str, state: str, domain: str | None = None):
 
 
 class TestValidateEntities:
-    """Tests for _validate_entities method."""
+    """Tests for validate_all_entities."""
 
     @pytest.mark.asyncio
     async def test_validate_entities_all_valid(self, mock_hass):
@@ -114,7 +119,7 @@ class TestValidateEntities:
             "test_sensor": ("sensor.test", "sensor"),
         }
 
-        result = await flow._validate_entities(entities)
+        result = await validate_all_entities(flow.hass, entities)
 
         assert result is None  # No errors
 
@@ -130,7 +135,7 @@ class TestValidateEntities:
             "test_sensor": ("sensor.missing", "sensor"),
         }
 
-        result = await flow._validate_entities(entities)
+        result = await validate_all_entities(flow.hass, entities)
 
         assert result is not None
         assert "test_sensor" in result
@@ -150,7 +155,7 @@ class TestValidateEntities:
             "test_sensor": ("sensor.test", "sensor"),
         }
 
-        result = await flow._validate_entities(entities)
+        result = await validate_all_entities(flow.hass, entities)
 
         assert result is not None
         assert "test_sensor" in result
@@ -171,7 +176,7 @@ class TestValidateEntities:
             "test_select": ("sensor.test", "select"),  # Expecting select, got sensor
         }
 
-        result = await flow._validate_entities(entities)
+        result = await validate_all_entities(flow.hass, entities)
 
         assert result is not None
         assert "test_select" in result
@@ -184,7 +189,7 @@ class TestValidateEntities:
 
 
 class TestValidateNotifyService:
-    """Tests for _validate_notify_service method."""
+    """Tests for validate_notify_service and get_notify_services."""
 
     @pytest.mark.asyncio
     async def test_validate_notify_service_valid(self, mock_hass):
@@ -192,7 +197,7 @@ class TestValidateNotifyService:
         flow = LocalShiftConfigFlow()
         flow.hass = mock_hass
 
-        result = await flow._validate_notify_service("notify.mobile_app_test")
+        result = await validate_notify_service(flow.hass, "notify.mobile_app_test")
 
         assert result is None
 
@@ -202,7 +207,7 @@ class TestValidateNotifyService:
         flow = LocalShiftConfigFlow()
         flow.hass = mock_hass
 
-        result = await flow._validate_notify_service("")
+        result = await validate_notify_service(flow.hass, "")
 
         assert result is not None
         assert "required" in result.lower()
@@ -213,7 +218,7 @@ class TestValidateNotifyService:
         flow = LocalShiftConfigFlow()
         flow.hass = mock_hass
 
-        result = await flow._validate_notify_service("mobile_app_test")
+        result = await validate_notify_service(flow.hass, "mobile_app_test")
 
         assert result is not None
         assert "notify." in result
@@ -224,7 +229,7 @@ class TestValidateNotifyService:
         flow = LocalShiftConfigFlow()
         flow.hass = mock_hass
 
-        result = await flow._validate_notify_service("notify.nonexistent")
+        result = await validate_notify_service(flow.hass, "notify.nonexistent")
 
         assert result is not None
         assert "not found" in result
@@ -235,7 +240,7 @@ class TestValidateNotifyService:
         flow = LocalShiftConfigFlow()
         flow.hass = mock_hass
 
-        services = await flow._get_notify_services()
+        services = await get_notify_services(flow.hass)
 
         assert isinstance(services, list)
         assert "notify.mobile_app_test" in services
@@ -1077,7 +1082,7 @@ class TestInvalidInputFormats:
             return_value={"notify": {"mobile_app_test": MagicMock()}}
         )
 
-        result = await flow._validate_notify_service("notify.mobile_app_test")
+        result = await validate_notify_service(flow.hass, "notify.mobile_app_test")
         assert result is None
 
         # Invalid time format "25:00:00" would be handled by form validation
@@ -1114,7 +1119,9 @@ class TestInvalidInputFormats:
         mock_hass.states.get = MagicMock(return_value=None)
         entity_id = "sensor.test@special!chars"
 
-        result = await flow._validate_entities({"test_sensor": (entity_id, "sensor")})
+        result = await validate_all_entities(
+            flow.hass, {"test_sensor": (entity_id, "sensor")}
+        )
 
         # The ID reaches the state lookup unaltered and comes back as an error
         # against its config key, quoted in full.
@@ -1130,7 +1137,9 @@ class TestInvalidInputFormats:
         long_entity = "sensor." + "a" * 250
         mock_hass.states.get = MagicMock(return_value=None)
 
-        result = await flow._validate_entities({"test_sensor": (long_entity, "sensor")})
+        result = await validate_all_entities(
+            flow.hass, {"test_sensor": (long_entity, "sensor")}
+        )
 
         mock_hass.states.get.assert_called_once_with(long_entity)
         assert result == {"test_sensor": f"Entity '{long_entity}' does not exist"}
@@ -1286,7 +1295,7 @@ class TestEntityDomainValidation:
             "operation_mode": ("sensor.test", "select"),  # Expecting select
         }
 
-        result = await flow._validate_entities(entities)
+        result = await validate_all_entities(flow.hass, entities)
 
         assert result is not None
         assert "operation_mode" in result
@@ -1306,7 +1315,7 @@ class TestEntityDomainValidation:
             "backup_reserve": ("sensor.test", "number"),  # Expecting number
         }
 
-        result = await flow._validate_entities(entities)
+        result = await validate_all_entities(flow.hass, entities)
 
         assert result is not None
         assert "backup_reserve" in result
@@ -1326,7 +1335,7 @@ class TestEntityDomainValidation:
             "price_spike": ("sensor.test", "binary_sensor"),  # Expecting binary_sensor
         }
 
-        result = await flow._validate_entities(entities)
+        result = await validate_all_entities(flow.hass, entities)
 
         assert result is not None
         assert "price_spike" in result
@@ -1443,7 +1452,7 @@ class TestErrorMessages:
             "soc_sensor": ("sensor.missing_soc", "sensor"),
         }
 
-        result = await flow._validate_entities(entities)
+        result = await validate_all_entities(flow.hass, entities)
 
         assert result is not None
         assert "soc_sensor" in result
@@ -1467,7 +1476,7 @@ class TestErrorMessages:
             "soc_sensor": ("sensor.test", "sensor"),
         }
 
-        result = await flow._validate_entities(entities)
+        result = await validate_all_entities(flow.hass, entities)
 
         assert result is not None
         assert "soc_sensor" in result
@@ -1488,7 +1497,7 @@ class TestErrorMessages:
             "mode_select": ("sensor.test", "select"),  # Expected select, got sensor
         }
 
-        result = await flow._validate_entities(entities)
+        result = await validate_all_entities(flow.hass, entities)
 
         assert result is not None
         assert "mode_select" in result
