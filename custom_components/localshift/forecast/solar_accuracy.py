@@ -531,35 +531,6 @@ class SolarAccuracyTracker:
         weighted_value = sum(value * weight for value, weight in values) / total_weight
         return (weighted_value, len(values))
 
-    def _compute_context_bias(
-        self,
-        time_of_day: str,
-        weather: str,
-        season: str | None,
-    ) -> tuple[float, int] | None:
-        """Compute weighted average bias for specific context."""
-        normalized_weather = self._normalize_weather(weather)
-        return self._compute_context_metric(
-            time_of_day,
-            normalized_weather,
-            season,
-            lambda record: record.bias,
-        )
-
-    def _compute_context_additive_bias(
-        self,
-        time_of_day: str,
-        weather: str,
-        season: str | None,
-    ) -> tuple[float, int] | None:
-        normalized_weather = self._normalize_weather(weather)
-        return self._compute_context_metric(
-            time_of_day,
-            normalized_weather,
-            season,
-            lambda record: record.additive_bias,
-        )
-
     @staticmethod
     def _get_time_of_day(dt: datetime) -> str:
         """Classify time of day for bias grouping."""
@@ -856,21 +827,6 @@ class SolarAccuracyTracker:
         )
         correction = 1.0 - weighted_bias
         return max(0.5, min(1.5, correction))
-
-    def get_additive_correction(
-        self,
-        time_of_day: str,
-        weather: str,
-        season: str | None = None,
-    ) -> float:
-        """Get additive correction offset for given context.
-
-        .. deprecated::
-            Additive correction is deprecated as of issue #760. This method
-            always returns 0.0 and is retained only for backward compatibility.
-            Use get_bias_correction() for multiplicative-only correction.
-        """
-        return 0.0
 
     def apply_bias_correction(
         self,
