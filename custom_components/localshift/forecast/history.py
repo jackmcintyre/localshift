@@ -170,7 +170,9 @@ class HistoryFetcher:
         """Get hourly averages via thread pool, cached until midnight.
 
         Returns combined profile for backward compatibility.
-        Use get_profile_for_day() for day-aware profiles.
+        Day-aware profiles come from get_daily_profiles(),
+        get_weekday_profile() and get_weekend_profile(), which
+        LoadForecaster resolves per hour (#679).
 
         Returns: (hourly_avg_kw, sample_counts, source)
         """
@@ -869,63 +871,6 @@ class HistoryFetcher:
             ) == entity_id.replace("sensor.", ""):
                 return stat_id
         return entity_id  # Fallback to original
-
-    def get_profile_for_day(
-        self, target_date: datetime
-    ) -> tuple[dict[int, float], dict[int, int], str]:
-        """Get appropriate hourly profile based on target day's day-of-week.
-
-        Args:
-            target_date: The date to get the profile for
-
-        Returns:
-            Tuple of (hourly_avg_kw, sample_counts, source) where source is
-            "weekday", "weekend", or "combined" (fallback).
-
-        """
-        # If no profiles available, return empty
-        if not self._weekday_hourly_avg_kw and not self._weekend_hourly_avg_kw:
-            return {}, {}, "combined"
-
-        # If using combined fallback, return combined profile
-        if self._profile_source == "combined_fallback":
-            return (
-                self._historical_load_cache,
-                self._historical_load_sample_counts,
-                "combined",
-            )
-
-        # Determine day type
-        day_of_week = target_date.weekday()  # Monday=0, Sunday=6
-
-        if day_of_week >= 5:  # Saturday or Sunday
-            # Check if weekend profile has sufficient data
-            if self._weekend_hourly_avg_kw:
-                return (
-                    self._weekend_hourly_avg_kw,
-                    self._weekend_sample_counts,
-                    "weekend",
-                )
-            # Fallback to combined if weekend profile insufficient
-            return (
-                self._historical_load_cache,
-                self._historical_load_sample_counts,
-                "combined",
-            )
-        else:
-            # Weekday
-            if self._weekday_hourly_avg_kw:
-                return (
-                    self._weekday_hourly_avg_kw,
-                    self._weekday_sample_counts,
-                    "weekday",
-                )
-            # Fallback to combined if weekday profile insufficient
-            return (
-                self._historical_load_cache,
-                self._historical_load_sample_counts,
-                "combined",
-            )
 
     def get_weekday_profile(self) -> tuple[dict[int, float], dict[int, int]]:
         """Get weekday profile for diagnostics.
