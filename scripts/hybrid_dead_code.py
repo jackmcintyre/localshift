@@ -30,9 +30,13 @@ Static evidence alone is what gates removals; the runtime signal is used to
 *prioritise* and to keep the bar conservative (an item with test coverage is
 never reported as dead even if the cheap static pass missed a reference).
 
-The script is intentionally dependency-free, deterministic, and fast so it can
-run as a NON-BLOCKING CI guardrail. It lives under ``scripts/`` so it is excluded
-from vulture, coverage, and the package lint scope.
+The script is dependency-free and deterministic. It is a LOCAL TRIAGE AID, not
+a gate: it used to run in CI behind ``|| true``, where it could not fail, and
+was removed from the workflows in issue #986. The blocking check is
+``scripts/dead_code_gate.py``. Use this one with a ``coverage.json`` to rank
+entries of ``dead_code_baseline.txt`` for deletion (zero static references AND
+zero executed lines first). It lives under ``scripts/`` so it is excluded from
+vulture, coverage, and the package lint scope.
 
 Usage
 -----
@@ -41,8 +45,8 @@ Usage
         --coverage coverage.json \
         --format text
 
-Exit code is always 0 (guardrail, never blocks). Use ``--strict`` to exit 1 when
-high-confidence items are found (handy for local triage, never wired into CI).
+Exit code is always 0. Use ``--strict`` to exit 1 when high-confidence items are
+found.
 """
 
 from __future__ import annotations

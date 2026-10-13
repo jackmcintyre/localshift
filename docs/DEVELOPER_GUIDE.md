@@ -287,6 +287,117 @@ uv run pytest -vvs
 
 See [tests/AGENTS.md](tests/AGENTS.md) for test patterns.
 
+## Dead-code ratchet
+
+CI blocks on `uv run python scripts/dead_code_gate.py` (Lint workflow, issue
+#986). It is a ratchet: the amount of unused code is allowed to go down and
+never up.
+
+### How it works
+
+Two detectors run over `custom_components/localshift`:
+
+- **vulture** at confidence 60 (`[tool.vulture]` in `pyproject.toml`).
+- **A reader census for `CoordinatorData`**: a field that no production code
+  reads is reported as `unread-field`. Tests and scripts do not count as
+  readers, because a test that asserts a field's value mirrors the field
+  rather than consuming it (issue #981).
+
+Every finding has to be in exactly one of two checked-in files:
+
+| File | Meaning | Grows? |
+|------|---------|--------|
+| `vulture_whitelist.py` | Live, but reached dynamically. Each entry cites the site that reaches it. | Only with evidence |
+| `dead_code_baseline.txt` | Unused and not yet deleted, wired up, or shown to be live. Debt. | Never |
+
+The gate fails in both directions:
+
+- **New dead code**: a finding that is in neither file.
+- **Stale baseline**: a baseline entry that is no longer found. Whoever
+  deletes dead code shrinks the baseline in the same PR, so it cannot quietly
+  regrow later.
+
+It also fails when a whitelist entry stops being true (below). Findings are
+keyed by kind, file and qualified name, not line number, so editing a file
+does not disturb its entries.
+
+### Why a whitelist is needed at all
+
+A static scan cannot see a call made by name, and this integration makes its
+most important calls that way. `StateMachine._build_*_config` and
+`_execute_*_transition`, the methods that write to the battery, are reached
+through the string tables in `state/mode_configs.py` and `getattr`. Home
+Assistant calls `async_setup_entry`, `extra_state_attributes` and the like by
+name. A scan reports all of them as unused.
+
+So the whitelist is evidence, not a mute button. Each entry carries a
+`# site:` (a file that reaches the symbol), an `# evidence:` (text that must
+still be in that file) and a `# why:`. The gate re-checks the evidence on
+every run: delete the dispatch-table row for a builder and the gate fails,
+telling you the method is now dead. Home Assistant names are checked against
+Home Assistant itself by `tests/test_dead_code_gate.py`.
+
+The gate matches the whitelist by qualified name, so `ForecastSlot.estimate`
+does not hide any other `estimate`. Naming conventions Home Assistant defines
+by pattern (`_attr_*`, `async_step_*`) are the only globs, in
+`[tool.vulture] ignore_names`.
+
+One limit to know about: the scan only reports symbols whose *name* is unused.
+A parameter, or a class that is only ever built through an injected reference
+(`self._slot_builder_cls(...)` in `engine/optimizer_facade.py`), is not
+something it can vouch for. Removing "unused" pieces of such a class is how
+the inline optimizer was once silently disabled. The gate keeps a deletion
+honest about what was removed; it does not prove the deletion was safe. Run
+the scenario tests.
+
+### What to do when it fails
+
+**"NEW DEAD CODE"** names a symbol you added or orphaned. Pick one:
+
+1. It is dead: delete it.
+2. It was meant to be called: wire it up. A fix that was written but never
+   connected looks exactly like this (issues #959, #968).
+3. It is live through dynamic access: add it to `vulture_whitelist.py` with
+   its site, evidence and reason.
+
+Do not add it to the baseline. `--update` refuses to.
+
+**"BASELINE IS STALE"** means you removed or wired up something that was
+listed as dead. Run the update and commit the result:
+
+```bash
+uv run python scripts/dead_code_gate.py --update
+```
+
+**"WHITELIST PROBLEMS"** means an entry no longer matches a symbol, or the
+dynamic access it cites has gone. Remove the entry, and delete the symbol if
+nothing reaches it any more.
+
+### A PR that deletes dead code
+
+1. Pick entries from `dead_code_baseline.txt`. Lines with a trailing `# note`
+   were flagged as possibly unwired fixes rather than dead code: decide those
+   before deleting them.
+2. Delete the symbol, its writers, and the tests that only exercised it.
+   Check how it is reached first: `grep` for the name as a string, not just as
+   an identifier.
+3. `uv run python scripts/dead_code_gate.py --update` and commit the smaller
+   baseline with the deletion.
+4. Run the full test suite.
+
+### Commands
+
+```bash
+uv run python scripts/dead_code_gate.py              # the CI check
+uv run python scripts/dead_code_gate.py --summary    # counts by kind
+uv run python scripts/dead_code_gate.py --update     # shrink the baseline
+uv run vulture                                       # raw vulture view of the same
+```
+
+`--update --allow-additions` adds new findings to the baseline. It exists for
+one case: refreshing the baseline after merging a branch that legitimately
+changed what is reported. It is not the way to get a PR green.
+
 ## Architecture Overview
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system architecture.

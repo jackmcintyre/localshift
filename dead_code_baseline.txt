@@ -1,0 +1,119 @@
+# Dead-code baseline (issue #986). Shrink-only: see docs/DEVELOPER_GUIDE.md,
+# "Dead-code ratchet".
+#
+# Every line is a symbol the gate reports as unused and that nobody has yet
+# deleted, wired up, or shown to be live. It is debt, not an allowlist.
+#
+#   Deleted or wired up one of these?  uv run python scripts/dead_code_gate.py --update
+#   Gate says a NEW symbol is unused?  Delete it, wire it, or -- if it is live
+#     through dynamic access -- add it to vulture_whitelist.py with its site.
+#     Do not add it here.
+#
+# Format: <kind> <file, relative to the package> <qualified name>  [# note]
+# Sorted; no line numbers on purpose. Notes survive --update.
+
+attribute    computation_engine.py  ComputationEngine._baseline_avg_kw
+attribute    coordinator/coordinator.py  LocalShiftCoordinator._listeners
+attribute    coordinator/coordinator.py  self.data.hybrid_solar_accuracy
+attribute    coordinator/coordinator.py  self.data.physical_response_timestamp
+attribute    engine/optimizer_facade.py  data.optimizer_safety_block_reason
+attribute    engine/optimizer_facade.py  data.optimizer_soc_underprepared
+attribute    engine/optimizer_facade.py  data.primary_decision
+attribute    engine/optimizer_facade.py  data.shadow_decision
+attribute    engine/spike_analyzer.py  data.spike_end_time
+attribute    forecast/history_store.py  ForecastHistoryStore._loaded
+attribute    learning/correlation.py  WeatherCorrelation._pending_observations
+attribute    select.py  BatteryModeSelect._previous_mode
+attribute    state/reader.py  data.primary_decision
+attribute    state/reader.py  data.shadow_decision
+attribute    utils/validation.py  health.last_check
+attribute    utils/validation.py  health.last_valid_value
+function     engine/constraints.py  is_blind_to_future_solar
+function     engine/constraints.py  is_cheap_import_window
+function     engine/negative_fit.py  compute_recoverability_floor_pct
+function     engine/negative_fit.py  derive_negative_fit_avoidance_context
+function     engine/optimizer_runner.py  _compute_legacy_energy_totals
+function     engine/optimizer_runner.py  run_optimizer  # module docstring says the coordinator calls this; nothing does, the facade plans inline
+function     engine/price_calculator.py  get_price_for_slot_with_source
+function     forecast/solar.py  _get_period_estimate
+function     forecast/solcast_analysis.py  compute_weighted_confidence
+method       computation_engine.py  ComputationEngine._analyze_spike
+method       computation_engine.py  ComputationEngine._compute_effective_cheap_price
+method       computation_engine.py  ComputationEngine._compute_effective_cheap_price_preliminary
+method       computation_engine.py  ComputationEngine._compute_excess_solar_signals
+method       computation_engine.py  ComputationEngine._compute_load_forecast_slots
+method       computation_engine.py  ComputationEngine._compute_solar_battery_forecast
+method       computation_engine.py  ComputationEngine._get_profile_for_day
+method       computation_engine.py  ComputationEngine._max_forecast_price
+method       computation_engine.py  ComputationEngine._scan_forecast_for_spike
+method       config_flow/__init__.py  LocalShiftConfigFlow._get_notify_services
+method       config_flow/__init__.py  LocalShiftConfigFlow._validate_entities
+method       config_flow/__init__.py  LocalShiftConfigFlow._validate_notify_service
+method       coordinator/coordinator.py  LocalShiftCoordinator._check_entity_health
+method       coordinator/coordinator.py  LocalShiftCoordinator._handle_periodic_tick  # marked DEPRECATED in its own docstring; superseded by the tiered tick handlers
+method       engine/optimizer_facade.py  OptimizerFacade._floor_suppressed_by_solar
+method       forecast/analysis_resolver.py  ConfidenceResolver.get_analysis_for_period
+method       forecast/history.py  HistoryFetcher._separate_samples_by_day_type
+method       forecast/solar_accuracy.py  SolarAccuracyTracker._compute_context_additive_bias
+method       forecast/solar_accuracy.py  SolarAccuracyTracker._compute_context_bias
+method       forecast/solar_accuracy.py  SolarAccuracyTracker.get_additive_correction
+method       integration/controller.py  BatteryController._read_str
+method       services/evaluation_dispatcher.py  EvaluationDispatcher.cancel_pending_coalesce  # possible unwired cleanup: nothing cancels a pending coalesce timer on unload
+method       services/notification_service.py  NotificationService.generate_decision_reason
+method       state/machine.py  StateMachine._handle_debounce_timing  # orphan with tests: evaluate() uses the newer _clear_stale_debounce_timers path (#968 shape)
+method       utils/validation.py  EntityValidator.reset_broken_status  # possible unwired fix: docstring promises recovery after an options-flow reconfigure; no caller
+property     coordinator/coordinator.py  LocalShiftCoordinator.entity_ids
+property     engine/outcomes.py  DecisionOutcomeTracker.pending_count
+property     forecast/bootstrapper.py  ForecastBootstrapper.solcast_ready
+property     pricing/provider.py  AmberExpressProvider.entity_prefix
+property     pricing/provider.py  AmberProvider.entity_prefix
+property     pricing/provider.py  PricingProvider.entity_prefix
+property     utils/validation.py  EntityHealth.is_available
+unread-field coordinator/data.py  CoordinatorData.allow_dw_entry_under_target  # written every cycle 'for forecast_computer'; the planner reads config.allow_dw_entry_under_target instead
+unread-field coordinator/data.py  CoordinatorData.charging_needed_before_dw
+unread-field coordinator/data.py  CoordinatorData.daily_forecast_hourly
+unread-field coordinator/data.py  CoordinatorData.daily_forecast_soc_15min
+unread-field coordinator/data.py  CoordinatorData.debug_commanded_mode
+unread-field coordinator/data.py  CoordinatorData.debug_debounce_wait_seconds
+unread-field coordinator/data.py  CoordinatorData.debug_dry_run
+unread-field coordinator/data.py  CoordinatorData.debug_pending_transition
+unread-field coordinator/data.py  CoordinatorData.excess_solar_current_kw
+unread-field coordinator/data.py  CoordinatorData.forecast_charging_decisions
+unread-field coordinator/data.py  CoordinatorData.hybrid_slot_metadata
+unread-field coordinator/data.py  CoordinatorData.hybrid_solar_accuracy
+unread-field coordinator/data.py  CoordinatorData.optimal_charge_end
+unread-field coordinator/data.py  CoordinatorData.optimal_charge_start
+unread-field coordinator/data.py  CoordinatorData.optimizer_active_applied_at
+unread-field coordinator/data.py  CoordinatorData.optimizer_safety_block_reason
+unread-field coordinator/data.py  CoordinatorData.optimizer_soc_underprepared
+unread-field coordinator/data.py  CoordinatorData.physical_response_timestamp
+unread-field coordinator/data.py  CoordinatorData.primary_decision
+unread-field coordinator/data.py  CoordinatorData.proactive_export_active
+unread-field coordinator/data.py  CoordinatorData.shadow_decision
+unread-field coordinator/data.py  CoordinatorData.spike_end_time
+unread-field coordinator/data.py  CoordinatorData.surplus_ratio
+variable     const.py  BOOST_CHARGE_MAX_SOC
+variable     const.py  DISCHARGE_EARLIEST_HOUR
+variable     const.py  LEARNING_MIN_OBSERVATIONS
+variable     const.py  LEARNING_UPDATE_INTERVAL_HOURS
+variable     const.py  MAX_NEGATIVE_FIT_HEADROOM_PCT
+variable     const.py  OPTIMIZABLE_PARAMS
+variable     const.py  PROACTIVE_EXPORT_MIN_RESERVE_PERCENT
+variable     coordinator/coordinator.py  PERIODIC_INTERVAL
+variable     coordinator/data.py  ChargingDecision.charge_amount_kwh
+variable     coordinator/data.py  ChargingDecision.price_per_kwh
+variable     coordinator/data.py  ChargingDecision.should_boost
+variable     coordinator/data.py  ChargingDecision.should_grid_charge
+variable     coordinator/data.py  PhysicalResponseWatch.baseline_power_kw
+variable     engine/outcomes.py  ACTION_TO_LEGACY_MODE
+variable     engine/slot_schedule.py  MAX_5MIN_FORECAST_HOURS
+variable     engine/types.py  NegativeFitAvoidanceContext.risk_window_start_idx
+variable     engine/types.py  PlannedSlotDecision.is_solar_opportunity
+variable     engine/types.py  PlannerReasonCode.DEMAND_WINDOW_CONSTRAINT
+variable     learning/anomaly.py  WeatherAnomalyResult.deviation_sigma
+variable     learning/anomaly.py  WeatherAnomalyResult.mean_temperature
+variable     learning/anomaly.py  WeatherAnomalyResult.std_temperature
+variable     learning/correlation.py  CONFIDENCE_LOW_THRESHOLD
+variable     utils/validation.py  EntityHealth.last_check  # write-only; decide together with last_valid_value (#1076)
+variable     utils/validation.py  EntityHealth.last_valid_value  # write-only; decide together with last_check (#1076)
+variable     utils/validation.py  ValidationResult.warning_message

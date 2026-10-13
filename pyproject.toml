@@ -23,6 +23,9 @@ include = ["custom_components.localshift*"]
 line-length = 88
 target-version = "py313"
 preview = true
+# vulture_whitelist.py is vulture input, not code: a list of bare attribute
+# expressions that ruff reads as F821/B018 on every line (issue #1073).
+extend-exclude = ["vulture_whitelist.py"]
 
 [tool.ruff.lint]
 select = [
@@ -37,9 +40,18 @@ select = [
 
 
 [tool.vulture]
-min_confidence = 80
-paths = ["custom_components/localshift"]
+# Dead-code ratchet (issue #986). The blocking check is
+# `uv run python scripts/dead_code_gate.py`, which reads this table; see
+# docs/DEVELOPER_GUIDE.md, "Dead-code ratchet". A bare `uv run vulture` uses
+# the same settings and prints roughly dead_code_baseline.txt.
+min_confidence = 60
+paths = ["custom_components/localshift", "vulture_whitelist.py"]
 exclude = ["tests/"]
+# Globs are for naming conventions Home Assistant itself defines, nothing else:
+# it reads any `_attr_<property>` off an entity and dispatches config-flow
+# steps to `async_step_<step_id>`. Every other live-but-dynamic name goes in
+# vulture_whitelist.py with the site that reaches it.
+ignore_names = ["_attr_*", "async_step_*"]
 
 [tool.deptry]
 known_first_party = ["custom_components.localshift"]
