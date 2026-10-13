@@ -505,15 +505,20 @@ class TestBuildSlotsIntegration:
         assert len(slots) > 0
 
     def test_build_slots_with_custom_now_dt(self, builder, mock_coordinator_data):
-        """Test build_slots respects custom now_dt parameter."""
+        """The horizon starts at the custom now_dt, not at the wall clock."""
         from datetime import timezone
 
-        custom_now = datetime.now(timezone.utc)
-        slots, metadata = builder.build_slots(
-            mock_coordinator_data, None, now_dt=custom_now
-        )
+        # Three hours ahead of the wall clock, so a builder that ignored now_dt
+        # would start its horizon three hours early.
+        custom_now = datetime.now(timezone.utc) + timedelta(hours=3)
+        slots, _ = builder.build_slots(mock_coordinator_data, None, now_dt=custom_now)
 
-        assert len(slots) >= 0
+        expected_start = custom_now.replace(
+            minute=custom_now.minute - custom_now.minute % 5, second=0, microsecond=0
+        )
+        starts = [datetime.fromisoformat(s.timestamp_iso) for s in slots]
+        assert starts[0] == expected_start
+        assert min(starts) == expected_start
 
 
 class TestProcessAllSlots:

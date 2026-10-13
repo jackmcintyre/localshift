@@ -572,8 +572,6 @@ def _drive(scheduler, coordinator, ticks):
     Mirrors real 5-min medium-tick cadence so a period accumulates full coverage
     over several ticks (the coverage gate requires >=90% of the 30 min).
     """
-    from unittest.mock import patch
-
     for tick in ticks:
         now = tick[0]
         coordinator.data.solar_power_kw = tick[1]

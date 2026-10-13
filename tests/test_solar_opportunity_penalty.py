@@ -803,13 +803,19 @@ def test_short_horizon_aware_of_future_solar_holds():
     assert result.decisions[0].reason_code == PlannerReasonCode.SOLAR_OPPORTUNITY_WAIT
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "#1131: the plan holds at the 10% floor for the whole horizon and enters "
+        "the demand window 70 points under its 80% target. It still holds with no "
+        "solar forecast at all and with the shortfall penalty raised to 100, so "
+        "the hold is not a marginal-economics choice. Until #1131 this test ended "
+        "in `assert len(charge_slots) >= 0`, which cannot fail, so the #619 "
+        "behaviour it is named for has had no test."
+    ),
+)
 def test_short_horizon_still_charges_if_future_solar_insufficient():
-    """
-    Test that it still charges if even the future solar isn't enough. (Issue #619)
-
-    Note: With the self_consumption_value based on slot buy_price,
-    the optimizer may choose to hold instead of charge when the economics are marginal.
-    """
+    """It still charges from the grid when the future solar is not enough (#619)."""
     config = OptimizerConfig(
         battery_capacity_kwh=10.0,
         min_soc_pct=10.0,
@@ -845,11 +851,12 @@ def test_short_horizon_still_charges_if_future_solar_insufficient():
     result = planner.plan(inputs)
     assert result.success
 
-    # With reduced self_consumption_value, verify at least the DW is handled properly
-    # The specific action (charge vs hold) depends on the new economics
+    # 1 kWh of solar tomorrow cannot close a 70-point shortfall on a 10 kWh
+    # battery, so waiting for it is not an option: some slot must grid-charge.
     charge_slots = [
-        d for d in result.decisions if d.action == PlannerAction.CHARGE_GRID_NORMAL
+        d
+        for d in result.decisions
+        if d.action
+        in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
     ]
-    # Either behavior is acceptable - the important thing is the plan runs successfully
-    # (Old behavior: charge. New behavior with slot buy_price credit: may hold)
-    assert len(charge_slots) >= 0  # Plan executed successfully
+    assert len(charge_slots) > 0
