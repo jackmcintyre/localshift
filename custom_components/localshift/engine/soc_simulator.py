@@ -7,7 +7,9 @@ from datetime import datetime, time, timedelta
 
 from ..const import (
     BATTERY_CAPACITY_KWH,
+    CHARGE_EFFICIENCY,
     CHARGE_RATE_SOLAR_KW,
+    DISCHARGE_EFFICIENCY,
 )
 from ..forecast.solar import get_solar_for_15min_slot, get_solar_for_slot_by_interval
 from .price_calculator import get_price_for_slot
@@ -99,9 +101,9 @@ class SocSimulator:
             # Apply battery delta
             max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
             if net_kwh >= 0:
-                delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+                delta = min(net_kwh, max_slot_transfer_kwh) * CHARGE_EFFICIENCY
             else:
-                delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+                delta = max(net_kwh, -max_slot_transfer_kwh) / DISCHARGE_EFFICIENCY
 
             soc += delta / BATTERY_CAPACITY_KWH * 100
             soc = max(min_soc_pct, min(100.0, soc))
@@ -183,9 +185,9 @@ class SocSimulator:
                 # Use solar charge rate (5kW) as max
                 max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
                 if net_kwh >= 0:
-                    delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+                    delta = min(net_kwh, max_slot_transfer_kwh) * CHARGE_EFFICIENCY
                 else:
-                    delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+                    delta = max(net_kwh, -max_slot_transfer_kwh) / DISCHARGE_EFFICIENCY
 
                 soc += delta / BATTERY_CAPACITY_KWH * 100
                 soc = min(100.0, soc)  # Cap at 100%
@@ -219,9 +221,9 @@ class SocSimulator:
 
                 max_slot_transfer_kwh = CHARGE_RATE_SOLAR_KW * slot_fraction
                 if net_kwh >= 0:
-                    delta = min(net_kwh, max_slot_transfer_kwh) * 0.92
+                    delta = min(net_kwh, max_slot_transfer_kwh) * CHARGE_EFFICIENCY
                 else:
-                    delta = max(net_kwh, -max_slot_transfer_kwh) / 0.95
+                    delta = max(net_kwh, -max_slot_transfer_kwh) / DISCHARGE_EFFICIENCY
 
                 soc += delta / BATTERY_CAPACITY_KWH * 100
                 soc = min(100.0, soc)

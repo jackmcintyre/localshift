@@ -8,7 +8,7 @@ from datetime import datetime, time, timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.util import dt as dt_util
 
-from ..const import BATTERY_CAPACITY_KWH
+from ..const import BATTERY_CAPACITY_KWH, CHARGE_EFFICIENCY
 from ..coordinator.data import CoordinatorData
 from ..forecast.solar import get_solar_for_15min_slot
 from .price_calculator import get_price_for_slot_or_none
@@ -90,7 +90,7 @@ class ExcessSolarEngine:
 
             if net_kwh > 0:
                 # Apply charging efficiency
-                excess_kwh = net_kwh * 0.92
+                excess_kwh = net_kwh * CHARGE_EFFICIENCY
 
                 # Accumulate for time windows
                 if offset < 4:  # First hour (4 slots)
@@ -216,7 +216,7 @@ class ExcessSolarEngine:
             net_kwh = solar_kwh - consumption_kwh
 
             if net_kwh > 0:
-                excess_kwh = net_kwh * 0.92
+                excess_kwh = net_kwh * CHARGE_EFFICIENCY
 
                 if space_to_target_kwh > 0:
                     used_for_target = min(excess_kwh, space_to_target_kwh)

@@ -46,6 +46,7 @@ def _build_optimizer_config(
     """
     from custom_components.localshift.const import (
         BATTERY_CAPACITY_KWH,
+        CHARGE_EFFICIENCY,
         CHARGE_RATE_BOOST_KW,
         CHARGE_RATE_GRID_KW,
         CHARGE_RATE_SOLAR_KW,
@@ -80,6 +81,7 @@ def _build_optimizer_config(
         DEFAULT_SWITCHING_PENALTY,
         DEFAULT_SWITCHING_PENALTY_PER_KWH,
         DEFAULT_TARGET_PENALTY,
+        DISCHARGE_EFFICIENCY,
         NEGATIVE_FIT_MIN_SPILL_COST,
         SWITCH_DEFAULTS,
         SWITCH_SPIKE_DISCHARGE_ENABLED,
@@ -206,8 +208,8 @@ def _build_optimizer_config(
         solar_charge_rate_kw=CHARGE_RATE_SOLAR_KW,  # 5.0 kW solar->battery cap
         discharge_rate_kw=CHARGE_RATE_BOOST_KW,  # 5.0 kW (Powerwall symmetric)
         # --- Efficiency defaults (Powerwall typical) ---
-        charge_efficiency=0.92,
-        discharge_efficiency=0.95,
+        charge_efficiency=CHARGE_EFFICIENCY,
+        discharge_efficiency=DISCHARGE_EFFICIENCY,
         # --- SOC constraints ---
         min_soc_pct=min_soc,  # User-configured minimum
         max_soc_pct=100.0,  # Hard ceiling

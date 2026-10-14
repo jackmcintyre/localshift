@@ -53,6 +53,11 @@ CHARGE_RATE_GRID_KW = 3.3  # Grid charging rate (backup mode)
 CHARGE_RATE_BOOST_KW = 5.0  # Boost charge rate (autonomous mode)
 CHARGE_RATE_SOLAR_KW = 5.0  # Max solar-to-battery charge rate (inverter limit)
 
+# Battery efficiencies (issue #987): the one definition the optimizer config, the SOC
+# simulator, excess-solar sizing and the urgency window all read.
+CHARGE_EFFICIENCY = 0.92  # Energy stored per kWh put into the battery
+DISCHARGE_EFFICIENCY = 0.95  # Energy delivered per kWh taken out of the battery
+
 # Tesla firmware (July 2025) silently resets backup reserve values 81-99% to 80%.
 # Valid backup reserve values: 0-80% or 100%
 BACKUP_RESERVE_MAX_VALID = (
