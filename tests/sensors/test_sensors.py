@@ -134,8 +134,6 @@ class Fixtures:
             "last_triggered_at": "2026-03-12T12:11:00+00:00",
             "triggered": True,
         }
-        data.adaptive_params = MagicMock()
-        data.adaptive_params.values = {"param1": 1.0, "param2": 2.0}
         data.excess_until_battery_full_kwh = 3.5
         data.excess_solar_current_hour_kwh = 1.0
         data.excess_solar_next_2h_kwh = 2.0

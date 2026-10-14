@@ -321,34 +321,6 @@ class TestLoadForecasterExponentialDecay:
         expected = 0.3 * 0.45 + 0.7 * 0.5
         assert abs(kw - round(expected, 3)) < 0.001
 
-    def test_adaptive_bias_applied(self, mock_adaptive_params):
-        """Test consumption_forecast_bias adaptive parameter is applied.
-
-        Positive bias should increase forecast, negative should decrease.
-        """
-        mock_entry = _create_mock_entry()
-        forecaster = LoadForecaster(mock_entry)
-        forecaster.set_adaptive_params(mock_adaptive_params)
-        hourly_avg = {10: 0.5, 11: 0.6, 12: 0.7}
-
-        kw, _ = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw=hourly_avg,
-            slot_hour=10,
-            current_hour=11,
-            current_load_kw=0.45,
-            recent_load_kw=0.5,
-        )
-
-        # With bias of +0.1, expected: decay_weighted_result + 0.1
-        expected_live_weight = DEFAULT_LOAD_INITIAL_WEIGHT * (
-            DEFAULT_LOAD_DECAY_FACTOR**1
-        )
-        expected_historical_weight = 1.0 - expected_live_weight
-        base_kw = (expected_live_weight * 0.5) + (expected_historical_weight * 0.5)
-        expected_kw = round(max(0.0, base_kw + 0.1), 3)
-
-        assert abs(kw - expected_kw) < 0.001
-
     def test_midnight_wrap_far_future_uses_historical(self):
         """Test hours_ahead prevents spurious live-blending for distant slots.
 
@@ -528,14 +500,6 @@ class TestLoadForecasterOutputCeiling:
 def mock_weather_correlation():
     """Mock WeatherCorrelation for testing."""
     mock = MagicMock()
-    return mock
-
-
-@pytest.fixture
-def mock_adaptive_params():
-    """Mock AdaptiveParameters with consumption_forecast_bias."""
-    mock = MagicMock()
-    mock.get.return_value = 0.1  # +0.1 bias
     return mock
 
 
@@ -1491,37 +1455,6 @@ class TestAwayModeProfile:
         )
         weather.predict_load.assert_called_once()
         assert source == "weather_heating"
-
-    def test_consumption_bias_skipped_while_away(self, mock_adaptive_params):
-        """L8b (#1096): no consumption bias on the away profile either. Like
-        the weather slope, the bias was learned at home, so it must not shift
-        the empty-house forecast."""
-        forecaster = _create_load_forecaster()
-        forecaster.set_adaptive_params(mock_adaptive_params)
-        forecaster.set_away_profiles(self._away_profiles(floor_kw=0.35))
-
-        kw, source = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw=_full_profile(2.0),
-            slot_hour=11,
-            current_hour=None,
-            current_load_kw=0.0,
-            recent_load_kw=0.0,
-        )
-
-        assert source == "profile_hour:away_floor"
-        assert kw == 0.35
-
-        # Clearing away brings the bias straight back.
-        forecaster.set_away_profiles(None)
-        kw, source = forecaster.estimate_hourly_consumption_kw(
-            hourly_avg_kw=_full_profile(2.0),
-            slot_hour=11,
-            current_hour=None,
-            current_load_kw=0.0,
-            recent_load_kw=0.0,
-        )
-        assert source == "profile_hour"
-        assert kw == pytest.approx(2.1)
 
     def test_switches_back_after_clearing(self):
         """L9: set_away_profiles(None) after an away profile restores at-home."""

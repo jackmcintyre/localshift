@@ -6,8 +6,11 @@ actually happened before it reaches live.
 
 ```bash
 scripts/export_replay_days.py --days 10 --hour 9     # capture
-scripts/replay_adaptive_arms.py                      # compare arms
 ```
+
+The arm comparison below was produced by `scripts/replay_adaptive_arms.py`,
+which was deleted along with the offsets it varied (#982). It is in the git
+history if the comparison ever needs re-running against an old commit.
 
 Three days spanning the solar range are committed so the harness runs from a
 clean checkout; the rest are gitignored — regenerate them with the exporter.

@@ -23,7 +23,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from custom_components.localshift.const import BatteryMode
-from custom_components.localshift.coordinator import AdaptiveParameters
 from custom_components.localshift.engine.slots import SlotBuilder
 from custom_components.localshift.sensors.optimizer import OptimizerSummarySensor
 
@@ -67,7 +66,6 @@ def _data(
     data.solcast_today = []
     data.solcast_tomorrow = []
     data.load_forecast_slots = [0.5] * 96
-    data.adaptive_params = AdaptiveParameters(values={"solar_confidence_factor": 1.0})
     data.solcast_analysis_today = None
     data.solcast_analysis_tomorrow = None
     data.export_blocked_periods = []
@@ -96,7 +94,7 @@ class TestSlot0SellPriceIsTheCurrentInterval:
         now = datetime(2026, 10, 12, 15, 15, 30, tzinfo=AEDT)
         data = _data(now, SELL_1515, BUY_1515, estimate=False)
 
-        slots, metadata = builder.build_slots(data, data.adaptive_params, now_dt=now)
+        slots, metadata = builder.build_slots(data, now_dt=now)
 
         assert slots[0].buy_price == pytest.approx(26.7148)
         # main returned 9.493 here: (24.2284 + 2.2574 + 1.9932) / 3.
@@ -115,7 +113,7 @@ class TestSlot0SellPriceIsTheCurrentInterval:
             estimate=False,
         )
 
-        slots, _ = builder.build_slots(data, data.adaptive_params, now_dt=now)
+        slots, _ = builder.build_slots(data, now_dt=now)
 
         assert slots[0].sell_price == pytest.approx(0.3572)
 
@@ -123,7 +121,7 @@ class TestSlot0SellPriceIsTheCurrentInterval:
         now = datetime(2026, 10, 12, 15, 15, 30, tzinfo=AEDT)
         data = _data(now, SELL_1515, BUY_1515, estimate=False)
 
-        slots, _ = builder.build_slots(data, data.adaptive_params, now_dt=now)
+        slots, _ = builder.build_slots(data, now_dt=now)
 
         assert slots[1].sell_price == pytest.approx((2.2574 + 1.9932 + 1.9573) / 3)
 
@@ -131,7 +129,7 @@ class TestSlot0SellPriceIsTheCurrentInterval:
         now = datetime(2026, 10, 12, 11, 2, 0, tzinfo=AEDT)
         data = _data(now, sell=[0.05] * 6, buy=[0.2] * 6, estimate=False)
 
-        slots, _ = builder.build_slots(data, data.adaptive_params, now_dt=now)
+        slots, _ = builder.build_slots(data, now_dt=now)
 
         assert slots[0].sell_price == pytest.approx(0.05)
         assert slots[0].export_available is True
@@ -142,7 +140,7 @@ class TestSlot0SellPriceIsTheCurrentInterval:
         # Feed-in forecast is forward-only: nothing covers the current interval.
         data.feed_in_forecast = data.feed_in_forecast[1:]
 
-        slots, metadata = builder.build_slots(data, data.adaptive_params, now_dt=now)
+        slots, metadata = builder.build_slots(data, now_dt=now)
 
         assert metadata.slot0_price["sell_source"] == "forecast_window"
         assert metadata.slot0_price["sell_estimate"] is None
@@ -162,7 +160,7 @@ class TestUnconfirmedReadingDoesNotStartAnExport:
         now = datetime(2026, 10, 12, 15, 20, 10, tzinfo=AEDT)
         data = _data(now, self.SELL, self.BUY, estimate=True)
 
-        slots, metadata = builder.build_slots(data, data.adaptive_params, now_dt=now)
+        slots, metadata = builder.build_slots(data, now_dt=now)
 
         assert slots[0].sell_price == pytest.approx(24.2284)
         assert metadata.slot0_price["sell_estimate"] is True
@@ -180,7 +178,7 @@ class TestUnconfirmedReadingDoesNotStartAnExport:
             active_mode=BatteryMode.PROACTIVE_EXPORT,
         )
 
-        slots, metadata = builder.build_slots(data, data.adaptive_params, now_dt=now)
+        slots, metadata = builder.build_slots(data, now_dt=now)
 
         assert slots[0].export_available is True
         assert metadata.slot0_price["export_start_deferred"] is False
@@ -190,7 +188,7 @@ class TestUnconfirmedReadingDoesNotStartAnExport:
         now = datetime(2026, 10, 12, 15, 22, 0, tzinfo=AEDT)
         data = _data(now, self.SELL, self.BUY, estimate=True)
 
-        slots, metadata = builder.build_slots(data, data.adaptive_params, now_dt=now)
+        slots, metadata = builder.build_slots(data, now_dt=now)
 
         assert slots[0].export_available is True
         assert metadata.slot0_price["export_start_deferred"] is False
@@ -199,7 +197,7 @@ class TestUnconfirmedReadingDoesNotStartAnExport:
         now = datetime(2026, 10, 12, 15, 20, 10, tzinfo=AEDT)
         data = _data(now, self.SELL, self.BUY, estimate=False)
 
-        slots, _ = builder.build_slots(data, data.adaptive_params, now_dt=now)
+        slots, _ = builder.build_slots(data, now_dt=now)
 
         assert slots[0].export_available is True
 

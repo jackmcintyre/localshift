@@ -161,6 +161,6 @@ def test_slot_builder_scopes_a_shadow_build_separately(monkeypatch):
 
     for override in (None, []):
         with pytest.raises(_StopAfterSchedule):
-            builder.build_slots(data, None, override_general_forecast=override)
+            builder.build_slots(data, override_general_forecast=override)
 
     assert seen == ["primary", "shadow"]
