@@ -818,10 +818,14 @@ class OptimizerFacade:
         held_at = self._dwell_held_charge_at
         if held_at is None:
             return False
+        # A frozen wish to keep charging is the sawtooth the dwell damps: keep the
+        # latch so the release still lands after the band. Only a granted
+        # evaluation (in _commit_with_charge_dwell) drops it.
         if new_mode in _CHARGE_MODES:
-            # The plan has gone back to charging, so the held release lapsed. A
-            # later release wish is a new decision and needs its own token.
-            self._dwell_held_charge_at = None
+            return False
+        # The held token chose an ordinary release. A drift to export or spike
+        # discharge is a different decision and waits for its own token.
+        if new_mode in _DWELL_EXEMPT_RELEASES:
             return False
         # In-lock only, like the backstop: never from the out-of-lock recompute.
         if not getattr(data, "mode_backstop_allowed", False):
@@ -833,7 +837,15 @@ class OptimizerFacade:
             # A later commit moved the mode on: nothing left to release.
             self._dwell_held_charge_at = None
             return False
-        if self._should_hold_charge_dwell(data, new_mode, optimizer_config):
+        # Elapsed against the band directly: _should_hold_charge_dwell returns
+        # False early for exempt cases, which here would skip the band.
+        quantum = getattr(optimizer_config, "precharge_runway_quantum_min", 0.0) or 0.0
+        band = max(PRECHARGE_RUNWAY_HYSTERESIS_MIN, quantum)
+        try:
+            elapsed = (dt_util.now() - held_at).total_seconds() / 60.0
+        except TypeError:
+            return False
+        if elapsed < band:
             return False
         self._dwell_held_charge_at = None
         _LOGGER.info(

@@ -1761,6 +1761,72 @@ class TestChargeCommitDwell:
         assert data.active_mode == BatteryMode.GRID_CHARGING
         assert data.debug_mode_source != "charge_dwell_release"
 
+    def _flat_price_evaluator(self):
+        """A facade, a real state machine and a clock, on prices that never move."""
+        facade = OptimizerFacade()
+        state_machine = StateMachine(
+            MagicMock(),
+            MagicMock(),
+            lambda key: False,
+            lambda key, default=None: default,
+            MagicMock(),
+        )
+        committed_at = dt_util.now()
+        data = _commit_charge_data(_data(optimizer_decisions=[]), committed_at)
+        data.feed_in_price = 0.05
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        def evaluate(minutes: float, mode: BatteryMode, in_lock: bool = True) -> None:
+            with patch.object(
+                dt_util, "now", return_value=committed_at + timedelta(minutes=minutes)
+            ):
+                if in_lock:
+                    state_machine._apply_decision_token(data)
+                else:
+                    data.mode_decision_allowed = False
+                    data.mode_backstop_allowed = False
+                self._run_for_commit_dwell(facade, data, config, mode)
+
+        return data, evaluate
+
+    def test_held_latch_does_not_carry_a_drift_to_export_inside_the_band(self) -> None:
+        """#1159 third review: the token held a release, not an export start."""
+        data, evaluate = self._flat_price_evaluator()
+        evaluate(1.0, BatteryMode.SELF_CONSUMPTION)  # granted, held
+        evaluate(2.0, BatteryMode.PROACTIVE_EXPORT)  # frozen, inside the band
+        assert data.mode_decision_allowed is False
+        assert data.active_mode == BatteryMode.GRID_CHARGING
+        assert data.debug_mode_source != "charge_dwell_release"
+
+    @pytest.mark.parametrize("flicker_in_lock", [True, False])
+    def test_sawtooth_flicker_keeps_the_held_release(
+        self, flicker_in_lock: bool
+    ) -> None:
+        """#1159 third review: a frozen charge wish must not strand the release.
+
+        The plan flickering back to charge between replans is the sawtooth the
+        dwell exists for; the held release still commits after the band.
+        """
+        data, evaluate = self._flat_price_evaluator()
+        evaluate(1.0, BatteryMode.SELF_CONSUMPTION)  # granted, held
+        evaluate(2.0, BatteryMode.GRID_CHARGING, in_lock=flicker_in_lock)
+        evaluate(3.0, BatteryMode.SELF_CONSUMPTION)
+        assert data.active_mode == BatteryMode.GRID_CHARGING  # inside the band
+        evaluate(PRECHARGE_RUNWAY_HYSTERESIS_MIN + 1.0, BatteryMode.SELF_CONSUMPTION)
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert data.debug_mode_source == "charge_dwell_release"
+
+    def test_out_of_lock_recompute_never_commits_the_held_release(self) -> None:
+        """#1159 third review: the in-lock guard had no test."""
+        data, evaluate = self._flat_price_evaluator()
+        evaluate(1.0, BatteryMode.SELF_CONSUMPTION)  # granted, held
+        evaluate(
+            PRECHARGE_RUNWAY_HYSTERESIS_MIN + 1.0,
+            BatteryMode.SELF_CONSUMPTION,
+            in_lock=False,
+        )
+        assert data.active_mode == BatteryMode.GRID_CHARGING
+
     @pytest.mark.parametrize(
         ("plan_mode", "price_spike", "export_start_only"),
         [
