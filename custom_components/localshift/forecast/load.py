@@ -81,7 +81,6 @@ class LoadForecaster:
         """
         self.entry = entry
         self._weather_correlation = weather_correlation
-        self._adaptive_params = None  # Issue #170 Phase 2: Adaptive parameters
         # True if ≥1 slot was weather-adjusted in the most recent forecast run;
         # ForecastPipeline.compute_load_forecast_slots resets it at the start of
         # each run (reset_weather_adjustment_applied) and publishes it at the end
@@ -110,16 +109,6 @@ class LoadForecaster:
     def set_weather_correlation(self, weather_correlation: Any | None) -> None:
         """Set or clear WeatherCorrelation dependency at runtime."""
         self._weather_correlation = weather_correlation
-
-    def set_adaptive_params(self, adaptive_params: Any | None) -> None:
-        """Set adaptive parameters from the learning system (Issue #170 Phase 2).
-
-        Args:
-            adaptive_params: AdaptiveParameters instance with tuned values,
-                           or None to use defaults.
-
-        """
-        self._adaptive_params = adaptive_params
 
     def set_daily_profiles(self, profiles: LoadProfiles | None) -> None:
         """Inject per-day-of-week load profiles (Issue #679), or clear with None.
@@ -363,15 +352,14 @@ class LoadForecaster:
             # weather slope was learned from at-home hours, so it mostly models
             # the occupants' AC; on a 30°C day it would roughly triple the
             # empty-house forecast and buy grid pre-charge for load that won't
-            # happen (#1089). The consumption bias is skipped for the same
-            # reason: it too was learned at home (#1096).
+            # happen (#1089).
             adjusted_load_kw, adjusted_source = base_load_kw, base_source
             final_load_kw = adjusted_load_kw
         else:
             adjusted_load_kw, adjusted_source = self._apply_weather_correlation(
                 base_load_kw, base_source, slot_hour, temperature
             )
-            final_load_kw = self._apply_consumption_bias(adjusted_load_kw, slot_hour)
+            final_load_kw = adjusted_load_kw
         # Issue #826 ceiling: derived from the broadest profile available, not
         # from the resolved day bucket alone. Taking the max across the
         # resolved profile AND the caller-supplied combined profile means a
@@ -657,31 +645,3 @@ class LoadForecaster:
             return weather_adjusted, adjustment_source
 
         return adjusted_load_kw, adjusted_source
-
-    def _apply_consumption_bias(self, load_kw: float, slot_hour: int) -> float:
-        """Apply consumption forecast bias adjustment.
-
-        Args:
-            load_kw: Load before bias adjustment
-            slot_hour: Hour for logging
-
-        Returns:
-            Adjusted load
-
-        """
-        if self._adaptive_params is None:
-            return load_kw
-
-        consumption_bias = self._adaptive_params.get("consumption_forecast_bias", 0.0)
-        if consumption_bias == 0.0:
-            return load_kw
-
-        adjusted = max(0.0, load_kw + consumption_bias)
-        _LOGGER.debug(
-            "CONSUMPTION_BIAS: hour=%d, base=%.2f kW, bias=%.2f kW, final=%.2f kW",
-            slot_hour,
-            load_kw,
-            consumption_bias,
-            adjusted,
-        )
-        return adjusted

@@ -115,8 +115,9 @@ class DecisionRecord:
     outcome_score: float | None = None  # 0.0-1.0, computed quality score
 
     # Issue #913: adaptive parameter values in force when the decision was
-    # made, so the Thompson sampler can bin outcomes by the param value that
-    # was actually applied. None on records persisted before Issue #913.
+    # made. The offsets were removed (#982), so new records carry an empty
+    # dict; the key stays because it is persisted. None on records persisted
+    # before Issue #913.
     adaptive_params_at_decision: dict[str, float] | None = None
 
     # Issue #915: meter accumulator values copied at decision time, differenced
@@ -282,7 +283,6 @@ class DecisionOutcomeTracker:
             self._backfill_pending_decision(data, action, now)
 
         # Capture context for the new decision
-        adaptive = getattr(data, "adaptive_params", None)
         record = DecisionRecord(
             timestamp=now,
             mode_chosen=action,
@@ -304,9 +304,7 @@ class DecisionOutcomeTracker:
             day_of_week=now.weekday(),
             hour_of_day=now.hour,
             is_demand_window=data.demand_window_active,
-            adaptive_params_at_decision=dict(adaptive.values)
-            if adaptive is not None
-            else None,
+            adaptive_params_at_decision={},
             energy_at_decision=_snapshot_energy_meters(data),
         )
 

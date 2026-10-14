@@ -31,11 +31,6 @@ class PricingProvider(Protocol):
         """Provider identifier for logging/debugging."""
         ...
 
-    @property
-    def entity_prefix(self) -> str:  # pragma: no cover
-        """Return entity prefix like 'sensor.100h_' or 'sensor.amber_express_100h_'."""
-        ...
-
     def read_forecasts(  # pragma: no cover
         self, hass: HomeAssistant, price_entity_id: str
     ) -> list[ForecastSlot]:
@@ -125,10 +120,6 @@ class AmberProvider(_ProviderMixin):
     def name(self) -> str:
         return "amber"
 
-    @property
-    def entity_prefix(self) -> str:
-        return "sensor.100h_"
-
     def read_forecasts(
         self, hass: HomeAssistant, price_entity_id: str
     ) -> list[ForecastSlot]:
@@ -160,10 +151,6 @@ class AmberExpressProvider(_ProviderMixin):
     @property
     def name(self) -> str:
         return "amber_express"
-
-    @property
-    def entity_prefix(self) -> str:
-        return "sensor.amber_express_100h_"
 
     def read_forecasts(
         self, hass: HomeAssistant, price_entity_id: str

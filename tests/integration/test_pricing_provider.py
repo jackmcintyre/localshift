@@ -203,16 +203,3 @@ class TestPricingProviderIntegration:
 
         provider = create_provider("unknown_source")
         assert isinstance(provider, AmberProvider)
-
-    def test_provider_entity_prefix(self):
-        """Providers have correct entity_prefix for forecast reading."""
-        from custom_components.localshift.pricing.provider import (
-            AmberExpressProvider,
-            AmberProvider,
-        )
-
-        amber = AmberProvider()
-        express = AmberExpressProvider()
-
-        assert amber.entity_prefix == "sensor.100h_"
-        assert express.entity_prefix == "sensor.amber_express_100h_"

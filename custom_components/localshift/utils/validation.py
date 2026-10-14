@@ -73,13 +73,6 @@ class EntityHealth:
         """Return True if entity is healthy."""
         return self.status == EntityStatus.OK and not self.is_broken
 
-    @property
-    def is_available(self) -> bool:
-        """Return True if entity has a usable value."""
-        return (
-            self.status in (EntityStatus.OK, EntityStatus.STALE) and not self.is_broken
-        )
-
 
 @dataclass
 class ValidationResult:
@@ -88,7 +81,6 @@ class ValidationResult:
     is_valid: bool
     value: Any
     error_message: str = ""
-    warning_message: str = ""
 
 
 class EntityValidator:
@@ -404,7 +396,6 @@ class EntityValidator:
                 is_valid=False,
                 value=num_value,
                 error_message=f"'{config_key}' value {num_value} is below minimum {min_val}",
-                warning_message=f"'{config_key}' has unusual value: {num_value}",
             )
 
         if max_val is not None and num_value > max_val:
@@ -412,7 +403,6 @@ class EntityValidator:
                 is_valid=False,
                 value=num_value,
                 error_message=f"'{config_key}' value {num_value} is above maximum {max_val}",
-                warning_message=f"'{config_key}' has unusual value: {num_value}",
             )
 
         return ValidationResult(is_valid=True, value=num_value)

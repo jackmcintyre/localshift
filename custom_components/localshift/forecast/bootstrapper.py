@@ -40,7 +40,6 @@ class ForecastBootstrapper:
         self._max_retries = max_retries
 
         self._retry_count = 0
-        self._solcast_ready = False
         self._stopped = False
         self._forecast_computed_on_startup = False
 
@@ -48,11 +47,6 @@ class ForecastBootstrapper:
     def retry_count(self) -> int:
         """Return the number of Solcast retries attempted."""
         return self._retry_count
-
-    @property
-    def solcast_ready(self) -> bool:
-        """Return whether Solcast is ready on startup."""
-        return self._solcast_ready
 
     @property
     def forecast_computed_on_startup(self) -> bool:
@@ -120,7 +114,6 @@ class ForecastBootstrapper:
     async def wait_for_solcast_and_compute(self) -> None:
         """Wait for Solcast data to be ready, then compute derived values."""
         if self.check_solcast_ready():
-            self._solcast_ready = True
             _LOGGER.info("Solcast data available, proceeding with forecast computation")
             self._compute_derived_values()
             self._notify_listeners()

@@ -2,7 +2,6 @@
 
 Tests verify that SlotBuilder.build_slots() correctly:
 - Reads raw coordinator data (general_forecast, feed_in_forecast, solcast, load_forecast_slots)
-- Applies solar_confidence_factor adaptive param
 - Does NOT apply consumption_forecast_bias (already applied by LoadForecaster)
 - Computes demand window flags correctly
 - Returns typed SlotBuildMetadata with accurate counts
@@ -20,7 +19,6 @@ from custom_components.localshift.engine.slots import (
     SlotBuildMetadata,
     SlotContext,
 )
-from custom_components.localshift.coordinator import AdaptiveParameters
 
 
 class TestSlotBuildMetadata:
@@ -121,53 +119,6 @@ class TestIntegration:
         # Verify builder has required methods
         assert hasattr(builder, "build_slots")
         assert callable(builder.build_slots)
-
-
-class TestGetSolarConfidenceFactor:
-    """Tests for _get_solar_confidence_factor method."""
-
-    @pytest.fixture
-    def builder(self):
-        """Create a SlotBuilder instance."""
-        config = {"demand_window_start": "18:00:00", "demand_window_end": "22:00:00"}
-        return SlotBuilder(config_options=config, ha_timezone="Australia/Sydney")
-
-    def test_none_params_returns_default(self, builder):
-        """Test None adaptive params returns 1.0."""
-        result = builder._get_solar_confidence_factor(None)
-        assert result == 1.0
-
-    def test_params_with_value(self, builder):
-        """Test adaptive params with solar_confidence_factor."""
-        params = AdaptiveParameters(values={"solar_confidence_factor": 0.8})
-        result = builder._get_solar_confidence_factor(params)
-        assert result == 0.8
-
-    def test_params_without_value_uses_default(self, builder):
-        """Test adaptive params without solar_confidence_factor uses default."""
-        params = AdaptiveParameters(values={})
-        result = builder._get_solar_confidence_factor(params)
-        assert result == 1.0
-
-    def test_clamp_at_zero(self, builder):
-        """Test negative values clamped to 0.0."""
-        params = AdaptiveParameters(values={"solar_confidence_factor": -0.5})
-        result = builder._get_solar_confidence_factor(params)
-        assert result == 0.0
-
-    def test_clamp_at_two(self, builder):
-        """Test values > 2.0 clamped to 2.0."""
-        params = AdaptiveParameters(values={"solar_confidence_factor": 3.0})
-        result = builder._get_solar_confidence_factor(params)
-        assert result == 2.0
-
-    def test_exact_boundary_values(self, builder):
-        """Test exact boundary values 0.0 and 2.0."""
-        params = AdaptiveParameters(values={"solar_confidence_factor": 0.0})
-        assert builder._get_solar_confidence_factor(params) == 0.0
-
-        params = AdaptiveParameters(values={"solar_confidence_factor": 2.0})
-        assert builder._get_solar_confidence_factor(params) == 2.0
 
 
 class TestComputeBaseSlot:
@@ -460,9 +411,6 @@ class TestBuildSlotsIntegration:
         ]
         data.solcast_tomorrow = []
         data.load_forecast_slots = [0.5 + (i % 24) * 0.1 for i in range(96)]
-        data.adaptive_params = AdaptiveParameters(
-            values={"solar_confidence_factor": 1.0}
-        )
         # Set solcast_analysis attributes to None so getattr returns None
         # instead of MagicMock objects
         data.solcast_analysis_today = None
@@ -474,9 +422,7 @@ class TestBuildSlotsIntegration:
         self, builder, mock_coordinator_data
     ):
         """Test build_slots returns list of SlotContext and metadata."""
-        slots, metadata = builder.build_slots(
-            mock_coordinator_data, mock_coordinator_data.adaptive_params
-        )
+        slots, metadata = builder.build_slots(mock_coordinator_data)
 
         assert isinstance(slots, list)
         assert len(slots) > 0
@@ -485,24 +431,13 @@ class TestBuildSlotsIntegration:
 
     def test_build_slots_metadata_counts(self, builder, mock_coordinator_data):
         """Test build_slots metadata has correct counts."""
-        slots, metadata = builder.build_slots(
-            mock_coordinator_data, mock_coordinator_data.adaptive_params
-        )
+        slots, metadata = builder.build_slots(mock_coordinator_data)
 
         assert metadata.total_slots == len(slots)
         assert (
             metadata.five_min_slots + metadata.thirty_min_slots == metadata.total_slots
         )
         assert metadata.solar_confidence_factor == 1.0
-
-    def test_build_slots_with_none_adaptive_params(
-        self, builder, mock_coordinator_data
-    ):
-        """Test build_slots handles None adaptive params."""
-        slots, metadata = builder.build_slots(mock_coordinator_data, None)
-
-        assert metadata.solar_confidence_factor == 1.0
-        assert len(slots) > 0
 
     def test_build_slots_with_custom_now_dt(self, builder, mock_coordinator_data):
         """The horizon starts at the custom now_dt, not at the wall clock."""
@@ -511,7 +446,7 @@ class TestBuildSlotsIntegration:
         # Three hours ahead of the wall clock, so a builder that ignored now_dt
         # would start its horizon three hours early.
         custom_now = datetime.now(timezone.utc) + timedelta(hours=3)
-        slots, _ = builder.build_slots(mock_coordinator_data, None, now_dt=custom_now)
+        slots, _ = builder.build_slots(mock_coordinator_data, now_dt=custom_now)
 
         expected_start = custom_now.replace(
             minute=custom_now.minute - custom_now.minute % 5, second=0, microsecond=0

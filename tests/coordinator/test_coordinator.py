@@ -899,20 +899,7 @@ class TestFastTickPriceGate:
 
 
 class TestCoordinatorEntityIds:
-    """Tests for entity_ids property and get_entity_id method."""
-
-    def test_entity_ids_property_returns_entry_data(self, mock_hass, mock_entry):
-        """Test that entity_ids property returns entry.data."""
-        coordinator = LocalShiftCoordinator(mock_hass, mock_entry)
-
-        # Mock entry.data
-        mock_entry.data = {
-            "teslemetry_soc": "sensor.tesla_soc",
-            "teslemetry_site_power": "sensor.tesla_site",
-        }
-
-        assert coordinator.entity_ids == mock_entry.data
-        assert coordinator.entity_ids["teslemetry_soc"] == "sensor.tesla_soc"
+    """Tests for the get_entity_id method."""
 
     def test_get_entity_id_from_entry_data(self, mock_hass, mock_entry):
         """Test get_entity_id retrieves from entry.data."""

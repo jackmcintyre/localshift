@@ -91,7 +91,6 @@ def mock_coordinator_data():
             ]
             self.solcast_tomorrow = []
             self.load_forecast_slots = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-            self.adaptive_params = None
             self.optimizer_summary = None
             self.optimizer_result = None
             self.optimizer_decisions = None
