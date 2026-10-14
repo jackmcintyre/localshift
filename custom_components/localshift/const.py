@@ -271,7 +271,6 @@ DEFAULT_MINIMUM_TARGET_SOC = 20  # % minimum SOC for discharge modes
 DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET = (
     False  # Allow DW entry under target when solar can reach target
 )
-DEFAULT_STALE_SOLAR_CONSERVATIVE = True
 DEFAULT_STALE_SOLAR_CONFIDENCE_CEILING = 0.3
 # Minutes of spare pre-charge runway below which the runway backstop arms (fast-follow
 # to #901). Runway slack = minutes to DW entry MINUS minutes boost charging needs to

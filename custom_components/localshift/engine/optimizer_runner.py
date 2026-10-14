@@ -62,7 +62,6 @@ def _build_optimizer_config(
         CONF_OPTIMIZATION_MODE,
         CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
         CONF_SPIKE_EXPORT_ENABLED,
-        CONF_STALE_SOLAR_CONSERVATIVE,
         CONF_SWITCHING_PENALTY,
         CONF_SWITCHING_PENALTY_PER_KWH,
         CONF_TARGET_PENALTY,
@@ -78,7 +77,6 @@ def _build_optimizer_config(
         DEFAULT_MINIMUM_TARGET_SOC,
         DEFAULT_OPTIMIZATION_MODE,
         DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
-        DEFAULT_STALE_SOLAR_CONSERVATIVE,
         DEFAULT_SWITCHING_PENALTY,
         DEFAULT_SWITCHING_PENALTY_PER_KWH,
         DEFAULT_TARGET_PENALTY,
@@ -101,12 +99,6 @@ def _build_optimizer_config(
     # Allow reaching target during DW via solar (instead of by DW start)
     allow_dw_entry_under_target = config_options.get(
         CONF_ALLOW_DW_ENTRY_UNDER_TARGET, DEFAULT_ALLOW_DW_ENTRY_UNDER_TARGET
-    )
-
-    stale_solar_conservative = bool(
-        config_options.get(
-            CONF_STALE_SOLAR_CONSERVATIVE, DEFAULT_STALE_SOLAR_CONSERVATIVE
-        )
     )
 
     # Issue #1120: the state of switch.localshift_spike_discharge_enabled. The
@@ -223,7 +215,6 @@ def _build_optimizer_config(
         # --- Demand window target ---
         demand_window_target_soc_pct=target_soc,  # User-configured target
         allow_dw_entry_under_target=allow_dw_entry_under_target,
-        stale_solar_conservative=stale_solar_conservative,
         spike_export_enabled=spike_export_enabled,
         precharge_runway_margin_min=precharge_runway_margin_min,
         # --- Objective weights (user-configurable via Number entities or Options Flow) ---
