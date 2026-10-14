@@ -1286,6 +1286,7 @@ class OptimizerFacade:
                 reason,
             )
             return False
+        assert ts is not None  # nosec B101 — type narrowing, not assertion
         quantum = getattr(optimizer_config, "precharge_runway_quantum_min", 0.0) or 0.0
         band = max(PRECHARGE_RUNWAY_HYSTERESIS_MIN, quantum)
         _LOGGER.info(
