@@ -233,7 +233,7 @@ class EntityMonitor:
                 len(self._coordinator.data.weather_temperature_forecast),
             )
 
-    async def refresh_tesla_tariff(self) -> None:
+    async def refresh_tesla_tariff(self, *, at_startup: bool = False) -> None:
         """Refresh the periods in which Tesla's tariff will not export (#1097).
 
         Reads the sell-tariff calendar and stores the below-top-rate periods on
@@ -241,6 +241,11 @@ class EntityMonitor:
         cannot be read the previous periods are kept: they are absolute times,
         so a stale set ages out on its own rather than blocking the wrong hours.
         Never raises — this runs in the startup path.
+
+        ``at_startup``: the calendar is routinely not loaded yet when the
+        integration starts (#1143), so that failure logs at INFO and does not
+        count as the start of a failure streak. The first medium-tick read
+        still warns if the calendar is still unreadable then.
         """
         entity_id = self._coordinator.get_entity_id(CONF_TESLEMETRY_SELL_TARIFF)
         if not entity_id:
@@ -262,6 +267,14 @@ class EntityMonitor:
                 return_response=True,
             )
         except Exception as err:
+            if at_startup:
+                _LOGGER.info(
+                    "Tesla tariff calendar %s not readable at start-up, "
+                    "retrying on the next medium tick: %s",
+                    entity_id,
+                    err,
+                )
+                return
             if not self._tesla_tariff_read_failing:
                 _LOGGER.warning(
                     "Cannot read Tesla tariff from %s, keeping the last known "

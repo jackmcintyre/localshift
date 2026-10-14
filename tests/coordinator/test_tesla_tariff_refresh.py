@@ -122,6 +122,34 @@ async def test_persistent_failure_warns_once_then_again_after_recovery(
     assert await refresh(failing) == 1
 
 
+@pytest.mark.asyncio
+async def test_startup_read_failure_is_info_and_the_next_failure_still_warns(
+    coordinator, caplog
+):
+    """#1143: the calendar is not loaded yet when the integration starts.
+
+    That read failed with a WARNING on every healthy restart. It is INFO now,
+    and it must not open the failure streak, or a calendar that never loads
+    would be silenced on the medium tick that follows.
+    """
+    monitor = EntityMonitor(coordinator)
+    coordinator.hass.services.async_call = AsyncMock(
+        side_effect=RuntimeError("calendar entity not ready")
+    )
+
+    async def refresh(**kwargs) -> list[str]:
+        caplog.clear()
+        with (
+            caplog.at_level("INFO", logger=monitor_module.__name__),
+            patch.object(monitor_module.dt_util, "now", return_value=NOW),
+        ):
+            await monitor.refresh_tesla_tariff(**kwargs)
+        return [r.levelname for r in caplog.records]
+
+    assert await refresh(at_startup=True) == ["INFO"]
+    assert await refresh() == ["WARNING"]
+
+
 @pytest.mark.parametrize(
     "response",
     [None, {}, {CALENDAR: {}}, {CALENDAR: {"events": []}}, "unexpected", [1, 2]],

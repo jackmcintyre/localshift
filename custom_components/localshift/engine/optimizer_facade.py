@@ -59,6 +59,12 @@ PRECHARGE_RUNWAY_HYSTERESIS_MIN = 10.0
 _CHARGE_MODES = (_BatteryMode.GRID_CHARGING, _BatteryMode.BOOST_CHARGING)
 _CHARGE_MODE_VALUES = frozenset(m.value for m in _CHARGE_MODES)
 
+# How long after the first plan an unread SOC is expected rather than a failure
+# (#1143): the SOC entity is routinely not loaded for the first second or two of a
+# start. Matches the coordinator's 30-second startup grace (#551). Past it, an
+# invalid SOC warns on every skipped plan as before.
+_STARTUP_SOC_GRACE = timedelta(seconds=30)
+
 
 class OptimizerFacade:
     """Facade that runs the DP optimizer and writes results to CoordinatorData."""
@@ -97,6 +103,8 @@ class OptimizerFacade:
         # other arm's eligibility flag flickering) so a one-cycle blip cannot silently
         # reset the band to narrow — the failure the band exists to prevent.
         self._runway_holding: bool = False
+        # When run_inline first ran, for _STARTUP_SOC_GRACE.
+        self._first_run_at: datetime | None = None
 
     def set_solar_accuracy_tracker(self, tracker: Any) -> None:
         """Set the solar accuracy tracker for bias correction."""
@@ -242,6 +250,8 @@ class OptimizerFacade:
         self, data: CoordinatorData, now_dt: Any, config_options: dict[str, Any]
     ) -> None:
         """Run DP optimizer inline so active_mode has no cycle lag."""
+        if self._first_run_at is None:
+            self._first_run_at = now_dt or dt_util.now()
         try:
             ha_timezone = config_options.get("ha_timezone") or (
                 str(dt_util.DEFAULT_TIME_ZONE)
@@ -291,8 +301,15 @@ class OptimizerFacade:
 
             initial_soc, soc_info = _normalize_initial_soc(data.soc, optimizer_config)
             if initial_soc is None:
-                _LOGGER.warning(
-                    "DP optimizer: invalid SOC %s, skipping", soc_info.get("error")
+                at_startup = (
+                    self._first_run_at is not None
+                    and (now_dt or dt_util.now()) - self._first_run_at
+                    < _STARTUP_SOC_GRACE
+                )
+                _LOGGER.log(
+                    logging.INFO if at_startup else logging.WARNING,
+                    "DP optimizer: invalid SOC %s, skipping",
+                    soc_info.get("error"),
                 )
                 self._mark_mode_debug_fallback(data)
                 return
