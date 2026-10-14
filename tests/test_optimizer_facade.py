@@ -479,6 +479,52 @@ def test_run_inline_skips_invalid_soc_before_planner_call():
     planner.plan.assert_not_called()
 
 
+def _invalid_soc_levels(facade: OptimizerFacade, caplog, now_dt) -> list[str]:
+    """Run one plan with an unread (0.0) SOC; return the skip line's levels."""
+    data = CoordinatorData()
+    data.soc = 0.0
+    caplog.clear()
+    with caplog.at_level("DEBUG"):
+        facade.run_inline(data=data, now_dt=now_dt, config_options={})
+    return [
+        r.levelname
+        for r in caplog.records
+        if "DP optimizer: invalid SOC non_positive" in r.getMessage()
+    ]
+
+
+def test_unread_soc_in_the_first_plans_after_start_is_info(caplog):
+    """#1143: the SOC entity is not loaded for the first second of a start.
+
+    Two of these skip lines were logged at WARNING on every healthy restart.
+    """
+    planner = MagicMock()
+    facade = OptimizerFacade(
+        planner=planner, slot_builder_cls=_StubSlotBuilderWithOneSlot
+    )
+    start = datetime(2026, 10, 14, 10, 8, 16, tzinfo=UTC)
+
+    a_second_later = start + timedelta(seconds=1)
+    assert _invalid_soc_levels(facade, caplog, start) == ["INFO"]
+    assert _invalid_soc_levels(facade, caplog, a_second_later) == ["INFO"]
+    planner.plan.assert_not_called()
+
+
+def test_unread_soc_past_the_startup_grace_still_warns(caplog):
+    """A SOC sensor that never comes back must stay loud on every skipped plan."""
+    planner = MagicMock()
+    facade = OptimizerFacade(
+        planner=planner, slot_builder_cls=_StubSlotBuilderWithOneSlot
+    )
+    start = datetime(2026, 10, 14, 10, 8, 16, tzinfo=UTC)
+
+    _invalid_soc_levels(facade, caplog, start)
+    for minutes in (1, 2):
+        later = start + timedelta(minutes=minutes)
+        assert _invalid_soc_levels(facade, caplog, later) == ["WARNING"]
+    planner.plan.assert_not_called()
+
+
 @pytest.mark.allow_swallowed_failure("inline_optimizer")
 def test_run_inline_logs_and_swallows_unexpected_exception(caplog):
     facade = OptimizerFacade(slot_builder_cls=_ExplodingSlotBuilder)

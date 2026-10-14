@@ -261,6 +261,34 @@ class TestAsyncStart:
             assert coordinator._state_machine is not None
 
     @pytest.mark.asyncio
+    async def test_async_start_reads_the_tesla_tariff_as_a_startup_read(
+        self, coordinator, mock_recorder
+    ):
+        """#1143: the start-up tariff read must not warn when the calendar is late."""
+        refresh = AsyncMock()
+        with (
+            patch(
+                "custom_components.localshift.services.subscription_manager.async_track_state_change_event",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.localshift.services.subscription_manager.async_track_time_interval",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.localshift.services.subscription_manager.async_track_time_change",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.localshift.coordinator.entity_monitor.EntityMonitor.refresh_tesla_tariff",
+                refresh,
+            ),
+        ):
+            await coordinator.async_start()
+
+        refresh.assert_awaited_once_with(at_startup=True)
+
+    @pytest.mark.asyncio
     async def test_async_start_passes_pricing_provider_to_state_reader(
         self, coordinator, mock_recorder
     ):
