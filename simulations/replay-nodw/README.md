@@ -101,7 +101,7 @@ double-credit having been its sole driver.
 
 ## Harness note
 
-Both this harness and `scripts/replay_adaptive_arms.py` construct a fresh
+Both this harness and `scripts/replay_adaptive_arms.py` (since deleted, #982) construct a fresh
 `CoordinatorData`, which carries `forecast_horizon_hours = 0.0`. The
 cheap-price calculation reads that field before the optimizer facade writes
 the real span, so on the first pass the configured percentile is scaled by

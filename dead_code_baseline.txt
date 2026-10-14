@@ -69,9 +69,6 @@ unread-field coordinator/data.py  CoordinatorData.proactive_export_active
 unread-field coordinator/data.py  CoordinatorData.shadow_decision
 unread-field coordinator/data.py  CoordinatorData.spike_end_time
 unread-field coordinator/data.py  CoordinatorData.surplus_ratio
-variable     const.py  LEARNING_MIN_OBSERVATIONS
-variable     const.py  LEARNING_UPDATE_INTERVAL_HOURS
-variable     const.py  OPTIMIZABLE_PARAMS
 variable     coordinator/coordinator.py  PERIODIC_INTERVAL
 variable     coordinator/data.py  ChargingDecision.charge_amount_kwh
 variable     coordinator/data.py  ChargingDecision.price_per_kwh

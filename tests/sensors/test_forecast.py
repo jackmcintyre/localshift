@@ -15,10 +15,7 @@ Tests cover:
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from custom_components.localshift.coordinator.data import (
-    AdaptiveParameters,
-    CoordinatorData,
-)
+from custom_components.localshift.coordinator.data import CoordinatorData
 from custom_components.localshift.forecast.solcast_analysis import (
     ConfidenceInterval,
     SolcastAnalysis,
@@ -547,7 +544,6 @@ class TestForecastDiagnosticsSensor:
             weather_avg_r_squared=0.42,
             weather_sample_count=100,
             load_forecast_slots=[0.5] * 96,
-            adaptive_params=AdaptiveParameters(values={"cheap_price_percentile": 0.25}),
         )
         mock_entry = MagicMock()
 

@@ -119,18 +119,12 @@ class TestOptimizerRunnerHelpers:
         assert info["normalized_soc_pct"] == 10.0
         assert "unusually low" in caplog.text
 
-    def test_build_optimizer_config_adaptive_adjustments(self):
-        """Adaptive params should adjust target, cheap price, and export margin."""
+    def test_build_optimizer_config_passes_in_range_values_through(self):
+        """With the adaptive offsets gone (#982) the three values arrive unchanged."""
 
         class MockData:
             effective_cheap_price = 0.10
             general_price = -0.01
-            adaptive_params = {
-                "cheap_price_bias": 2.0,
-                "grid_charge_soc_headroom": 5.0,
-                "overnight_drain_safety_margin": 3.0,
-                "export_threshold_adjustment": 1.0,
-            }
 
         config_options = {
             "battery_target": 80.0,
@@ -139,16 +133,37 @@ class TestOptimizerRunnerHelpers:
 
         updated = _build_optimizer_config(MockData(), config_options)
 
-        assert updated.effective_cheap_price == pytest.approx(0.12)
-        assert updated.demand_window_target_soc_pct == 88.0
-        assert updated.export_price_margin == pytest.approx(0.11)
+        assert updated.effective_cheap_price == 0.10
+        assert updated.demand_window_target_soc_pct == 80.0
+        assert updated.export_price_margin == 0.10
+
+    def test_build_optimizer_config_keeps_the_three_clamps(self):
+        """#1050: the clamps outlive the offsets they used to sit beside.
+
+        A negative effective cheap price, a target above 100% and a negative
+        export margin are each clamped, exactly as before the offsets went.
+        """
+
+        class MockData:
+            effective_cheap_price = -0.04
+            general_price = 0.20
+
+        config_options = {
+            "battery_target": 130.0,
+            "export_price_margin": -0.05,
+        }
+
+        updated = _build_optimizer_config(MockData(), config_options)
+
+        assert updated.effective_cheap_price == 0.0
+        assert updated.demand_window_target_soc_pct == 100.0
+        assert updated.export_price_margin == 0.0
 
     def test_build_optimizer_config_base_cheap_price_passthrough(self):
         """Issue #800: base_cheap_price flows through as the objective percentile floor.
 
-        It must be independent of cheap_price_bias (the bias only tunes the urgency-aware
-        effective_cheap_price; it tightens the post-DW gate via min(), never loosens it),
-        and must tolerate <= 0 values (negative-wholesale markets) without being floored
+        It must be independent of the urgency-aware effective_cheap_price, and must
+        tolerate <= 0 values (negative-wholesale markets) without being floored
         to 0.0 (which would block ALL post-DW charging).
         """
 
@@ -156,11 +171,9 @@ class TestOptimizerRunnerHelpers:
             effective_cheap_price = 0.10
             general_price = 0.20
             base_cheap_price = 0.08
-            adaptive_params = {"cheap_price_bias": -3.0}  # negative bias
 
         updated = _build_optimizer_config(MockData(), {})
-        # Bias applies to effective (0.10 - 0.03) but NOT to the objective base floor.
-        assert updated.effective_cheap_price == pytest.approx(0.07)
+        assert updated.effective_cheap_price == pytest.approx(0.10)
         assert updated.base_cheap_price == pytest.approx(0.08)
 
     def test_build_optimizer_config_base_cheap_price_negative_market(self):
@@ -170,7 +183,6 @@ class TestOptimizerRunnerHelpers:
             effective_cheap_price = 0.05
             general_price = 0.20
             base_cheap_price = -0.02
-            adaptive_params = None
 
         updated = _build_optimizer_config(MockData(), {})
         assert updated.base_cheap_price == pytest.approx(-0.02)
@@ -181,7 +193,6 @@ class TestOptimizerRunnerHelpers:
         class MockData:
             effective_cheap_price = 0.10
             general_price = 0.20
-            adaptive_params = None
 
         updated = _build_optimizer_config(MockData(), {})
         assert updated.base_cheap_price is None
@@ -193,7 +204,6 @@ class TestOptimizerRunnerHelpers:
         class MockData:
             effective_cheap_price = 0.10
             general_price = 0.20
-            adaptive_params = None
 
         updated = _build_optimizer_config(
             MockData(),

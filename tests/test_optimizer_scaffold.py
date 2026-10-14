@@ -419,7 +419,7 @@ def test_optimizer_result_serialization_safe(multi_slots):
         def __init__(self, **_kwargs) -> None:
             pass
 
-        def build_slots(self, _data, _adaptive_params, now_dt=None):
+        def build_slots(self, _data, now_dt=None):
             return slots, metadata
 
     OptimizerFacade(slot_builder_cls=_RealSlots).run_inline(
