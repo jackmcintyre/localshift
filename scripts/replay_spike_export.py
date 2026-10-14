@@ -106,7 +106,6 @@ def run(
     )
 
     payload = dict(scenario["input"])
-    payload["adaptive_params"] = {}
     test_time = datetime.fromisoformat(payload["test_time"])
     mode = BatteryMode(payload.get("active_mode", "self_consumption"))
 

@@ -190,6 +190,45 @@ class TestDecisionRecord:
         assert record.mode_chosen == PlannerAction.HOLD
         assert record.previous_mode == PlannerAction.HOLD
 
+    @pytest.mark.parametrize("stored_value", [{}, {"cheap_price_bias": 0.5}, None])
+    def test_from_dict_loads_a_record_still_carrying_adaptive_params(
+        self, stored_value
+    ):
+        """Records stored before #982 still carry the removed key and must load.
+
+        The live store holds records written with
+        ``adaptive_params_at_decision`` ({} since the learning layer was
+        retired, offsets before that, None before #913). The key is ignored on
+        load and is not written back.
+        """
+        data = {
+            "timestamp": "2026-10-13T18:05:00+11:00",
+            "mode_chosen": "hold",
+            "previous_mode": "charge_grid_normal",
+            "soc_at_decision": 62.0,
+            "general_price_at_decision": 0.31,
+            "feed_in_price_at_decision": 0.04,
+            "forecast_solar_remaining_kwh": 0.0,
+            "forecast_consumption_remaining_kwh": 6.5,
+            "cheap_price_threshold": 0.12,
+            "battery_target_soc": 95.0,
+            "weather_condition": "clear-night",
+            "day_of_week": 1,
+            "hour_of_day": 18,
+            "is_demand_window": True,
+            "outcome_score": 0.6,
+            "adaptive_params_at_decision": stored_value,
+            "energy_at_decision": {"import_kwh": 12.5},
+        }
+
+        record = DecisionRecord.from_dict(data)
+
+        assert record.soc_at_decision == 62.0
+        assert record.outcome_score == 0.6
+        assert record.energy_at_decision == {"import_kwh": 12.5}
+        assert not hasattr(record, "adaptive_params_at_decision")
+        assert "adaptive_params_at_decision" not in record.to_dict()
+
 
 class TestPerformanceMetrics:
     """Tests for PerformanceMetrics dataclass."""

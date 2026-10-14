@@ -31,7 +31,6 @@ class TestSlotBuildMetadata:
             five_min_slots=48,
             thirty_min_slots=48,
             horizon_hours=24.0,
-            solar_confidence_factor=0.9,
             slots_with_defaulted_solar=5,
             slots_with_defaulted_price=2,
             slots_with_defaulted_consumption=0,
@@ -40,7 +39,6 @@ class TestSlotBuildMetadata:
         assert metadata.five_min_slots == 48
         assert metadata.thirty_min_slots == 48
         assert metadata.horizon_hours == 24.0
-        assert metadata.solar_confidence_factor == 0.9
         assert metadata.slots_with_defaulted_solar == 5
         assert metadata.slots_with_defaulted_price == 2
         assert metadata.slots_with_defaulted_consumption == 0
@@ -52,7 +50,6 @@ class TestSlotBuildMetadata:
             five_min_slots=2,
             thirty_min_slots=2,
             horizon_hours=12.0,
-            solar_confidence_factor=1.0,
             slots_with_defaulted_solar=1,
             slots_with_defaulted_price=1,
             slots_with_defaulted_consumption=0,
@@ -85,7 +82,6 @@ class TestSlotBuildMetadata:
             five_min_slots=0,
             thirty_min_slots=0,
             horizon_hours=0.0,
-            solar_confidence_factor=1.0,
             slots_with_defaulted_solar=0,
             slots_with_defaulted_price=0,
             slots_with_defaulted_consumption=0,
@@ -238,11 +234,11 @@ class TestGetSolarKwh:
         from datetime import timezone
 
         now = datetime.now(timezone.utc)
-        result = builder._get_solar_kwh([], now, 30, 1.0)
+        result = builder._get_solar_kwh([], now, 30)
         assert result == 0.0
 
-    def test_applies_confidence_factor(self, builder):
-        """Test confidence factor is applied."""
+    def test_returns_the_slot_forecast_unscaled(self, builder):
+        """The slot's forecast comes back as-is (2 kW over 30 minutes = 1 kWh)."""
         from datetime import timezone
 
         now = datetime.now(timezone.utc)
@@ -252,15 +248,15 @@ class TestGetSolarKwh:
                 "pv_estimate": 2.0,
             }
         ]
-        result = builder._get_solar_kwh(solcast, now, 30, 0.5)
-        assert result == 0.5
+        result = builder._get_solar_kwh(solcast, now, 30)
+        assert result == 1.0
 
     def test_clamp_negative_to_zero(self, builder):
         """Test negative solar values are clamped to 0.0."""
         from datetime import timezone
 
         now = datetime.now(timezone.utc)
-        result = builder._get_solar_kwh([], now, 30, -1.0)
+        result = builder._get_solar_kwh([], now, 30)
         assert result >= 0.0
 
 
@@ -437,7 +433,6 @@ class TestBuildSlotsIntegration:
         assert (
             metadata.five_min_slots + metadata.thirty_min_slots == metadata.total_slots
         )
-        assert metadata.solar_confidence_factor == 1.0
 
     def test_build_slots_with_custom_now_dt(self, builder, mock_coordinator_data):
         """The horizon starts at the custom now_dt, not at the wall clock."""
@@ -493,7 +488,6 @@ class TestProcessAllSlots:
             hybrid_slots=hybrid_slots,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(18, 0),
@@ -533,7 +527,6 @@ class TestProcessAllSlots:
             hybrid_slots=hybrid_slots,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(18, 0),
@@ -580,7 +573,6 @@ class TestProcessSingleSlot:
             slot=slot,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(18, 0),
@@ -615,7 +607,6 @@ class TestProcessSingleSlot:
             slot=slot,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(18, 0),
@@ -647,7 +638,6 @@ class TestProcessSingleSlot:
             slot=slot,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(18, 0),
@@ -685,7 +675,6 @@ class TestProcessSingleSlot:
             slot=slot,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(22, 0),
@@ -721,7 +710,6 @@ class TestProcessSingleSlot:
             slot=slot,
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=now,
             local_tz=ZoneInfo("UTC"),
             dw_start_time=time(18, 0),
