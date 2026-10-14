@@ -41,7 +41,7 @@
      "IDLE": 22,
      "SOC_CEILING_CONSTRAINT": 21
     },
-    "states_explored": 2973,
+    "states_explored": 3020,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 43
@@ -212,7 +212,7 @@
      "IDLE": 22,
      "SOC_CEILING_CONSTRAINT": 21
     },
-    "states_explored": 3040,
+    "states_explored": 3094,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 43
@@ -407,7 +407,7 @@
      "IDLE": 24,
      "SOC_CEILING_CONSTRAINT": 19
     },
-    "states_explored": 3506,
+    "states_explored": 3512,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 43

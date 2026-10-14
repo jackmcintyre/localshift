@@ -243,6 +243,119 @@ def test_no_grid_charge_when_solar_reaches_target():
 
 
 # ---------------------------------------------------------------------------
+# Issue #1141: the entry slot's own solar is not "solar before the window".
+#
+# The floor and the terminal penalty measure the SOC ENTERING the entry slot. The
+# solar check used to simulate through the entry slot as well, so a sunny 15:00 slot
+# judged a target covered that the battery enters the window short of: either the
+# floor stayed dormant, or it was live but every grid charge it needed had been
+# stripped from the feasible set.
+# ---------------------------------------------------------------------------
+
+
+def _slot(start, i, *, buy, solar, load, dw, entry=False) -> SlotContext:
+    return SlotContext(
+        slot_index=i,
+        timestamp_iso=(start + timedelta(minutes=_INTERVAL * i)).isoformat(),
+        slot_interval_minutes=_INTERVAL,
+        buy_price=buy,
+        sell_price=0.05,
+        solar_kwh=solar,
+        consumption_kwh=load,
+        is_demand_window_entry=entry,
+        is_demand_window_slot=dw,
+    )
+
+
+_IN_WINDOW_ENTRY_IDX = 48
+
+
+def _in_window_slots() -> list[SlotContext]:
+    """The 2026-10-10 15:05 shape (#1033 replay, tomorrow's solar x 0.25).
+
+    Planned at 15:00 inside today's window, with tomorrow's entry slot in the feed.
+    On solar alone from 98%: 74.6% at 21:00, 59.0% at 07:00, 91.7% entering
+    tomorrow's window, 96.5% after the sunny entry slot. Morning prices are eligible.
+    """
+    start = datetime(2026, 10, 10, 15, 0)
+    slots: list[SlotContext] = []
+    for i in range(_IN_WINDOW_ENTRY_IDX + 4):
+        if i < 12:  # today's window, in progress
+            slots.append(
+                _slot(start, i, buy=0.30, solar=0.0, load=0.25, dw=True, entry=i == 0)
+            )
+        elif i < 32:  # 21:00-07:00
+            slots.append(_slot(start, i, buy=0.25, solar=0.0, load=0.1, dw=False))
+        elif i < _IN_WINDOW_ENTRY_IDX:  # 07:00-15:00
+            slots.append(_slot(start, i, buy=0.10, solar=0.4, load=0.1, dw=False))
+        else:  # tomorrow's window; its entry slot is sunny
+            entry = i == _IN_WINDOW_ENTRY_IDX
+            slots.append(
+                _slot(
+                    start,
+                    i,
+                    buy=0.30,
+                    solar=0.75 if entry else 0.2,
+                    load=0.1 if entry else 0.3,
+                    dw=True,
+                    entry=entry,
+                )
+            )
+    return slots
+
+
+def test_in_window_solve_reaches_next_window_target():
+    """The in-window solve must enter tomorrow's window at target (#1141).
+
+    Fails on main: the floor is live at 95%, but the solar check credited the 15:00
+    slot, so every morning grid charge was infeasible and the plan entered at 91.7%.
+    """
+    result, config = _plan(_in_window_slots(), 98.0)
+    assert result.success
+    assert config.hard_target_floor == pytest.approx(95.0)
+    assert result.dw_entry_soc_pct is not None
+    assert result.dw_entry_soc_pct >= 94.5, (
+        f"entered tomorrow's window at {result.dw_entry_soc_pct}%, target 95%"
+    )
+    charges = [d.slot_index for d in result.decisions if d.action in _CHARGE]
+    assert charges, "expected a morning grid charge to reach the target"
+    assert all(32 <= i < _IN_WINDOW_ENTRY_IDX for i in charges), (
+        f"charge outside tomorrow morning's eligible slots: {charges}"
+    )
+
+
+def _pre_window_slots() -> list[SlotContext]:
+    """Two hours before the window: 70% -> 80.2% on solar, 95.2% after the entry slot."""
+    start = datetime(2026, 10, 5, 12, 30)
+    slots = [_slot(start, i, buy=0.10, solar=0.6, load=0.3, dw=False) for i in range(5)]
+    slots += [
+        _slot(
+            start,
+            i,
+            buy=0.30,
+            solar=2.5 if i == 5 else 0.2,
+            load=0.3,
+            dw=True,
+            entry=i == 5,
+        )
+        for i in range(5, 11)
+    ]
+    return slots
+
+
+def test_pre_window_floor_not_suppressed_by_entry_slot_solar():
+    """Solar that only arrives during the entry slot does not keep the floor dormant."""
+    result, config = _plan(_pre_window_slots(), 70.0)
+    assert result.success
+    assert config.hard_target_floor == pytest.approx(95.0)
+    assert config.hard_floor_suppressed_by_solar is False
+    assert result.dw_entry_soc_pct is not None
+    assert result.dw_entry_soc_pct >= 94.5, (
+        f"entered the window at {result.dw_entry_soc_pct}%, target 95%"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Graceful degradation: unreachable target -> max feasible, no error/empty plan.
 # ---------------------------------------------------------------------------
 

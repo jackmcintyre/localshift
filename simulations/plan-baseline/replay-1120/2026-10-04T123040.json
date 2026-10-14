@@ -43,7 +43,7 @@
      "SOC_FLOOR_CONSTRAINT": 6,
      "SOLAR_SURPLUS_CAPTURE": 11
     },
-    "states_explored": 2626,
+    "states_explored": 2794,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 43
@@ -218,7 +218,7 @@
      "SOC_FLOOR_CONSTRAINT": 5,
      "SOLAR_SURPLUS_CAPTURE": 11
     },
-    "states_explored": 2680,
+    "states_explored": 2838,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 43
@@ -416,7 +416,7 @@
      "SOC_CEILING_CONSTRAINT": 10,
      "SOLAR_SURPLUS_CAPTURE": 12
     },
-    "states_explored": 3350,
+    "states_explored": 3356,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 43

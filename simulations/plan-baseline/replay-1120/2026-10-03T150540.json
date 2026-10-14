@@ -43,7 +43,7 @@
      "SOC_CEILING_CONSTRAINT": 13,
      "SOC_FLOOR_CONSTRAINT": 23
     },
-    "states_explored": 5234,
+    "states_explored": 5282,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 57
@@ -232,7 +232,7 @@
      "SOC_FLOOR_CONSTRAINT": 20,
      "TARGET_SHORTFALL_RISK": 7
     },
-    "states_explored": 8402,
+    "states_explored": 8446,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 57

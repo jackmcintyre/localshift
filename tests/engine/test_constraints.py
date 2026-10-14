@@ -696,6 +696,75 @@ class TestCheckGlobalSolarSufficiency:
         )
         assert result is False
 
+    @staticmethod
+    def _entry_slot_solar_slots() -> list[SlotContext]:
+        """One pre-window slot, then an entry slot whose own solar crosses the target.
+
+        10 kWh battery, 60% -> 70% before the window (1.087 kWh net at 0.92), and the
+        entry slot adds another 10 points. Entering the window the battery is at 70%.
+        """
+        return [
+            SlotContext(
+                slot_index=0,
+                slot_interval_minutes=30,
+                timestamp_iso="2024-01-01T14:30:00+00:00",
+                buy_price=0.10,
+                sell_price=0.05,
+                solar_kwh=1.087,
+                consumption_kwh=0.0,
+                is_demand_window_slot=False,
+            ),
+            SlotContext(
+                slot_index=1,
+                slot_interval_minutes=30,
+                timestamp_iso="2024-01-01T15:00:00+00:00",
+                buy_price=0.30,
+                sell_price=0.05,
+                solar_kwh=1.087,
+                consumption_kwh=0.0,
+                is_demand_window_slot=True,
+                is_demand_window_entry=True,
+            ),
+        ]
+
+    def test_entry_slot_own_solar_is_not_credited(self):
+        """Issue #1141: sufficiency is judged on the SOC ENTERING the window.
+
+        The hard floor and the terminal penalty both measure the SOC at the start of
+        the entry slot. Crediting the entry slot's own solar judged a 75% target
+        covered when the battery enters the window at 70%, and stripped the grid
+        charge the floor needed from the feasible set.
+        """
+        from custom_components.localshift.engine.constraints import (
+            check_global_solar_sufficiency,
+        )
+
+        config = OptimizerConfig(
+            battery_capacity_kwh=10.0, demand_window_target_soc_pct=75.0
+        )
+        assert (
+            check_global_solar_sufficiency(
+                60.0, 0, self._entry_slot_solar_slots(), config, terminal_penalty_idx=1
+            )
+            is False
+        )
+
+    def test_solar_before_the_entry_slot_still_counts(self):
+        """The pre-window solar alone covering the target is still sufficient."""
+        from custom_components.localshift.engine.constraints import (
+            check_global_solar_sufficiency,
+        )
+
+        config = OptimizerConfig(
+            battery_capacity_kwh=10.0, demand_window_target_soc_pct=69.0
+        )
+        assert (
+            check_global_solar_sufficiency(
+                60.0, 0, self._entry_slot_solar_slots(), config, terminal_penalty_idx=1
+            )
+            is True
+        )
+
 
 class TestHoldStrictFeasibleActions:
     """Tests for HOLD_STRICT action in feasible_actions (Issue #906)."""

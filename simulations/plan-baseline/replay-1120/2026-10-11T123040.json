@@ -44,7 +44,7 @@
      "SOLAR_SURPLUS_CAPTURE": 11,
      "TARGET_SHORTFALL_RISK": 5
     },
-    "states_explored": 3138,
+    "states_explored": 3194,
     "success": true,
     "terminal_shortfall_pct": 36.77,
     "total_slots": 43
@@ -221,7 +221,7 @@
      "SOLAR_SURPLUS_CAPTURE": 11,
      "TARGET_SHORTFALL_RISK": 5
     },
-    "states_explored": 3164,
+    "states_explored": 3218,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 43
@@ -421,7 +421,7 @@
      "SOLAR_SURPLUS_CAPTURE": 2,
      "TARGET_SHORTFALL_RISK": 13
     },
-    "states_explored": 3390,
+    "states_explored": 3420,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 43
