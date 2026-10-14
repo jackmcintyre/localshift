@@ -94,6 +94,7 @@ from .forecast import (
     sum_solar_before_target,
 )
 from .learning.correlation import SLIDING_WINDOW_DAYS, WeatherCorrelation
+from .state.reader import read_fresh_soc
 from .utils.away import (
     async_get_away_intervals,
     away_local_hour_keys,
@@ -215,7 +216,6 @@ class ComputationEngine:
             find_battery_fill_point=self._soc_simulator.find_battery_fill_point,
             calculate_safe_additional_load=self._excess_solar_engine.calculate_safe_additional_load,
             compute_load_shift_signal=self._excess_solar_engine.compute_load_shift_signal,
-            get_entity_id=self._get_entity_id,
             get_historical_hourly_averages=self._get_historical_hourly_averages,
             recent_load_1hr_getter=lambda: self._recent_load_1hr_kw,
             parse_time_option=self._parse_time_option,
@@ -611,18 +611,9 @@ class ComputationEngine:
     def _read_fresh_soc(self) -> float | None:
         """Read the latest SOC directly from the HA state machine (cache bypass).
 
-        Mirrors BatteryController.read_fresh_soc (integration/controller.py:86).
+        Same read as BatteryController.read_fresh_soc: both call the one helper.
         """
-        from .const import CONF_TESLEMETRY_SOC
-
-        try:
-            soc_entity_id = self._get_entity_id(CONF_TESLEMETRY_SOC)
-            state = self.hass.states.get(soc_entity_id)
-            if state and state.state not in (None, "unknown", "unavailable"):
-                return float(state.state)
-        except (ValueError, TypeError, AttributeError):
-            pass
-        return None
+        return read_fresh_soc(self.hass, self._get_entity_id)
 
     def _read_boost_from_plan(self, data: CoordinatorData) -> None:
         """---- Step 6: boost_charge_needed (Phase 4: derive from DP decision) ----
@@ -783,8 +774,7 @@ class ComputationEngine:
 
         # ---- Phase 1 (#441): Shared load forecast slots ----
         # Builds data.load_forecast_slots for use by DP optimizer and other helpers.
-        load_entity_id = self._get_entity_id("teslemetry_load_power")
-        hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
+        hourly_avg_kw = self._get_historical_hourly_averages()
         recent_load_kw = self._recent_load_1hr_kw
         self._forecast_pipeline.compute_load_forecast_slots(
             data=data,
@@ -1066,7 +1056,7 @@ class ComputationEngine:
         """Get recent load last error from history fetcher."""
         return self._history_fetcher._recent_load_1hr_last_error
 
-    def _get_historical_hourly_averages(self, entity_id: str) -> dict[int, float]:
+    def _get_historical_hourly_averages(self) -> dict[int, float]:
         """Get cached hourly averages (sync version for compute_derived_values).
 
         Returns cached data - actual fetching happens in async_get_historical_hourly_averages.

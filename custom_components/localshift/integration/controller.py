@@ -24,6 +24,7 @@ from ..state.mode_configs import (
     calculate_self_consumption_reserve,
     resolve_away_reserve_pct,
 )
+from ..state.reader import read_fresh_soc
 from ..state.validator import TransitionValidator
 from .client import PowerwallServiceClient
 
@@ -115,16 +116,7 @@ class BatteryController:
             Current SOC percentage (0-100) if available, None if unavailable.
 
         """
-        from custom_components.localshift.const import CONF_TESLEMETRY_SOC
-
-        try:
-            soc_entity_id = self._get_entity_id(CONF_TESLEMETRY_SOC)
-            state = self.hass.states.get(soc_entity_id)
-            if state and state.state not in (None, "unknown", "unavailable"):
-                return float(state.state)
-        except (ValueError, TypeError, AttributeError):
-            pass
-        return None
+        return read_fresh_soc(self.hass, self._get_entity_id)
 
     async def _run_transition(
         self, recipe: TransitionRecipe, data: CoordinatorData | None = None

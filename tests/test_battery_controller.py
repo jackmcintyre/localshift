@@ -1385,3 +1385,37 @@ class TestHelperMethods:
         result = battery_controller.read_fresh_soc()
 
         assert result is None
+
+
+@pytest.mark.parametrize(
+    ("raw_state", "expected"),
+    [
+        ("67.5", 67.5),
+        ("0", 0.0),
+        ("unavailable", None),
+        ("unknown", None),
+        ("not_a_number", None),
+        (None, None),
+        ("<missing>", None),
+        ("<raises>", None),
+    ],
+)
+def test_planner_and_controller_read_the_same_fresh_soc(
+    raw_state, expected, battery_controller, computation_engine, mock_hass
+):
+    """#980: one SOC read, so the planner and controller cannot disagree."""
+    if raw_state == "<missing>":
+        mock_hass.states.get = MagicMock(return_value=None)
+    elif raw_state == "<raises>":
+        mock_hass.states.get = MagicMock(side_effect=AttributeError("no states"))
+    else:
+        state = MagicMock()
+        state.state = raw_state
+        mock_hass.states.get = MagicMock(return_value=state)
+
+    assert battery_controller.read_fresh_soc() == expected
+    assert computation_engine._read_fresh_soc() == expected
+    assert [c.args for c in mock_hass.states.get.call_args_list] == [
+        ("sensor.tesla_powerwall_soc",),
+        ("sensor.tesla_powerwall_soc",),
+    ]

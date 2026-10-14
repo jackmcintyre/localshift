@@ -322,9 +322,7 @@ def wired(computation_engine):
         == computation_engine._soc_simulator._simulate_with_additional_load
     )
 
-    signals._get_historical_hourly_averages = lambda _entity_id: dict.fromkeys(
-        range(24), 1.0
-    )
+    signals._get_historical_hourly_averages = lambda: dict.fromkeys(range(24), 1.0)
     signals._recent_load_1hr_getter = lambda: 1.0
 
     def run(simulator: StubSimulator, **overrides) -> CoordinatorData:
