@@ -958,8 +958,8 @@ Attributes:
 - `next_window_gap_min` - Minutes from the end of the last plan slot to the next demand-window start, as given to the planner. Null when none was measured (see `no_gap`)
 - `next_window_required_soc_pct` - SOC the tail has to hold at the end of the horizon: the target less what normal-rate charging can add before the window opens
 - `next_window_entry_soc_pct` - SOC the re-planned tail reaches at the end of the horizon
-- `forecast_accuracy` - Current forecast accuracy (0-1)
-- `accuracy_discount_factor` - Applied discount (0.5-1.0)
+- `forecast_accuracy` - Current forecast accuracy (0-1). This is the discount that acts on the plan: the pre-charge gate and the required-charge estimate scale projected solar gain by it, with no floor, and the negative-FIT recoverability floor is capped by it. The shortfall classifier also uses it, but only to choose the reported reason code
+- `accuracy_discount_factor` - `forecast_accuracy` floored at 0.5 (0.5-1.0). Diagnostic only: not applied to the plan anywhere (Issue #1132). Equal to `forecast_accuracy` unless accuracy is below 0.5
 - `slot0_price` - What the current slot was priced on (Issue #1119):
   - `buy`, `sell` - the prices the planner used ($/kWh)
   - `buy_source`, `sell_source` - `forecast_current` (the forecast entry covering now) or, for sell, `forecast_window` (no feed-in entry covers now; 15-minute lookup used)
