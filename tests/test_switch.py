@@ -226,7 +226,9 @@ class TestSwitchKeys:
 
     def test_switch_keys_count(self):
         """Test there are 9 switch keys."""
-        assert len(SWITCH_KEYS) == 8  # enable_learning retired with the learning layer
+        # enable_learning retired with the learning layer; planner_knows_current_mode
+        # added for #1158.
+        assert len(SWITCH_KEYS) == 9
 
 
 class TestAsyncSetupEntry:
