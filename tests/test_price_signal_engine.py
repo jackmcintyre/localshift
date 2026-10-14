@@ -26,6 +26,13 @@ def price_signal_engine(mock_entry, mock_get_switch_state):
     )
 
 
+def _spike_log_args(caplog) -> tuple:
+    """(max_price, threshold, reserve, hours_remaining) from the spike log line."""
+    records = [r for r in caplog.records if r.msg.startswith("Spike analysis:")]
+    assert len(records) == 1
+    return records[0].args
+
+
 class TestPriceSignalEngineSpikeAnalysis:
     """Tests for PriceSignalEngine spike logic."""
 
@@ -76,10 +83,11 @@ class TestPriceSignalEngineSpikeAnalysis:
         now_dt = datetime(2026, 2, 16, 18, 0, 0, tzinfo=timezone(timedelta(hours=11)))
         price_signal_engine.analyze_spike(coordinator_data, now_dt)
 
-        assert coordinator_data.spike_max_price == 0.0
+        assert coordinator_data.spike_in_conservative_mode is False
+        assert coordinator_data.spike_reserve_soc == 0.0
 
     def test_analyze_spike_with_spike_prices(
-        self, price_signal_engine, coordinator_data
+        self, price_signal_engine, coordinator_data, caplog
     ):
         """Spike analysis should detect and analyze spike prices."""
 
@@ -121,14 +129,16 @@ class TestPriceSignalEngineSpikeAnalysis:
             return_value=(spike_end, max_price, spike_prices)
         )
 
-        price_signal_engine.analyze_spike(coordinator_data, now_dt)
+        with caplog.at_level("INFO"):
+            price_signal_engine.analyze_spike(coordinator_data, now_dt)
 
         assert coordinator_data.spike_in_conservative_mode is True
-        assert coordinator_data.spike_max_price > 1.0
-        assert coordinator_data.spike_price_threshold > 0
+        max_price_logged, threshold_logged, _, _ = _spike_log_args(caplog)
+        assert max_price_logged == 2.0
+        assert threshold_logged > 0
 
     def test_analyze_spike_calculates_reserve_soc(
-        self, price_signal_engine, coordinator_data
+        self, price_signal_engine, coordinator_data, caplog
     ):
         """Spike analysis should calculate reserve SOC needed."""
 
@@ -159,7 +169,10 @@ class TestPriceSignalEngineSpikeAnalysis:
             return_value=(spike_end, max_price, spike_prices)
         )
 
-        price_signal_engine.analyze_spike(coordinator_data, now_dt)
+        with caplog.at_level("INFO"):
+            price_signal_engine.analyze_spike(coordinator_data, now_dt)
 
         assert coordinator_data.spike_reserve_soc >= 0
-        assert coordinator_data.spike_hours_remaining >= 0
+        _, _, reserve_logged, hours_remaining_logged = _spike_log_args(caplog)
+        assert reserve_logged == coordinator_data.spike_reserve_soc
+        assert hours_remaining_logged == pytest.approx(1.0)
