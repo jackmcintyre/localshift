@@ -488,6 +488,69 @@ class TestPlanChargeGrantIsBounded:
         assert coordinator_data.mode_decision_plan_charge_only is False
 
 
+class _DecliningFacade:
+    """The real facade's token handling: ``_epoch_grant_permits`` and
+    ``_commit_or_hold_mode``, driven by a per-tick slot-0 script."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.tick = 0
+
+    def compute_derived_values(self, data):
+        from custom_components.localshift.engine.optimizer_facade import (
+            OptimizerFacade,
+        )
+
+        mode = self.script[min(self.tick, len(self.script) - 1)]
+        self.tick += 1
+        allowed = data.mode_decision_allowed
+        if allowed and not OptimizerFacade._epoch_grant_permits(data, mode):
+            allowed = False
+            data.mode_decision_epoch_declined = True
+        OptimizerFacade._commit_or_hold_mode(data, mode, allowed, "optimizer")
+
+
+class TestDeclinedPlanChargeGrantIsRefunded:
+    """Issue #1172, 14 Oct: the price sat at 21.37c / 12.42c from 12:00:19 to
+    13:00:16, so the price context never moved. The plan's first charge slid a
+    slot later on each replan, then from 12:40 held slot 0 on a charge, and the
+    battery stayed in self_consumption until a restart at 12:53."""
+
+    SC = BatteryMode.SELF_CONSUMPTION
+    GC = BatteryMode.GRID_CHARGING
+    # Tick 1 wants a charge; by the granted tick 2 the replan has drifted to
+    # hold; from tick 4 slot 0 is a charge on every replan.
+    SCRIPT = [SC, GC, SC, SC, GC, GC, GC, GC, GC, GC, GC, GC]
+
+    def _replay(self, state_machine, data):
+        data.general_price = 0.2137116
+        data.feed_in_price = 0.1242303
+        data.soc = 34.0
+        engine = _DecliningFacade(self.SCRIPT)
+        committed = []
+        for _ in self.SCRIPT:
+            asyncio.run(state_machine.evaluate_state_machine(data, engine))
+            committed.append(data.active_mode)
+        return committed
+
+    def test_charge_commits_after_a_declined_grant(
+        self, state_machine, coordinator_data
+    ):
+        committed = self._replay(state_machine, coordinator_data)
+
+        assert committed[2] == self.SC  # the drifted grant was declined
+        # pending at tick 4, granted and committed at tick 5, and it holds
+        assert committed[5:] == [self.GC] * (len(self.SCRIPT) - 5)
+
+    def test_committed_grant_stays_spent(self, state_machine, coordinator_data):
+        """The refund is for a grant that committed nothing; one that commits
+        still closes the trigger for the rest of the price context."""
+        self._replay(state_machine, coordinator_data)
+
+        assert state_machine._plan_charge_epoch == 2
+        assert BatteryMode.GRID_CHARGING.value in state_machine._plan_charge_granted
+
+
 class TestTokenWindowIntegrity:
     """The in-lock window must close on every path."""
 

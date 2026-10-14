@@ -702,12 +702,13 @@ class OptimizerFacade:
             # frozen: the wanted mode stays visible on debug_plan_mode_pending
             # and the execution backstop (below) remains the deterministic path.
             if decision_allowed and not self._epoch_grant_permits(data, new_mode):
-                _LOGGER.debug(
+                _LOGGER.info(
                     "Epoch grant not spent: fresh plan selected %s, which this "
                     "grant may not commit — holding",
                     battery_mode_str,
                 )
                 decision_allowed = False
+                data.mode_decision_epoch_declined = True
 
             _LOGGER.info(
                 "DP optimizer: selected %s (action=%s, slot=%d, decision_allowed=%s)",

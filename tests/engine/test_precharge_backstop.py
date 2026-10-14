@@ -457,6 +457,20 @@ class TestPlanChargeGrantIsOneDirectional:
         self._run_with_plan(facade, data, _config(), BatteryMode.GRID_CHARGING)
 
         assert data.active_mode == BatteryMode.GRID_CHARGING
+        assert data.mode_decision_epoch_declined is False
+
+    def test_declined_plan_charge_grant_is_reported(self) -> None:
+        """Issue #1172: a grant whose fresh plan drifted to hold is declined, and
+        the facade says so, so the state machine can refund the budget."""
+        facade = OptimizerFacade()
+        data = _data(mode_backstop_allowed=False)
+        data.mode_decision_allowed = True
+        data.mode_decision_plan_charge_only = True
+
+        self._run_with_plan(facade, data, _config(), BatteryMode.SELF_CONSUMPTION)
+
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert data.mode_decision_epoch_declined is True
 
     def test_ordinary_grant_is_unrestricted(self) -> None:
         """A price/spike/DW/floor grant may still commit any mode."""
