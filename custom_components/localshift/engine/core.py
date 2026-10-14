@@ -1572,9 +1572,6 @@ class DPPlanner:
     ]:
         """Initialize DP tables and compute the per-bin demand-window-entry penalty.
 
-        In self-consumption mode, credits future solar gain (Issue #619) to
-        prevent grid charging when solar will cover the shortfall.
-
         Issue #624: In self_consumption mode, treat target as a hard constraint by
         using a very high cost for states below target.
 
