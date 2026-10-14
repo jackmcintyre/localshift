@@ -58,6 +58,9 @@ PRECHARGE_RUNWAY_HYSTERESIS_MIN = 10.0
 # wanted to START charging may commit one of these and nothing else.
 _CHARGE_MODES = (_BatteryMode.GRID_CHARGING, _BatteryMode.BOOST_CHARGING)
 _CHARGE_MODE_VALUES = frozenset(m.value for m in _CHARGE_MODES)
+# Releases the charge dwell never holds: a spike response must not wait out a band,
+# and holding PROACTIVE_EXPORT would spend the #1119 export-start grant on nothing.
+_DWELL_EXEMPT_RELEASES = (_BatteryMode.PROACTIVE_EXPORT, _BatteryMode.SPIKE_DISCHARGE)
 
 
 class OptimizerFacade:
@@ -97,6 +100,11 @@ class OptimizerFacade:
         # other arm's eligibility flag flickering) so a one-cycle blip cannot silently
         # reset the band to narrow — the failure the band exists to prevent.
         self._runway_holding: bool = False
+        # The charge commit (its charge_dwell_started_at) whose release the dwell
+        # held, or None. The hold consumed that evaluation's token, so without this
+        # the release would wait for the next fingerprint change. See
+        # _release_dwell_hold.
+        self._dwell_held_charge_at: datetime | None = None
 
     def set_solar_accuracy_tracker(self, tracker: Any) -> None:
         """Set the solar accuracy tracker for bias correction."""
@@ -735,7 +743,15 @@ class OptimizerFacade:
             if decision_allowed and self._should_hold_charge_dwell(
                 data, new_mode, optimizer_config
             ):
+                self._dwell_held_charge_at = data.charge_dwell_started_at
                 data.debug_plan_mode_pending = new_mode.value
+                return
+            if not decision_allowed and self._release_dwell_hold(
+                data, new_mode, optimizer_config
+            ):
+                self._commit_or_hold_mode(
+                    data, new_mode, True, mode_source="charge_dwell_release"
+                )
                 return
             self._commit_or_hold_mode(
                 data, new_mode, decision_allowed, mode_source="optimizer"
@@ -770,6 +786,42 @@ class OptimizerFacade:
         if plan_charge and new_mode in _CHARGE_MODES:
             return True
         return bool(export_start and new_mode == _BatteryMode.PROACTIVE_EXPORT)
+
+    def _release_dwell_hold(
+        self, data: CoordinatorData, new_mode: Any, optimizer_config: Any
+    ) -> bool:
+        """Return True when a release the charge dwell held must commit now.
+
+        The hold spent its evaluation's token, and nothing re-grants one when the
+        band runs out: the plan-charge epoch only starts charges. On a flat or stuck
+        price the release would wait unbounded, the failure
+        ``_release_backstop_hold`` guards against for the backstop. So the first
+        in-lock evaluation after the band that still wants a release commits it.
+        """
+        held_at = self._dwell_held_charge_at
+        if held_at is None:
+            return False
+        # In-lock only, like the backstop: never from the out-of-lock recompute.
+        if not getattr(data, "mode_backstop_allowed", False):
+            return False
+        if (
+            data.active_mode not in _CHARGE_MODES
+            or getattr(data, "charge_dwell_started_at", None) != held_at
+        ):
+            # A later commit moved the mode on: nothing left to release.
+            self._dwell_held_charge_at = None
+            return False
+        if new_mode in _CHARGE_MODES or self._should_hold_charge_dwell(
+            data, new_mode, optimizer_config
+        ):
+            return False
+        self._dwell_held_charge_at = None
+        _LOGGER.info(
+            "Charge dwell: committing the held release of %s to %s",
+            data.active_mode.value,
+            new_mode.value,
+        )
+        return True
 
     def _release_backstop_hold(self, data: CoordinatorData) -> bool:
         """Return True when a forced BOOST must be released this cycle.
@@ -1239,20 +1291,32 @@ class OptimizerFacade:
             return False
         if new_mode in _CHARGE_MODES:
             return False
-        # Demand-window active takes priority — never trap a charge into a DW.
-        if getattr(data, "demand_window_active", False):
-            return False
         # Not decision_timestamp: lag tracking clears that once the transition
         # completes, which made this fail open seconds after every commit (#1159).
         ts = getattr(data, "charge_dwell_started_at", None)
-        if ts is None:
-            # Fresh session / no timestamp: fail open, commit immediately.
-            return False
-        now = dt_util.now()
-        try:
-            elapsed = (now - ts).total_seconds() / 60.0
-        except TypeError:
-            # Naive/aware timestamp mismatch: fail open rather than propagate.
+        reason = None
+        elapsed = 0.0
+        # Never trap a charge into a DW, nor hold one against a spike response.
+        if getattr(data, "demand_window_active", False):
+            reason = "demand window active"
+        elif getattr(data, "price_spike", False):
+            reason = "price spike active"
+        elif new_mode in _DWELL_EXEMPT_RELEASES:
+            reason = f"release into {new_mode.value} is exempt"
+        elif ts is None:
+            reason = "no dwell clock (restart, or no charge commit seen)"
+        else:
+            try:
+                elapsed = (dt_util.now() - ts).total_seconds() / 60.0
+            except TypeError:
+                reason = "naive/aware timestamp mismatch"
+        if reason is not None:
+            _LOGGER.info(
+                "Charge dwell: allowing release of %s to %s unheld: %s",
+                data.active_mode.value,
+                new_mode.value,
+                reason,
+            )
             return False
         quantum = getattr(optimizer_config, "precharge_runway_quantum_min", 0.0) or 0.0
         band = max(PRECHARGE_RUNWAY_HYSTERESIS_MIN, quantum)

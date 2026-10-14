@@ -1671,6 +1671,121 @@ class TestChargeCommitDwell:
         assert data.active_mode == BatteryMode.BOOST_CHARGING
         assert data.debug_mode_source == "runway_backstop"
 
+    def test_held_release_commits_after_the_band_with_no_price_change(self) -> None:
+        """#1159 review: the hold spends the token, and nothing re-grants one.
+
+        A release held 1 min after the commit must commit on the first in-lock
+        evaluation after the band, although prices never move. The real
+        StateMachine decides the token, so "frozen" is computed, not asserted.
+        """
+        facade = OptimizerFacade()
+        state_machine = StateMachine(
+            MagicMock(),
+            MagicMock(),
+            lambda key: False,
+            lambda key, default=None: default,
+            MagicMock(),
+        )
+        committed_at = dt_util.now()
+        # No pre-DW charge in the plan: the #901 backstop stays out of the way.
+        data = _commit_charge_data(_data(optimizer_decisions=[]), committed_at)
+        data.feed_in_price = 0.05
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        def evaluate(minutes_after_commit: float) -> None:
+            with patch.object(
+                dt_util,
+                "now",
+                return_value=committed_at + timedelta(minutes=minutes_after_commit),
+            ):
+                state_machine._apply_decision_token(data)
+                self._run_for_commit_dwell(
+                    facade, data, config, BatteryMode.SELF_CONSUMPTION
+                )
+
+        evaluate(1.0)  # first fingerprint: granted, and held
+        assert data.active_mode == BatteryMode.GRID_CHARGING
+        evaluate(5.0)  # same prices: frozen, still inside the band
+        assert data.mode_decision_allowed is False
+        assert data.active_mode == BatteryMode.GRID_CHARGING
+
+        evaluate(PRECHARGE_RUNWAY_HYSTERESIS_MIN + 0.5)
+
+        assert data.mode_decision_allowed is False
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert data.debug_mode_source == "charge_dwell_release"
+        assert data.debug_plan_mode_pending is None
+
+    @pytest.mark.parametrize(
+        ("plan_mode", "price_spike", "export_start_only"),
+        [
+            (BatteryMode.SPIKE_DISCHARGE, False, False),
+            (BatteryMode.PROACTIVE_EXPORT, False, False),
+            # The #1119 export-start grant must start the export, not be held.
+            (BatteryMode.PROACTIVE_EXPORT, False, True),
+            (BatteryMode.SELF_CONSUMPTION, True, False),
+        ],
+    )
+    def test_spike_and_export_releases_are_exempt(
+        self,
+        plan_mode: BatteryMode,
+        price_spike: bool,
+        export_start_only: bool,
+    ) -> None:
+        """#1159 review: the dwell never holds a charge against a spike response."""
+        facade = OptimizerFacade()
+        data = _commit_charge_data(
+            _data(
+                mode_backstop_allowed=False,
+                mode_decision_allowed=True,
+                mode_decision_export_start_only=export_start_only,
+                price_spike=price_spike,
+            ),
+            dt_util.now() - timedelta(minutes=1),
+        )
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        self._run_for_commit_dwell(facade, data, config, plan_mode)
+
+        assert data.active_mode == plan_mode
+        assert data.debug_plan_mode_pending is None
+
+    @pytest.mark.parametrize(
+        ("committed_at", "overrides", "reason"),
+        [
+            (None, {}, "no dwell clock"),
+            (datetime.now(), {}, "naive/aware timestamp mismatch"),
+            ("recent", {"demand_window_active": True}, "demand window active"),
+            ("recent", {"price_spike": True}, "price spike active"),
+        ],
+    )
+    def test_fail_open_declines_are_logged_with_the_reason(
+        self, caplog, committed_at: Any, overrides: dict[str, Any], reason: str
+    ) -> None:
+        """#1159 review: every unheld release says why, so a live log can tell a
+        restart from a missing clock from an exemption."""
+        if committed_at == "recent":
+            committed_at = dt_util.now() - timedelta(minutes=1)
+        facade = OptimizerFacade()
+        data = _commit_charge_data(
+            _data(mode_backstop_allowed=False, mode_decision_allowed=True, **overrides),
+            committed_at,
+        )
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        with caplog.at_level("INFO"):
+            self._run_for_commit_dwell(
+                facade, data, config, BatteryMode.SELF_CONSUMPTION
+            )
+
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert any(
+            "Charge dwell: allowing release" in r.getMessage()
+            and reason in r.getMessage()
+            and r.levelname == "INFO"
+            for r in caplog.records
+        )
+
 
 class TestRunwayBackstopLogsOncePerHold:
     """#1115: the runway arm warned on every cycle of a hold — 200 lines in two hours.
