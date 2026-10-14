@@ -531,8 +531,8 @@ adding another one is seen.
 - **It cannot force the removal of a computation that feeds a write-only
   field.** It reports the field and its write sites. The method that works the
   value out is still called, so it is not reported
-  (`_update_hybrid_accuracy` feeding `hybrid_solar_accuracy` is the live
-  example). Deleting the field means deciding about that method too.
+  (`_update_hybrid_accuracy` feeding `hybrid_solar_accuracy` was the
+  example until #981 removed both). Deleting the field means deciding about that method too.
 - **If `coordinator/data.py` or `CoordinatorData` is renamed** the census
   finds no fields and the gate fails, rather than passing with the census
   switched off. Update the defaults at the top of the script.

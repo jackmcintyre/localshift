@@ -929,20 +929,6 @@ class TestHandleMediumTick:
 
         coordinator._tick_scheduler.handle_medium_tick.assert_called_once_with(now)
 
-    def test_medium_tick_updates_hybrid_accuracy(self, coordinator, coordinator_data):
-        """Hybrid accuracy (#778 Phase 2) is computed after the scheduler runs."""
-        from datetime import UTC, datetime
-
-        coordinator.data = coordinator_data
-        coordinator.data.solcast_mape = 12.0
-        coordinator.data.solar_forecast_accuracy = None
-        coordinator._tick_scheduler = MagicMock()
-
-        coordinator._handle_medium_tick(datetime.now(UTC))
-
-        # No LocalShift samples yet, so it defers wholly to Solcast.
-        assert coordinator.data.hybrid_solar_accuracy == 88.0
-
     def test_medium_tick_without_scheduler_does_not_raise(
         self, coordinator, coordinator_data
     ):
@@ -950,17 +936,11 @@ class TestHandleMediumTick:
         from datetime import UTC, datetime
 
         coordinator.data = coordinator_data
-        coordinator.data.solcast_mape = None
-        coordinator.data.solar_forecast_accuracy = 77.0
-        coordinator.data.hybrid_solar_accuracy = None
         coordinator._tick_scheduler = None
 
         coordinator._handle_medium_tick(datetime.now(UTC))
 
-        # The coordinator-owned hybrid accuracy step still runs.
-        assert coordinator.data.hybrid_solar_accuracy == 77.0
-
-    def test_medium_tick_skips_hybrid_accuracy_without_data(self, coordinator):
+    def test_medium_tick_without_data_still_delegates(self, coordinator):
         """Before the first refresh ``data`` is None; the tick must stay safe."""
         from datetime import UTC, datetime
 

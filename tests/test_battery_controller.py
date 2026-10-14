@@ -1170,7 +1170,6 @@ class TestReserveSettleVerify:
 
         data = CoordinatorData()
         data.soc = 50.0
-        data.preserve_soc = None  # -> reserve 10
 
         result = await battery_controller.set_self_consumption(data)
 

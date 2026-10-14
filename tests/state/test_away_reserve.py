@@ -127,7 +127,6 @@ def test_c2_self_consumption_config_away(
         options={"away_reserve": 30},
     )
     coordinator_data.away_active = True
-    coordinator_data.preserve_soc = None
     config = machine._get_mode_config(mode, coordinator_data)
     assert config.backup_reserve == 30.0
     assert config.self_consumption_reserve == 30.0
@@ -150,7 +149,6 @@ def test_c2_self_consumption_config_not_away(
         options={"away_reserve": 30},
     )
     coordinator_data.away_active = False
-    coordinator_data.preserve_soc = None
     config = machine._get_mode_config(mode, coordinator_data)
     assert config.backup_reserve == 10.0
 
@@ -313,7 +311,6 @@ def _make_controller(mock_hass, options: dict | None = None):
 async def test_c5_controller_writes_away_reserve(mock_hass, coordinator_data):
     controller = _make_controller(mock_hass, options={"away_reserve": 30})
     coordinator_data.away_active = True
-    coordinator_data.preserve_soc = None
     await controller.set_self_consumption(coordinator_data)
     controller._service_client.set_backup_reserve.assert_awaited_with(30.0)
 
@@ -330,7 +327,6 @@ async def test_c5_controller_preserve_soc_above_away_wins(mock_hass, coordinator
 async def test_c5_controller_not_away_gives_ten(mock_hass, coordinator_data):
     controller = _make_controller(mock_hass, options={"away_reserve": 30})
     coordinator_data.away_active = False
-    coordinator_data.preserve_soc = None
     await controller.set_self_consumption(coordinator_data)
     controller._service_client.set_backup_reserve.assert_awaited_with(10)
 
@@ -391,7 +387,6 @@ async def test_c5_controller_magicmock_away_active_means_not_away(mock_hass):
     """A bare MagicMock's truthy ``away_active`` must not arm the away reserve."""
     controller = _make_controller(mock_hass, options={"away_reserve": 30})
     data = MagicMock()
-    data.preserve_soc = None
     await controller.set_self_consumption(data)
     controller._service_client.set_backup_reserve.assert_awaited_with(10)
 
@@ -417,7 +412,6 @@ async def test_c6_stable_mode_steps_reserve_once(
     machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
     machine._self_consumption_reserve = 10.0
     coordinator_data.away_active = True
-    coordinator_data.preserve_soc = None
     coordinator_data.manual_override = False
 
     stepped = await machine._step_self_consumption_reserve(coordinator_data)
@@ -443,7 +437,6 @@ async def test_c6_no_write_once_tracked_matches(
     machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
     machine._self_consumption_reserve = 30.0  # already stepped
     coordinator_data.away_active = True
-    coordinator_data.preserve_soc = None
 
     stepped = await machine._step_self_consumption_reserve(coordinator_data)
 
@@ -467,7 +460,6 @@ async def test_c7_release_when_away_ends(
     machine._commanded_mode = BatteryMode.DEMAND_BLOCK
     machine._self_consumption_reserve = 30.0
     coordinator_data.away_active = False
-    coordinator_data.preserve_soc = None
 
     stepped = await machine._step_self_consumption_reserve(coordinator_data)
 
@@ -492,7 +484,6 @@ async def test_c8_slider_moved_mid_trip(
     machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
     machine._self_consumption_reserve = 30.0
     coordinator_data.away_active = True
-    coordinator_data.preserve_soc = None
 
     stepped = await machine._step_self_consumption_reserve(coordinator_data)
 
@@ -545,7 +536,6 @@ async def test_c6_perform_health_check_returns_early_after_stepping(
     machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
     machine._self_consumption_reserve = 10.0
     coordinator_data.away_active = True
-    coordinator_data.preserve_soc = None
 
     await machine._perform_health_check(coordinator_data)
 
@@ -595,7 +585,6 @@ def _away_machine_needing_a_step(
     machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
     machine._self_consumption_reserve = 10.0
     coordinator_data.away_active = True
-    coordinator_data.preserve_soc = None
     coordinator_data.manual_override = False
     return machine
 
@@ -698,7 +687,6 @@ async def test_c10_failed_write_leaves_tracked_unchanged(
     machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
     machine._self_consumption_reserve = 10.0
     coordinator_data.away_active = True
-    coordinator_data.preserve_soc = None
 
     stepped = await machine._step_self_consumption_reserve(coordinator_data)
 
@@ -879,7 +867,6 @@ async def test_reserve_step_stamps_self_command(
     machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
     machine._self_consumption_reserve = 80.0
     coordinator_data.away_active = False
-    coordinator_data.preserve_soc = None
 
     assert await machine._step_self_consumption_reserve(coordinator_data) is True
 

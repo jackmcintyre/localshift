@@ -54,7 +54,6 @@ class SpikeAnalyzer:
         # Hardcoded defaults (Issue #214)
         spike_percentile = DEFAULT_SPIKE_PRICE_PERCENTILE
 
-        data.spike_end_time = None
         data.spike_max_price = 0.0
         data.spike_price_threshold = 0.0
         data.spike_reserve_soc = 0.0
@@ -75,7 +74,6 @@ class SpikeAnalyzer:
         if spike_end is None or not spike_prices:
             return
 
-        data.spike_end_time = spike_end
         data.spike_max_price = max_price
         data.spike_hours_remaining = (spike_end - now_dt).total_seconds() / 3600
         data.spike_price_threshold = self._calculate_spike_price_threshold(

@@ -606,7 +606,7 @@ class StateMachine:
     def _build_self_consumption_config(self, data: CoordinatorData) -> ModeConfig:
         """Build SELF_CONSUMPTION / DEMAND_BLOCK config."""
         backup_reserve = calculate_self_consumption_reserve(
-            data.preserve_soc, self._resolve_away_reserve_pct(data)
+            None, self._resolve_away_reserve_pct(data)
         )
         return ModeConfig(
             operation_mode="self_consumption",
@@ -2161,7 +2161,7 @@ class StateMachine:
             return False
 
         fresh_reserve = calculate_self_consumption_reserve(
-            data.preserve_soc, self._resolve_away_reserve_pct(data)
+            None, self._resolve_away_reserve_pct(data)
         )
         tracked_reserve = (
             self._self_consumption_reserve

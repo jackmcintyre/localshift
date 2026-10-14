@@ -14,25 +14,5 @@
 # site of the same attribute). Sorted; no line numbers on purpose. Notes
 # survive --update.
 
-attribute    coordinator/coordinator.py  self.data.hybrid_solar_accuracy
-attribute    coordinator/coordinator.py  self.data.hybrid_solar_accuracy@2
-attribute    coordinator/coordinator.py  self.data.hybrid_solar_accuracy@3
-attribute    coordinator/coordinator.py  self.data.physical_response_timestamp
-attribute    engine/optimizer_facade.py  data.optimizer_safety_block_reason
-attribute    engine/optimizer_facade.py  data.optimizer_safety_block_reason@2
-attribute    engine/optimizer_facade.py  data.primary_decision
-attribute    engine/optimizer_facade.py  data.primary_decision@2
-attribute    engine/optimizer_facade.py  data.shadow_decision
-attribute    engine/optimizer_facade.py  data.shadow_decision@2
-attribute    engine/spike_analyzer.py  data.spike_end_time
-attribute    engine/spike_analyzer.py  data.spike_end_time@2
-attribute    state/reader.py  data.primary_decision
-attribute    state/reader.py  data.shadow_decision
 unread-field coordinator/data.py  CoordinatorData.allow_dw_entry_under_target  # written every cycle 'for forecast_computer'; the planner reads config.allow_dw_entry_under_target instead
-unread-field coordinator/data.py  CoordinatorData.hybrid_solar_accuracy  # #778 phase 2: `_update_hybrid_accuracy` in coordinator/coordinator.py ~687-741 computes this every cycle and nothing consumes it; deleting the field leaves the computing method still called, which the gate cannot see; unfinished feature, owner decides finish or remove both
-unread-field coordinator/data.py  CoordinatorData.optimizer_safety_block_reason  # written when the safety gate blocks, never surfaced
-unread-field coordinator/data.py  CoordinatorData.physical_response_timestamp
-unread-field coordinator/data.py  CoordinatorData.primary_decision
-unread-field coordinator/data.py  CoordinatorData.shadow_decision
-unread-field coordinator/data.py  CoordinatorData.spike_end_time
 variable     engine/types.py  NegativeFitAvoidanceContext.risk_window_start_idx
