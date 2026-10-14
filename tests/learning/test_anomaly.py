@@ -74,10 +74,11 @@ class TestWeatherAnomalyDetection:
 
     def test_exactly_7_days_history_is_enough(self, anomaly_detector):
         """Test that exactly 7 days of history is sufficient."""
-        _populate_anomaly_history(anomaly_detector, [20.0] * 7)
-        result = anomaly_detector.detect_weather_anomaly(20.0)
-        assert result.is_anomalous is False
-        assert result.weight == WEATHER_ANOMALY_NORMAL_WEIGHT
+        _populate_anomaly_history(anomaly_detector, [20.0] * 5 + [21.0, 19.0])
+        result = anomaly_detector.detect_weather_anomaly(40.0)
+        # Only reachable past the minimum-history gate: with too little
+        # history the detector returns "not anomalous" whatever the reading.
+        assert result.is_anomalous is True
 
     def test_normal_temperature_not_flagged(self, anomaly_detector):
         """Test that normal temperature is not flagged as anomalous."""
