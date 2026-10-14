@@ -356,7 +356,6 @@ The optimizer always controls the battery; the shadow and assist control modes a
 |--------------|---------|--------|
 | `optimizer_result_none` | The planner returned no result | Check the log for the optimizer error that preceded it |
 | `optimizer_solve_failed` | The DP solve failed | Check `error_message` on `sensor.localshift_optimizer_summary` |
-| `slot_alignment_invalid` | Forecast slots and optimizer slot contexts do not line up | Check forecast generation |
 | `forecast_stale` | The plan is more than 30 minutes old | Check that the price and solar forecast inputs are updating |
 | `no_decisions_available` | The solve succeeded but produced no decisions | Check that forecast slots are available |
 
