@@ -49,7 +49,6 @@ from custom_components.localshift.engine.solar import (
     can_solar_reach_target,
     can_solar_reach_target_feasible,
     get_forecast_accuracy,
-    projected_solcast_gain_pct,
 )
 from custom_components.localshift.engine.spike_event import find_funding_slots
 from custom_components.localshift.engine.spike_export import (
@@ -1632,43 +1631,9 @@ class DPPlanner:
         if terminal_penalty_idx is not None:
             target = config.demand_window_target_soc_pct
 
-            # Issue #619: Horizon-aware shortfall credit
-
-            # Account for solar surplus beyond the plan horizon that will help
-
-            # reach the target by the demand window entry.
-
-            future_solar_gain_pct = 0.0
-
-            if inputs.all_solcast and inputs.slots:
-                from custom_components.localshift.forecast.analysis_resolver import (
-                    ConfidenceResolver,
-                )
-
-                last_slot = inputs.slots[-1]
-                last_slot_start = datetime.fromisoformat(last_slot.timestamp_iso)
-
-                last_slot_end = last_slot_start + timedelta(
-                    minutes=last_slot.slot_interval_minutes
-                )
-                target_slot = inputs.slots[terminal_penalty_idx]
-
-                target_time = datetime.fromisoformat(target_slot.timestamp_iso)
-                confidence_resolver = ConfidenceResolver(
-                    inputs.solcast_analysis_today,
-                    inputs.solcast_analysis_tomorrow,
-                    absent_confidence=getattr(inputs, "solar_absent_confidence", 1.0),
-                )
-
-                # Helper computes gain between end of plan and target time
-
-                future_solar_gain_pct = projected_solcast_gain_pct(
-                    inputs.all_solcast,
-                    start_time=last_slot_end,
-                    end_time=target_time,
-                    battery_capacity_kwh=config.battery_capacity_kwh,
-                    confidence_resolver=confidence_resolver,
-                )
+            # Issue #987: there is no beyond-horizon solar credit here. The penalty
+            # slot is inside the horizon, so no Solcast time lies between the last
+            # slot and DW entry; the old #619 credit always summed an empty window.
 
             # Issue #624: Hard constraint in self_consumption mode
 
@@ -1690,8 +1655,7 @@ class DPPlanner:
 
             hard_constraint_penalty = max_grid_cost * 10  # 10x the max cost
 
-            # Issue #785 / #1132: logged only. Not applied below; effective_soc
-            # adds future_solar_gain_pct undiscounted.
+            # Issue #785 / #1132: logged only. Not applied below.
             forecast_accuracy = get_forecast_accuracy(inputs.solar_accuracy_tracker)
             accuracy_discount = max(0.5, min(1.0, forecast_accuracy))
 
@@ -1702,8 +1666,6 @@ class DPPlanner:
             )
 
             for bin_idx, soc in enumerate(soc_grid):
-                effective_soc = soc + future_solar_gain_pct
-
                 # Hard DW-target feasibility gate (issue #885). When a hard floor is set
                 # (strict mode, solar insufficient), DW-entry states below the floor are
                 # pruned with the effectively-infinite penalty so backward induction MUST
@@ -1712,7 +1674,7 @@ class DPPlanner:
                 # the max feasible SOC is admitted and the DP charges as far as it can.
                 # The penalty is monotonic in the gap, so among below-floor states the DP
                 # still prefers the highest reachable SOC (no infeasible/empty plan).
-                if hard_target_floor is not None and effective_soc < hard_target_floor:
+                if hard_target_floor is not None and soc < hard_target_floor:
                     # Issue #903: measure the gap to TARGET, then ADD the floor breach —
                     # never the gap to the floor alone. The floor is min(target, max
                     # feasible), so when it degrades below target a gap-to-floor penalty
@@ -1723,16 +1685,14 @@ class DPPlanner:
                     # SOC. Summing keeps the penalty non-increasing in SOC across the
                     # whole below-target range and continuous at the floor (the breach
                     # term vanishes there), while still making a breach strictly worse.
-                    shortfall = target - effective_soc
-                    breach = hard_target_floor - effective_soc
+                    shortfall = target - soc
+                    breach = hard_target_floor - soc
                     shortfall_penalty = (shortfall + breach) * hard_constraint_penalty
-                elif use_hard_constraint and effective_soc < target:
-                    shortfall = target - effective_soc
+                elif use_hard_constraint and soc < target:
+                    shortfall = target - soc
                     shortfall_penalty = shortfall * hard_constraint_penalty
                 else:
-                    shortfall_penalty = _cost_terminal_cost(
-                        effective_soc, target, config
-                    )
+                    shortfall_penalty = _cost_terminal_cost(soc, target, config)
 
                 if config.allow_dw_entry_under_target:
                     # Issue #505: target may be met mid-DW via solar — keep the penalty

@@ -10,6 +10,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BATTERY_CAPACITY_KWH,
+    CHARGE_EFFICIENCY,
     CHARGE_RATE_GRID_KW,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
 )
@@ -252,7 +253,7 @@ class ForecastPipeline:
             else:
                 remaining_deficit = max(deficit_kwh - max(net_solar, 0), 0)
                 time_needed_hours = (
-                    remaining_deficit / (CHARGE_RATE_GRID_KW * 0.9)
+                    remaining_deficit / (CHARGE_RATE_GRID_KW * CHARGE_EFFICIENCY)
                     if remaining_deficit > 0
                     else 0
                 )
