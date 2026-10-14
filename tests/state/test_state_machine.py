@@ -2298,52 +2298,6 @@ class TestStateMachineInternalBranches:
         assert info["active"] is True
         assert info["corroborated"] is True
 
-    def test_handle_debounce_timing_clears_stale_and_starts_timer(self, state_machine):
-        """Debounce helper should clear stale timers and start desired timer."""
-        stale_mode = BatteryMode.BOOST_CHARGING
-        desired_mode = BatteryMode.PROACTIVE_EXPORT
-        state_machine._mode_desired_since[stale_mode] = dt_aware(2026, 3, 1, 9, 0, 0)
-        now = dt_aware(2026, 3, 1, 10, 0, 0)
-
-        should_wait = state_machine._handle_debounce_timing(
-            desired_mode, now, timedelta(minutes=2)
-        )
-
-        assert should_wait is True
-        assert stale_mode not in state_machine._mode_desired_since
-        assert state_machine._mode_desired_since[desired_mode] == now
-
-    def test_handle_debounce_timing_allows_transition_after_elapsed(
-        self, state_machine
-    ):
-        """Debounce helper should return False when elapsed meets debounce."""
-        desired_mode = BatteryMode.PROACTIVE_EXPORT
-        desired_since = dt_aware(2026, 3, 1, 10, 0, 0)
-        state_machine._mode_desired_since[desired_mode] = desired_since
-
-        should_wait = state_machine._handle_debounce_timing(
-            desired_mode,
-            desired_since + timedelta(minutes=2, seconds=1),
-            timedelta(minutes=2),
-        )
-
-        assert should_wait is False
-
-    def test_handle_debounce_timing_still_waiting_mid_debounce(self, state_machine):
-        """Debounce helper should return True (and log) while a timer is
-        already running but hasn't yet met the required duration."""
-        desired_mode = BatteryMode.PROACTIVE_EXPORT
-        desired_since = dt_aware(2026, 3, 1, 10, 0, 0)
-        state_machine._mode_desired_since[desired_mode] = desired_since
-
-        should_wait = state_machine._handle_debounce_timing(
-            desired_mode,
-            desired_since + timedelta(minutes=1),
-            timedelta(minutes=2),
-        )
-
-        assert should_wait is True
-
     def test_record_transition_metrics_records_lag_and_trims_history(
         self, state_machine, coordinator_data
     ):

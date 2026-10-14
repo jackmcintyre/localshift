@@ -65,9 +65,6 @@ PERIODIC_INTERVAL_MEDIUM = timedelta(minutes=5)
 # SLOW: Slow-changing data tasks (30 minutes)
 PERIODIC_INTERVAL_SLOW = timedelta(minutes=30)
 
-# Legacy interval kept for backward compatibility
-PERIODIC_INTERVAL = PERIODIC_INTERVAL_FAST
-
 # How often to save learning data to storage (prevents data loss on restart)
 LEARNING_SAVE_INTERVAL = timedelta(minutes=5)
 # Longest the final save waits for any one store (Issue #1142). It matters on
@@ -107,7 +104,6 @@ class LocalShiftCoordinator:
         self.hass = hass
         self.entry = entry
         self.data = CoordinatorData()
-        self._listeners: list[CALLBACK_TYPE] = []
         self._update_callbacks: list[CALLBACK_TYPE] = []
         # Issue #508: temporary battery-power listener for the active watch
         self._unsub_battery_power_listener: CALLBACK_TYPE | None = None
@@ -528,10 +524,27 @@ class LocalShiftCoordinator:
 
         Saves every store before the coordinator goes, to prevent data loss.
         """
+        _LOGGER.info("LocalShift coordinator stopping")
+        self.stop_listening()
+        # Save every store before the coordinator goes (Issue #1142)
+        await self._final_save("unload")
+
+        # (backlog-med-004) Clean up historical load cache on shutdown
+        if self._computation_engine is not None:
+            self._computation_engine.clear_historical_cache()
+
+        _LOGGER.info("LocalShift coordinator stopped")
+
+    def stop_listening(self) -> None:
+        """Mark the coordinator stopped and drop every listener and timer.
+
+        The part of async_stop that saves nothing. It is also the whole
+        teardown after a failed async_start (Issue #1148): a start that failed
+        part way may not have loaded every store, so it must not write them.
+        """
         # Issue #1149: first, and before anything awaits. From here on this
         # instance must not evaluate: after a reload a new coordinator is
         # commanding the same battery.
-        _LOGGER.info("LocalShift coordinator stopping")
         self._stopped = True
         if self._evaluation_dispatcher is not None:
             self._evaluation_dispatcher.stop()
@@ -549,14 +562,6 @@ class LocalShiftCoordinator:
         self._remove_battery_power_listener()
         if self._state_machine is not None:
             self._state_machine.stop_grid_charging_listener()
-        # Save every store before the coordinator goes (Issue #1142)
-        await self._final_save("unload")
-
-        # (backlog-med-004) Clean up historical load cache on shutdown
-        if self._computation_engine is not None:
-            self._computation_engine.clear_historical_cache()
-
-        _LOGGER.info("LocalShift coordinator stopped")
 
     async def _save_learning_data(self) -> None:
         """Save all learning system data to storage.
@@ -723,11 +728,6 @@ class LocalShiftCoordinator:
         if self._entity_monitor is not None:
             self._entity_monitor.read_all_external_state()
 
-    def _check_entity_health(self) -> None:
-        """Check health of all tracked entities and update data."""
-        if self._entity_monitor is not None:
-            self._entity_monitor.check_entity_health()
-
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
@@ -737,17 +737,6 @@ class LocalShiftCoordinator:
         """Handle a state change from a monitored entity."""
         if self._tick_scheduler is not None:
             self._tick_scheduler.handle_state_change(_event)
-
-    @callback
-    def _handle_periodic_tick(self, now: datetime) -> None:
-        """Handle the 1-minute periodic re-evaluation.
-
-        DEPRECATED: This method is kept for backward compatibility.
-        New tiered handlers (_handle_fast_tick, _handle_medium_tick, _handle_slow_tick)
-        are used instead. See async_start() for timer subscriptions.
-        """
-        if self._tick_scheduler is not None:
-            self._tick_scheduler.handle_periodic_tick(now)
 
     @callback
     def _handle_fast_tick(self, now: datetime) -> None:

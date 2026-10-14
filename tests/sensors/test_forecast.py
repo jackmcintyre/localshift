@@ -14,6 +14,11 @@ Tests cover:
 
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
+
+import pytest
+from homeassistant.components.sensor import ATTR_LAST_RESET, SensorStateClass
+from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.coordinator.data import CoordinatorData
 from custom_components.localshift.forecast.solcast_analysis import (
@@ -31,6 +36,10 @@ from custom_components.localshift.sensors.forecast import (
     OptimizerPlanSensor,
     SolarBatteryForecastSensor,
 )
+from custom_components.localshift.utils.costs import CostTracker
+
+SYDNEY = ZoneInfo("Australia/Sydney")
+COSTS_NOW = "custom_components.localshift.utils.costs.dt_util.now"
 
 
 def create_mock_coordinator_with_data(**kwargs) -> tuple[MagicMock, CoordinatorData]:
@@ -134,6 +143,76 @@ class TestSolarBatteryForecastSensor:
 
 class TestNetElectricityCostSensor:
     """Tests for NetElectricityCostSensor."""
+
+    @pytest.fixture
+    def sydney_tz(self):
+        """Run with HA's local time zone set to the live system's."""
+        previous = dt_util.DEFAULT_TIME_ZONE
+        dt_util.set_default_time_zone(SYDNEY)
+        yield
+        dt_util.set_default_time_zone(previous)
+
+    @staticmethod
+    def _sensor_with_tracker(now: datetime):
+        data = CoordinatorData(grid_import_cost=3.40, grid_export_revenue=1.10)
+        with patch(COSTS_NOW, return_value=now):
+            tracker = CostTracker(MagicMock())
+        coordinator = MagicMock()
+        coordinator.data = data
+        coordinator.cost_tracker = tracker
+        return NetElectricityCostSensor(coordinator, MagicMock()), tracker, data
+
+    def test_publishes_last_reset_at_start_of_totals_day(self, sydney_tz):
+        """Issue #1140: TOTAL with last_reset, so the midnight drop is a new cycle.
+
+        Without last_reset the recorder books the drop to zero at midnight as a
+        negative change in the long-term sum.
+        """
+        sensor, _, _ = self._sensor_with_tracker(
+            datetime(2026, 10, 13, 14, 30, tzinfo=SYDNEY)
+        )
+        sensor._update_from_coordinator()
+
+        assert sensor.state_class == SensorStateClass.TOTAL
+        assert sensor.last_reset == datetime(2026, 10, 13, 0, 0, tzinfo=SYDNEY)
+        # The attribute the recorder reads, through HA's own SensorEntity code.
+        assert sensor.state_attributes == {
+            ATTR_LAST_RESET: datetime(2026, 10, 13, 0, 0, tzinfo=SYDNEY).isoformat()
+        }
+
+    def test_last_reset_moves_with_the_midnight_reset_only(self, sydney_tz):
+        """last_reset is fixed within a day and moves when the totals reset."""
+        sensor, tracker, data = self._sensor_with_tracker(
+            datetime(2026, 10, 13, 9, 0, tzinfo=SYDNEY)
+        )
+        sensor._update_from_coordinator()
+        first = sensor.last_reset
+
+        # Later the same day: value changes, last_reset does not.
+        data.grid_import_cost = 5.00
+        sensor._update_from_coordinator()
+        assert sensor.last_reset == first
+
+        # After midnight, before the reset runs: still yesterday's totals and
+        # yesterday's last_reset, so value and reset time stay paired.
+        with patch(
+            COSTS_NOW, return_value=datetime(2026, 10, 14, 0, 0, 5, tzinfo=SYDNEY)
+        ):
+            sensor._update_from_coordinator()
+            assert sensor.last_reset == first
+            tracker.reset_daily_accumulators(data)
+        sensor._update_from_coordinator()
+
+        assert sensor.native_value == 0.0
+        assert sensor.last_reset == datetime(2026, 10, 14, 0, 0, tzinfo=SYDNEY)
+
+    def test_no_cost_tracker_publishes_no_last_reset(self):
+        """Before the tracker exists there is no totals day to report."""
+        mock_coordinator, _ = create_mock_coordinator_with_data()
+        mock_coordinator.cost_tracker = None
+        sensor = NetElectricityCostSensor(mock_coordinator, MagicMock())
+        sensor._update_from_coordinator()
+        assert sensor.last_reset is None
 
     def test_native_value_positive(self):
         """Test native_value when import exceeds export."""

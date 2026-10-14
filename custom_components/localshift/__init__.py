@@ -24,8 +24,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: LocalShiftConfigEntry) -
     coordinator = LocalShiftCoordinator(hass, entry)
     entry.runtime_data = coordinator
 
-    # Start listening to external entities
-    await coordinator.async_start()
+    # Start listening to external entities. Home Assistant does not unload an
+    # entry whose setup raised, so a failed start must drop its own shutdown
+    # listener and timers, or they outlive it and race the next setup's
+    # coordinator (Issue #1148).
+    try:
+        await coordinator.async_start()
+    except Exception:
+        coordinator.stop_listening()
+        raise
 
     # Forward setup to all platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
