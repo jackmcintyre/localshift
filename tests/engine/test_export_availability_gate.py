@@ -21,8 +21,8 @@ from custom_components.localshift.engine.constraints import feasible_actions
 from custom_components.localshift.engine.negative_fit import (
     assess_negative_fit_avoidance,
 )
-from custom_components.localshift.engine.optimizer_dp import (
-    DPPlanner,
+from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.types import (
     OptimizerConfig,
     OptimizerInputs,
     PlannerAction,

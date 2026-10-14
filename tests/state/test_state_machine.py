@@ -2094,24 +2094,6 @@ class TestFinalizeSuccessfulTransition:
         )
 
 
-class TestHandleStableModeEarlyReturn:
-    """Coverage backfill: _handle_stable_mode skips the health check when SOC
-    monitoring already executed a transition."""
-
-    @pytest.mark.asyncio
-    async def test_returns_early_when_soc_monitoring_handled_it(
-        self, state_machine, coordinator_data, mock_battery_controller
-    ):
-        state_machine._commanded_mode = BatteryMode.GRID_CHARGING
-
-        with patch.object(
-            state_machine, "_handle_soc_monitoring", AsyncMock(return_value=True)
-        ):
-            await state_machine._handle_stable_mode(coordinator_data)
-
-        mock_battery_controller.set_self_consumption.assert_not_called()
-
-
 class TestStateMachineInternalBranches:
     """Targeted branch tests for uncovered state machine helpers."""
 
@@ -2356,9 +2338,8 @@ class TestStateMachineInternalBranches:
         with caplog.at_level(
             logging.INFO, logger="custom_components.localshift.state.machine"
         ):
-            result = asyncio.run(state_machine._handle_soc_monitoring(coordinator_data))
+            state_machine._log_soc_target_reached(coordinator_data)
 
-        assert result is False
         return [
             record.getMessage()
             for record in caplog.records

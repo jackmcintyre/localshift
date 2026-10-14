@@ -10,9 +10,7 @@ from custom_components.localshift.coordinator import (
     CoordinatorData,
     PerformanceMetrics,
 )
-from custom_components.localshift.engine.optimizer_dp import (
-    PlannerAction,
-)
+from custom_components.localshift.engine.types import PlannerAction
 from custom_components.localshift.engine.outcomes import (
     MAX_DECISION_DURATION,
     DecisionOutcomeTracker,

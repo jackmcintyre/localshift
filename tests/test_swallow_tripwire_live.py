@@ -20,7 +20,7 @@ from custom_components.localshift.const import BatteryMode
 from custom_components.localshift.coordinator import CoordinatorData
 from custom_components.localshift.engine import core
 from custom_components.localshift.engine.core import DPPlanner
-from custom_components.localshift.engine.optimizer_dp import OptimizerInputs
+from custom_components.localshift.engine.types import OptimizerInputs
 from custom_components.localshift.engine.spike_event import find_funding_slots
 from custom_components.localshift.state.machine import StateMachine
 from custom_components.localshift.state.mode_configs import MODE_EXECUTORS

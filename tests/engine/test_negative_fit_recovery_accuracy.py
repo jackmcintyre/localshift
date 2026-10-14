@@ -28,8 +28,8 @@ import pytest
 
 from custom_components.localshift.computation_engine import ComputationEngine
 from custom_components.localshift.const import NEGATIVE_FIT_RECOVERY_SOLAR_FACTOR
-from custom_components.localshift.engine.optimizer_dp import (
-    DPPlanner,
+from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.types import (
     OptimizerConfig,
     OptimizerInputs,
     PlannerAction,

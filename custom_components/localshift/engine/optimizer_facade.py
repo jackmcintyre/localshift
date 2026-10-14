@@ -12,7 +12,7 @@ from homeassistant.util import dt as dt_util
 from ..const import BatteryMode as _BatteryMode
 from ..coordinator.data import CoordinatorData
 from ..forecast.solar import get_solar_for_slot_by_interval
-from .optimizer_dp import DPPlanner, OptimizerInputs
+from .core import DPPlanner
 from .optimizer_runner import (
     OptimizerSafetyGate,
     _build_optimizer_config,
@@ -25,7 +25,7 @@ from .optimizer_runner import (
     _serialize_result,
 )
 from .slots import SlotBuilder
-from .types import PlannerAction
+from .types import OptimizerInputs, PlannerAction
 
 _LOGGER = logging.getLogger(__name__)
 

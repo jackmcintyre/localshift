@@ -9,8 +9,8 @@ from datetime import datetime, timedelta
 import pytest
 
 from custom_components.localshift.engine.cost import stage_cost
-from custom_components.localshift.engine.optimizer_dp import (
-    DPPlanner,
+from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.types import (
     OptimizerConfig,
     OptimizerInputs,
     PlannerAction,
