@@ -280,7 +280,7 @@ def test_no_compiled_files_fails(tmp_path):
     assert not dc.check_compiled(tmp_path / "localshift", RESTART, False).ok
 
 
-def test_main_exit_codes(tmp_path, capsys):
+def test_main_exit_codes(tmp_path, capsys, monkeypatch):
     def write(name, ents):
         path = tmp_path / name
         path.write_text(
@@ -309,3 +309,82 @@ def test_main_exit_codes(tmp_path, capsys):
     assert dc.main([*base, "--after", str(good)]) == 0
     assert dc.main([*base, "--after", str(broken)]) == 1
     assert "FAIL  automation enabled" in capsys.readouterr().out
+
+    # Before the first health tick nothing is judged, even a broken switch.
+    unticked = copy.deepcopy(broken_ents)
+    unticked[dc.HEALTH]["state"] = "0/0"
+    assert dc.main([*base, "--after", str(write("unticked.json", unticked))]) == 2
+    out = capsys.readouterr().out
+    assert "NOT SETTLED: re-run later" in out
+    assert "FAIL" not in out and "PASS" not in out
+
+    # --wait-settled re-fetches until the tick lands, then judges.
+    fetches = iter([unticked, _dump()])
+    monkeypatch.setattr(dc, "fetch_live_states", lambda: next(fetches))
+    monkeypatch.setattr(dc, "SETTLE_POLL_S", 0)
+    after = str(write("unticked.json", unticked))
+    assert dc.main([*base, "--after", after, "--wait-settled", "60"]) == 0
+    # A timeout that passes before the tick still reports NOT SETTLED.
+    assert dc.main([*base, "--after", after, "--wait-settled", "0"]) == 2
+
+
+def _health(ents, statuses: dict[str, str]):
+    ents[dc.HEALTH]["state"] = (
+        f"{sum(s == 'ok' for s in statuses.values())}/{len(statuses)}"
+    )
+    ents[dc.HEALTH]["attributes"] = {
+        "entities": {},
+        "localshift_entities": {
+            eid: {"entity_id": eid, "status": s} for eid, s in statuses.items()
+        },
+    }
+    return ents
+
+
+ACCURACY = "sensor.localshift_forecast_accuracy"
+
+
+def test_unknown_since_restart_is_not_settled():
+    before = _health(_dump(), {ACCURACY: "ok", "sensor.localshift_net_cost": "ok"})
+    after = _health(_dump(), {ACCURACY: "unknown", "sensor.localshift_net_cost": "ok"})
+    assert ACCURACY in dc.not_settled(before, after)
+
+
+@pytest.mark.parametrize(
+    ("was", "now"),
+    [
+        ("ok", "unavailable"),  # a real failure, not a slow first value
+        ("unknown", "unknown"),  # already unknown before the restart
+    ],
+)
+def test_other_health_drops_are_judged(was, now):
+    before = _health(_dump(), {ACCURACY: was, "sensor.localshift_net_cost": "ok"})
+    after = _health(_dump(), {ACCURACY: now, "sensor.localshift_net_cost": "ok"})
+    assert dc.not_settled(before, after) is None
+
+
+def test_wait_settled_polls_until_settled_or_timeout():
+    clock = [0.0]
+
+    def sleep(seconds):
+        clock[0] += seconds
+
+    unticked = _dump()
+    unticked[dc.HEALTH]["state"] = "0/0"
+    fetches = iter([unticked, OSError("connection refused"), _dump()])
+
+    def fetch():
+        item = next(fetches)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    kw = {"sleep": sleep, "clock": lambda: clock[0]}
+    settled = dc.wait_settled(_dump(), unticked, 120, fetch=fetch, **kw)
+    assert dc.not_settled(_dump(), settled) is None
+    assert clock[0] == 3 * dc.SETTLE_POLL_S
+
+    clock[0] = 0.0
+    stuck = dc.wait_settled(_dump(), unticked, 50, fetch=lambda: unticked, **kw)
+    assert dc.not_settled(_dump(), stuck) is not None
+    assert clock[0] == 50

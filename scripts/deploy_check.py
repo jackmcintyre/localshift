@@ -4,7 +4,12 @@
 Takes two entity dumps written by ``scripts/ha_entity_dump.py`` (one from just
 before the restart, one from after the planner has produced at least two
 plans), plus the Home Assistant log, and checks the invariants a deploy must
-not break. Prints a pass/fail table and exits non-zero if any invariant fails.
+not break. Prints a pass/fail table and exits 1 if any invariant fails.
+
+A dump taken before the integration's first health tick (entity health reads
+"0/0", or entities read "unknown" that were healthy before the restart) is not
+judged: the script prints NOT SETTLED and exits 2. The tick lands 5-10
+minutes after a restart; --wait-settled re-fetches the after state until then.
 
 The Home Assistant log is truncated at every restart, so "since the restart"
 is the whole file and the restart time is its first timestamp. Without --log
@@ -22,6 +27,9 @@ Usage
   --allow-removed-entity ID    an entity the change removed on purpose (repeatable)
   --allow-dw-entry-move        the change is meant to move the projected entry
   --expect-recompile           code was copied: every compiled file must post-date the restart
+  --wait-settled SECONDS       re-fetch the after state every 20 s until settled
+
+Exit codes: 0 all invariants hold, 1 an invariant failed, 2 not settled yet.
 """
 
 from __future__ import annotations
@@ -30,6 +38,7 @@ import argparse
 import json
 import re
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -51,6 +60,7 @@ PLAN_LINE = "Pre-charge decision"
 # One plan a minute; allow a missed tick before calling the planner quiet.
 PLAN_GAP_MAX = timedelta(seconds=150)
 MIN_PLANS = 2
+SETTLE_POLL_S = 20
 
 UNAVAILABLE = {"unavailable", "unknown"}
 LOG_TS = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ ")
@@ -93,6 +103,34 @@ def _as_float(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _health_entries(ents: dict[str, dict]) -> dict[str, dict]:
+    """The per-entity statuses behind the entity health sensor's count."""
+    attrs = _attrs(ents, HEALTH)
+    return {**(attrs.get("entities") or {}), **(attrs.get("localshift_entities") or {})}
+
+
+def not_settled(before, after) -> str | None:
+    """Why the after dump predates the first health tick, or None once settled.
+
+    Until the tick the health sensor reads "0/0"; just after it, entities that
+    have not produced a value yet read "unknown". Only an entity that was
+    healthy in the before dump counts, so a real breakage is still judged.
+    """
+    health = _state(after, HEALTH)
+    if health == "0/0":
+        return "entity health 0/0: no health tick since the restart"
+    was_ok = {k for k, e in _health_entries(before).items() if e.get("status") == "ok"}
+    unhealthy = {
+        k: e for k, e in _health_entries(after).items() if e.get("status") != "ok"
+    }
+    if unhealthy and all(
+        e.get("status") == "unknown" and k in was_ok for k, e in unhealthy.items()
+    ):
+        names = sorted(e.get("entity_id") or k for k, e in unhealthy.items())
+        return f"entity health {health}: unknown since the restart: {', '.join(names)}"
+    return None
 
 
 def check_entities(before, after, allow_removed: set[str]) -> list[Check]:
@@ -426,6 +464,39 @@ def fetch_live_log() -> list[str]:
         return resp.read().decode(errors="replace").splitlines()
 
 
+def fetch_live_states() -> dict[str, dict]:
+    """The after state over the API, filtered to the groups a dump keeps."""
+    import types
+    import urllib.request
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from ha_entity_dump import bucket, resolve_credentials
+
+    url, token = resolve_credentials(types.SimpleNamespace(url=None, token=None))
+    req = urllib.request.Request(
+        f"{url}/api/states", headers={"Authorization": f"Bearer {token}"}
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        states = json.loads(resp.read().decode())
+    return {s["entity_id"]: s for s in states if bucket(s["entity_id"])}
+
+
+def wait_settled(
+    before, after, timeout_s, *, fetch=None, sleep=time.sleep, clock=time.monotonic
+):
+    """Re-fetch the after state every SETTLE_POLL_S until settled or timed out."""
+    fetch = fetch or fetch_live_states
+    deadline = clock() + timeout_s
+    while (reason := not_settled(before, after)) and clock() < deadline:
+        print(f"waiting: {reason}", file=sys.stderr)
+        sleep(min(SETTLE_POLL_S, max(0.0, deadline - clock())))
+        try:
+            after = fetch()
+        except (OSError, ValueError) as exc:  # HA still coming up
+            print(f"waiting: fetch failed: {exc}", file=sys.stderr)
+    return after
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -438,11 +509,20 @@ def main(argv=None) -> int:
     ap.add_argument("--allow-removed-entity", action="append", default=[])
     ap.add_argument("--allow-dw-entry-move", action="store_true")
     ap.add_argument("--expect-recompile", action="store_true")
+    ap.add_argument("--wait-settled", type=float, metavar="SECONDS")
     args = ap.parse_args(argv)
 
+    before, after = load_dump(args.before), load_dump(args.after)
+    if args.wait_settled is not None:
+        after = wait_settled(before, after, args.wait_settled)
+    reason = not_settled(before, after)
+    if reason:
+        print(f"NOT SETTLED: re-run later\n  {reason}")
+        return 2
+
     checks = run_checks(
-        load_dump(args.before),
-        load_dump(args.after),
+        before,
+        after,
         args.log.read_text(errors="replace").splitlines()
         if args.log
         else fetch_live_log(),
