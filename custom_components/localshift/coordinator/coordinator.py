@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -1079,38 +1080,47 @@ class LocalShiftCoordinator:
         dry_run = self.get_switch_state("dry_run")
         success = False
 
-        if mode == BatteryMode.SELF_CONSUMPTION:
-            success = await self._battery_controller.set_self_consumption(
-                self.data, dry_run
-            )
-        elif mode == BatteryMode.GRID_CHARGING:
-            battery_target = float(
-                self.get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
-            )
-            success = await self._battery_controller.set_force_charge(
-                self.data, dry_run, target_soc=battery_target
-            )
-        elif mode == BatteryMode.BOOST_CHARGING:
-            success = await self._battery_controller.set_boost_charge(
-                self.data, dry_run
-            )
-        elif mode == BatteryMode.SPIKE_DISCHARGE:
-            # Check if conservative mode is enabled and use spike_reserve_soc if available
-            reserve_soc = (
-                self.data.spike_reserve_soc
-                if self.data.spike_in_conservative_mode
-                else None
-            )
-            success = await self._battery_controller.set_force_discharge(
-                self.data, dry_run, reserve_soc=reserve_soc
-            )
-        elif mode == BatteryMode.PROACTIVE_EXPORT:
-            success = await self._battery_controller.set_proactive_export(
-                self.data, dry_run
-            )
-        else:
-            _LOGGER.warning("Unsupported battery mode: %s", mode)
-            return False
+        # Issue #1160: mark the write in flight, as automated transitions do,
+        # so the grid-charging listener does not revert it against the old
+        # commanded mode.
+        in_flight = (
+            self._state_machine.manual_mode_write()
+            if self._state_machine is not None
+            else nullcontext()
+        )
+        with in_flight:
+            if mode == BatteryMode.SELF_CONSUMPTION:
+                success = await self._battery_controller.set_self_consumption(
+                    self.data, dry_run
+                )
+            elif mode == BatteryMode.GRID_CHARGING:
+                battery_target = float(
+                    self.get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
+                )
+                success = await self._battery_controller.set_force_charge(
+                    self.data, dry_run, target_soc=battery_target
+                )
+            elif mode == BatteryMode.BOOST_CHARGING:
+                success = await self._battery_controller.set_boost_charge(
+                    self.data, dry_run
+                )
+            elif mode == BatteryMode.SPIKE_DISCHARGE:
+                # Check if conservative mode is enabled and use spike_reserve_soc if available
+                reserve_soc = (
+                    self.data.spike_reserve_soc
+                    if self.data.spike_in_conservative_mode
+                    else None
+                )
+                success = await self._battery_controller.set_force_discharge(
+                    self.data, dry_run, reserve_soc=reserve_soc
+                )
+            elif mode == BatteryMode.PROACTIVE_EXPORT:
+                success = await self._battery_controller.set_proactive_export(
+                    self.data, dry_run
+                )
+            else:
+                _LOGGER.warning("Unsupported battery mode: %s", mode)
+                return False
 
         if success:
             _LOGGER.info("Battery mode set to %s (dry_run=%s)", mode.value, dry_run)

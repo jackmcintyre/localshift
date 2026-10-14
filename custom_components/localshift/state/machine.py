@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -2407,6 +2408,20 @@ class StateMachine:
     def in_mode_transition(self) -> bool:
         """Check if currently in a mode transition."""
         return self._in_mode_transition
+
+    @contextmanager
+    def manual_mode_write(self) -> Iterator[None]:
+        """Mark a manual (select) mode write as in flight (Issue #1160).
+
+        set_commanded_mode runs only after the write lands, so without this
+        the grid-charging listener reverts the write's own switch-on against
+        the old commanded mode. Same flag the automated transitions set.
+        """
+        self._in_mode_transition = True
+        try:
+            yield
+        finally:
+            self._in_mode_transition = False
 
     def stop(self) -> None:
         """Refuse all further work on this instance (Issue #1149).

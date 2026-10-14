@@ -1,5 +1,6 @@
 """Unit tests for coordinator."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -671,6 +672,111 @@ class TestModeHandlers:
         await coordinator.async_set_battery_mode(BatteryMode.SPIKE_DISCHARGE)
 
         coordinator._battery_controller.set_force_discharge.assert_called_once()
+
+    @staticmethod
+    def _state_machine_with_grid_listener(hass, controller, monkeypatch):
+        """Real StateMachine whose grid-charging listener callback is captured."""
+        from custom_components.localshift.state.machine import StateMachine
+
+        captured = {}
+
+        def _fake_track(_hass, _entity_ids, callback):
+            captured["callback"] = callback
+            return MagicMock()
+
+        monkeypatch.setattr(
+            "custom_components.localshift.state.machine.async_track_state_change_event",
+            _fake_track,
+        )
+        controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+        machine = StateMachine(
+            controller,
+            MagicMock(),
+            lambda _key: False,
+            lambda _key, default: default,
+            MagicMock(),
+        )
+        machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        machine.start_grid_charging_listener(hass)
+        return machine, captured
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("mode", "method"),
+        [
+            (BatteryMode.GRID_CHARGING, "set_force_charge"),
+            (BatteryMode.BOOST_CHARGING, "set_boost_charge"),
+        ],
+    )
+    async def test_manual_charge_write_is_not_reverted_by_grid_listener(
+        self,
+        coordinator,
+        coordinator_data,
+        mock_hass_with_services,
+        monkeypatch,
+        mode,
+        method,
+    ):
+        """Issue #1160: a manual pick of grid or boost charging from
+        self_consumption turns the grid-charging switch on. Its state event
+        arrives while the write is still in flight and ``_commanded_mode`` is
+        still SELF_CONSUMPTION (set_commanded_mode runs only after the write),
+        so the listener used to turn the switch straight back off."""
+        hass = mock_hass_with_services
+        hass.async_create_task = asyncio.create_task
+        controller = MagicMock()
+        machine, captured = self._state_machine_with_grid_listener(
+            hass, controller, monkeypatch
+        )
+
+        async def _write_with_own_switch_event(*_args, **_kwargs):
+            # switch.turn_on lands and its state event fires, then the client
+            # waits before reading the switch back.
+            event = MagicMock()
+            event.data = {
+                "new_state": MagicMock(state="on"),
+                "old_state": MagicMock(state="off"),
+            }
+            captured["callback"](event)
+            for _ in range(3):
+                await asyncio.sleep(0)
+            return True
+
+        setattr(controller, method, AsyncMock(side_effect=_write_with_own_switch_event))
+        coordinator.data = coordinator_data
+        coordinator._battery_controller = controller
+        coordinator._state_machine = machine
+
+        assert await coordinator.async_set_battery_mode(mode) is True
+        await asyncio.sleep(0)
+
+        hass.services.async_call.assert_not_called()
+        assert machine._last_health_correction is None
+        assert machine._commanded_mode == mode
+        assert machine.in_mode_transition is False
+
+    @pytest.mark.asyncio
+    async def test_manual_write_clears_transition_flag_when_it_raises(
+        self, coordinator, coordinator_data, mock_hass_with_services, monkeypatch
+    ):
+        """Issue #1160: the in-flight mark must not outlive a failed write, or
+        the listener and the evaluation dispatcher would stay switched off."""
+        controller = MagicMock()
+        machine, _ = self._state_machine_with_grid_listener(
+            mock_hass_with_services, controller, monkeypatch
+        )
+        controller.set_boost_charge = AsyncMock(side_effect=RuntimeError("boom"))
+        coordinator.data = coordinator_data
+        coordinator._battery_controller = controller
+        coordinator._state_machine = machine
+
+        with pytest.raises(RuntimeError):
+            await coordinator.async_set_battery_mode(BatteryMode.BOOST_CHARGING)
+
+        assert machine.in_mode_transition is False
+        assert machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
 
 
 # =============================================================================
