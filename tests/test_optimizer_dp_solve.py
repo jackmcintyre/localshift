@@ -1840,6 +1840,10 @@ def test_global_solar_gate_fires_with_demand_window():
     Currently the gate only runs when terminal_penalty_idx is None (no DW).
     But it should also suppress grid charging when a DW exists and solar
     can fill the battery before DW entry.
+
+    From 55% the four pre-DW slots reach 82.3% entering the window. Issue #1141: the
+    entry slot's own solar no longer counts, so this started at 50% (77.3% entering)
+    only passed by crediting it.
     """
     slots_before_dw = [
         _make_slot(slot_index=i, buy_price=0.08, solar_kwh=1.2, consumption_kwh=0.2)
@@ -1866,7 +1870,7 @@ def test_global_solar_gate_fires_with_demand_window():
     )
 
     actions = feasible_actions(
-        soc_pct=50.0,
+        soc_pct=55.0,
         slot=slots[0],
         config=config,
         slot_idx=0,

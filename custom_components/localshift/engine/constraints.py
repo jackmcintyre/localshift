@@ -770,14 +770,16 @@ def check_global_solar_sufficiency(
     )
 
     remaining_slots = slots[slot_idx:]
-    relative_terminal_idx: int | None = None
     if terminal_penalty_idx is not None:
         if terminal_penalty_idx < slot_idx:
             return False
-        relative_terminal_idx = terminal_penalty_idx - slot_idx
+        # Measure the SOC ENTERING the entry slot, where the hard floor and the terminal
+        # penalty are applied, not after it (#1141). Crediting the entry slot's own solar
+        # judged a target covered that the battery enters the window short of.
+        remaining_slots = slots[slot_idx:terminal_penalty_idx]
 
     simulated_terminal_soc = _simulate_solar_only_terminal_soc(
-        soc_pct, remaining_slots, relative_terminal_idx, config
+        soc_pct, remaining_slots, None, config
     )
 
     # Discount the projected solar gain by forecast accuracy so this hard
