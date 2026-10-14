@@ -26,6 +26,7 @@ epoch never decrements, which together bound the flap at one extra decision per
 """
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -422,6 +423,32 @@ class _DriftingFacade:
             )
 
 
+class _ReleasingFacade:
+    """Every grant commits the charge the plan wants; the next frozen tick drops
+    back to self_consumption outside the token (as ``_release_backstop_hold``
+    does) while the plan keeps wanting the charge.
+
+    Issue #1172: a grant that commits NO charge is refunded, so the bound below
+    is a bound on COMMITTED charges. ``_DriftingFacade``'s grants commit
+    self_consumption, which a plan-charge-only grant can only do through the
+    safety gate; those grants are now refunded and re-arm by design.
+    """
+
+    def __init__(self):
+        self.grants = 0
+
+    def compute_derived_values(self, data):
+        wanted = BatteryMode.GRID_CHARGING
+        if data.mode_decision_allowed:
+            self.grants += 1
+            data.active_mode = wanted
+            data.debug_plan_mode_pending = None
+        elif data.active_mode == wanted:
+            data.active_mode = BatteryMode.SELF_CONSUMPTION
+        else:
+            data.debug_plan_mode_pending = wanted.value
+
+
 class TestPlanChargeGrantIsBounded:
     """The §1.8 bound must hold as a BUDGET, not as an edge detector."""
 
@@ -438,7 +465,7 @@ class TestPlanChargeGrantIsBounded:
         epoch 10 in a SINGLE price context — the #622 flap budget, spent, with the
         docstring claiming a bound of one.
         """
-        engine = _DriftingFacade()
+        engine = _ReleasingFacade()
 
         for _ in range(21):  # price/spike/DW/floor constant throughout
             asyncio.run(state_machine.evaluate_state_machine(coordinator_data, engine))
@@ -452,7 +479,7 @@ class TestPlanChargeGrantIsBounded:
         self, state_machine, coordinator_data
     ):
         """The bound is per-context, not global — a real price move re-arms it."""
-        engine = _DriftingFacade()
+        engine = _ReleasingFacade()
 
         for _ in range(6):
             asyncio.run(state_machine.evaluate_state_machine(coordinator_data, engine))
@@ -471,7 +498,7 @@ class TestPlanChargeGrantIsBounded:
         so the facade can refuse to spend it on a non-charge mode."""
         seen = []
 
-        class _Recorder(_DriftingFacade):
+        class _Recorder(_ReleasingFacade):
             def compute_derived_values(self, data):
                 if data.mode_decision_allowed:
                     seen.append(data.mode_decision_plan_charge_only)
@@ -486,6 +513,127 @@ class TestPlanChargeGrantIsBounded:
         assert seen == [False, True]
         # And the flag is transient — closed with the rest on exit.
         assert coordinator_data.mode_decision_plan_charge_only is False
+
+
+# Script steps for the facade paths that commit no charge without a plan.
+BLOCKED = "safety_gate_blocked"  # _assign_active_mode's safety-gate branch
+NO_PLAN = "no_plan"  # a run_inline early exit (_mark_mode_debug_fallback)
+
+
+class _DecliningFacade:
+    """The real facade's token handling: ``_epoch_grant_permits`` and
+    ``_commit_or_hold_mode``, driven by a per-tick slot-0 script. A step may
+    also be a price ``(mode, general_price)`` or one of the no-plan paths."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.tick = 0
+
+    def compute_derived_values(self, data):
+        from custom_components.localshift.engine.optimizer_facade import (
+            OptimizerFacade,
+        )
+
+        step = self.script[min(self.tick, len(self.script) - 1)]
+        self.tick += 1
+        allowed = data.mode_decision_allowed
+        if step == NO_PLAN:
+            OptimizerFacade._mark_mode_debug_fallback(data)
+        elif step == BLOCKED:
+            OptimizerFacade._commit_or_hold_mode(
+                data, BatteryMode.SELF_CONSUMPTION, allowed, "fallback"
+            )
+        else:
+            if allowed and not OptimizerFacade._epoch_grant_permits(data, step):
+                allowed = False
+            OptimizerFacade._commit_or_hold_mode(data, step, allowed, "optimizer")
+
+
+class TestDeclinedPlanChargeGrantIsRefunded:
+    """Issue #1172, 14 Oct: the price sat at 21.37c / 12.42c from 12:00:19 to
+    13:00:16, so the price context never moved. The plan's first charge slid a
+    slot later on each replan, then from 12:40 held slot 0 on a charge, and the
+    battery stayed in self_consumption until a restart at 12:53."""
+
+    SC = BatteryMode.SELF_CONSUMPTION
+    GC = BatteryMode.GRID_CHARGING
+    # Tick 1 wants a charge; by the granted tick 2 the replan has drifted to
+    # hold; from tick 4 slot 0 is a charge on every replan.
+    SCRIPT = [SC, GC, SC, SC, GC, GC, GC, GC, GC, GC, GC, GC]
+
+    def _replay(self, state_machine, data, script=SCRIPT, prices=None):
+        data.general_price = 0.2137116
+        data.feed_in_price = 0.1242303
+        data.soc = 34.0
+        engine = _DecliningFacade(script)
+        committed = []
+        for tick in range(len(script)):
+            data.general_price = (prices or {}).get(tick, data.general_price)
+            asyncio.run(state_machine.evaluate_state_machine(data, engine))
+            committed.append(data.active_mode)
+        return committed
+
+    def test_charge_commits_after_a_declined_grant(
+        self, state_machine, coordinator_data
+    ):
+        committed = self._replay(state_machine, coordinator_data)
+
+        assert committed[2] == self.SC  # the drifted grant was declined
+        # pending at tick 4, granted and committed at tick 5, and it holds
+        assert committed[5:] == [self.GC] * (len(self.SCRIPT) - 5)
+
+    def test_committed_grant_stays_spent(self, state_machine, coordinator_data):
+        """The refund is for a grant that committed nothing; one that commits
+        still closes the trigger for the rest of the price context."""
+        self._replay(state_machine, coordinator_data)
+
+        assert state_machine._plan_charge_epoch == 2
+        assert BatteryMode.GRID_CHARGING.value in state_machine._plan_charge_granted
+
+    def test_ordinary_grant_that_commits_hold_is_refunded(
+        self, state_machine, coordinator_data
+    ):
+        """The price moves on the tick that reads pending=grid_charging, and the
+        fresh slot 0 is hold. That ordinary grant also spent the plan-charge
+        budget; it committed no charge, so the charge the plan reaches two ticks
+        later in the same price context must still be able to start."""
+        script = [self.SC, self.GC, self.SC, self.GC, self.GC, self.GC]
+
+        committed = self._replay(
+            state_machine, coordinator_data, script, prices={2: 0.2237116}
+        )
+
+        assert committed[2] == self.SC
+        assert committed[4:] == [self.GC, self.GC]
+
+    @pytest.mark.parametrize("no_charge_step", [BLOCKED, NO_PLAN])
+    def test_grant_with_no_plan_decision_is_refunded(
+        self, state_machine, coordinator_data, no_charge_step
+    ):
+        """The safety gate blocking, or run_inline exiting early, on the granted
+        tick commits no charge either, so the budget comes back."""
+        script = [self.SC, self.GC, no_charge_step, self.GC, self.GC, self.GC]
+
+        committed = self._replay(state_machine, coordinator_data, script)
+
+        assert committed[2] == self.SC
+        assert committed[4:] == [self.GC, self.GC]
+
+    def test_refunds_log_at_info_once_per_price_context(
+        self, state_machine, coordinator_data, caplog
+    ):
+        """While slot 0 keeps sliding, refunded grants recur every other tick.
+        None changes the mode, and the two lines log at INFO once per context."""
+        caplog.set_level(logging.DEBUG, logger="custom_components.localshift")
+        script = [self.SC] + [self.GC, self.SC] * 10
+
+        committed = self._replay(state_machine, coordinator_data, script)
+
+        assert set(committed) == {self.SC}
+        assert state_machine._plan_charge_epoch == 10
+        for text in ("Plan-charge disagreement epoch", "not spent (committed"):
+            levels = [r.levelno for r in caplog.records if text in r.getMessage()]
+            assert levels == [logging.INFO] + [logging.DEBUG] * 9
 
 
 class TestTokenWindowIntegrity:
