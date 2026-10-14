@@ -58,9 +58,6 @@ class TestWeatherDiagnosticsAnomalyPopulation:
                 is_anomalous=False,
                 weight=WEATHER_ANOMALY_NORMAL_WEIGHT,
                 temperature=22.5,
-                deviation_sigma=0.5,
-                mean_temperature=22.0,
-                std_temperature=1.0,
             )
         )
         engine = WeatherDiagnosticsEngine(mock_entry_enabled)

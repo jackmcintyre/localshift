@@ -37,7 +37,6 @@ async def test_forecast_bootstrapper_ready_triggers_compute(
 
     assert data.forecast_ready is True
     assert data.forecast_status in {"ready", "partial"}
-    assert bootstrapper.solcast_ready is True
     assert bootstrapper.forecast_computed_on_startup is True
     assert bootstrapper.retry_count == 0
     compute_derived_values.assert_called_once()

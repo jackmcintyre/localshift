@@ -156,11 +156,6 @@ class LocalShiftCoordinator:
     # Entity ID helpers (read from config entry data)
     # ------------------------------------------------------------------
 
-    @property
-    def entity_ids(self) -> dict[str, str]:
-        """Return the configured external entity IDs."""
-        return self.entry.data
-
     def get_entity_id(self, key: str) -> str:
         """Get a configured external entity ID by config key.
 

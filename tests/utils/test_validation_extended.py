@@ -155,51 +155,6 @@ class TestEntityHealth:
         )
         assert health.is_healthy is False
 
-    def test_is_available_when_ok(self) -> None:
-        """Entity is available when status is OK."""
-        health = EntityHealth(
-            entity_id="sensor.test",
-            config_key="test_key",
-            category=EntityCategory.REQUIRED,
-            status=EntityStatus.OK,
-            last_check=dt_util.now(),
-        )
-        assert health.is_available is True
-
-    def test_is_available_when_stale(self) -> None:
-        """Entity is available when status is STALE (has usable value)."""
-        health = EntityHealth(
-            entity_id="sensor.test",
-            config_key="test_key",
-            category=EntityCategory.REQUIRED,
-            status=EntityStatus.STALE,
-            last_check=dt_util.now(),
-        )
-        assert health.is_available is True
-
-    def test_is_available_false_when_unavailable(self) -> None:
-        """Entity is not available when status is UNAVAILABLE."""
-        health = EntityHealth(
-            entity_id="sensor.test",
-            config_key="test_key",
-            category=EntityCategory.REQUIRED,
-            status=EntityStatus.UNAVAILABLE,
-            last_check=dt_util.now(),
-        )
-        assert health.is_available is False
-
-    def test_is_available_false_when_broken(self) -> None:
-        """Entity is not available when broken, even if OK status."""
-        health = EntityHealth(
-            entity_id="sensor.test",
-            config_key="test_key",
-            category=EntityCategory.REQUIRED,
-            status=EntityStatus.OK,
-            last_check=dt_util.now(),
-            is_broken=True,
-        )
-        assert health.is_available is False
-
 
 # =============================================================================
 # ValidationResult Tests
@@ -215,7 +170,6 @@ class TestValidationResult:
         assert result.is_valid is True
         assert result.value == 50.0
         assert result.error_message == ""
-        assert result.warning_message == ""
 
     def test_invalid_result_with_error(self) -> None:
         """Create an invalid result with error message."""

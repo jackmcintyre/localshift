@@ -181,7 +181,7 @@ def test_run_inline_populates_initial_soc_pct():
 
 def test_run_inline_trips_soc_underprepared_guardrail(caplog):
     """A live demand window with the pack far below target must trip the loud
-    guardrail flag (the 2026-06-30 silent-failure mode)."""
+    guardrail warning (the 2026-06-30 silent-failure mode)."""
     import logging
 
     data = CoordinatorData()
@@ -192,20 +192,22 @@ def test_run_inline_trips_soc_underprepared_guardrail(caplog):
             _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
         )
 
-    assert data.optimizer_soc_underprepared is True
     assert "SOC UNDERPREPARED" in caplog.text
 
 
-def test_run_inline_no_underprepared_when_charged():
+def test_run_inline_no_underprepared_when_charged(caplog):
     """Healthy SOC in the demand window must NOT trip the guardrail."""
+    import logging
+
     data = CoordinatorData()
     data.soc = 96.0
     data.demand_window_active = True
-    _run_inline_with(
-        _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
-    )
+    with caplog.at_level(logging.WARNING):
+        _run_inline_with(
+            _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
+        )
 
-    assert data.optimizer_soc_underprepared is False
+    assert "SOC UNDERPREPARED" not in caplog.text
 
 
 def test_apply_bias_correction_to_slots_uses_tracker_combined_correction():
@@ -1031,7 +1033,6 @@ def test_underprepared_warning_carries_the_captured_entry_soc(caplog):
             _summary_mock_result(), data, {"demand_window_target_soc_pct": 95.0}
         )
 
-    assert data.optimizer_soc_underprepared is True
     assert "SOC UNDERPREPARED" in caplog.text
     assert "entered at 64.0%@15:00" in caplog.text
 
