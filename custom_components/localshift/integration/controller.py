@@ -169,8 +169,8 @@ class BatteryController:
         instead of the default 10%. This prevents battery discharge when
         charging is needed to meet a demand window target.
 
-        Issue #522: preserve_soc parameter allows state machine to override
-        data.preserve_soc for HOLD mode (preserve current SOC).
+        Issue #522: the state machine passes preserve_soc for HOLD mode
+        (preserve current SOC).
 
         Args:
             data: Coordinator data
@@ -184,32 +184,29 @@ class BatteryController:
         # Note: manual_override is managed by button handlers and state machine
         # Self-consumption is the default automated mode, so we don't set manual_override here
 
-        # Determine backup reserve: parameter override, then data.preserve_soc, else
+        # Determine backup reserve: the preserve_soc parameter, else
         # 10% — floored at the away reserve while away is active
         # (docs/holiday-away/plan.md item 4). The state-machine builder already
         # bakes the away floor into ``config.backup_reserve`` before it reaches
         # here as ``preserve_soc``, so this is idempotent on that path and is the
         # spec's literal enforcement point for any other caller (the select path,
         # the automation-off path).
-        resolved_preserve_soc = (
-            preserve_soc if preserve_soc is not None else data.preserve_soc
-        )
         reserve = calculate_self_consumption_reserve(
-            resolved_preserve_soc, self._resolve_away_reserve_pct(data)
+            preserve_soc, self._resolve_away_reserve_pct(data)
         )
 
         if dry_run:
             _LOGGER.info(
                 "DRY RUN: set_self_consumption (reserve=%s, preserve_soc=%s)",
                 reserve,
-                data.preserve_soc,
+                preserve_soc,
             )
             return True
 
         _LOGGER.info(
             "Setting battery to self consumption mode (reserve=%s, preserve_soc=%s)",
             reserve,
-            data.preserve_soc,
+            preserve_soc,
         )
 
         def _log_validation_failure() -> None:

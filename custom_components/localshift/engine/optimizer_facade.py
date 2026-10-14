@@ -670,7 +670,6 @@ class OptimizerFacade:
             )
 
             data.optimizer_last_apply_status = "blocked"
-            data.optimizer_safety_block_reason = gate_result.block_reason or ""
             self._commit_or_hold_mode(
                 data,
                 _BatteryMode.SELF_CONSUMPTION,
@@ -691,7 +690,6 @@ class OptimizerFacade:
         try:
             new_mode = _BatteryMode(battery_mode_str)
             data.optimizer_last_apply_status = "ready_to_apply"
-            data.optimizer_safety_block_reason = ""
 
             # A token granted purely by an epoch is one-directional in what
             # raised it, so it must be one-directional in what it commits.
@@ -1358,8 +1356,6 @@ class OptimizerFacade:
         if data.general_price_shadow <= 0:
             # Shadow unavailable - reset to neutral
             data.comparison_match = True
-            data.primary_decision = ""
-            data.shadow_decision = ""
             data.price_delta = 0.0
             _LOGGER.debug("Shadow optimizer: shadow prices unavailable, skipping")
             return
@@ -1380,7 +1376,7 @@ class OptimizerFacade:
             # double-count every evaluation and skew the rate against
             # whichever comparison_mode happens to be enabled; the shadow
             # build's own success/failure is already surfaced separately via
-            # comparison_match / shadow_decision.
+            # comparison_match.
             shadow_slots, shadow_metadata = slot_builder.build_slots(
                 data,
                 now_dt=now_dt,
@@ -1432,8 +1428,6 @@ class OptimizerFacade:
 
             # Compare decisions
             primary_mode = data.active_mode.value if data.active_mode else ""
-            data.primary_decision = primary_mode
-            data.shadow_decision = shadow_mode
             data.comparison_match = primary_mode == shadow_mode
 
             # Calculate price delta

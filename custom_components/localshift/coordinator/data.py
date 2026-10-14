@@ -113,8 +113,6 @@ class CoordinatorData:
     feed_in_forecast_shadow: list[ForecastSlot] = field(default_factory=list)
 
     # Decision comparison results
-    primary_decision: str = ""
-    shadow_decision: str = ""
     comparison_match: bool = True
     price_delta: float = 0.0  # Difference between sources
 
@@ -148,9 +146,6 @@ class CoordinatorData:
     solar_can_reach_target_in_dw: bool = False
     boost_charge_needed: bool = False
     demand_window_active: bool = False
-
-    # Battery preservation (Issue #350)
-    preserve_soc: float | None = None  # SOC to preserve when charging needed
 
     # Extra attributes for binary sensors
     max_forecast_price: float = 0.0
@@ -278,7 +273,6 @@ class CoordinatorData:
     )
 
     # Spike analysis fields for conservative spike discharge
-    spike_end_time: datetime | None = None  # Estimated end of current spike
     spike_max_price: float = 0.0  # Maximum price within spike window
     spike_price_threshold: float = 0.0  # Price threshold for top X% percentile
     spike_reserve_soc: float = 0.0  # Calculated reserve SOC for spike survival
@@ -375,9 +369,6 @@ class CoordinatorData:
     solar_forecast_accuracy: float | None = (
         None  # Overall solar forecast accuracy %; None until enough samples (#881)
     )
-    hybrid_solar_accuracy: float | None = (
-        None  # Combined LocalShift + Solcast MAPE accuracy
-    )
 
     forecast_horizon_hours: float = (
         0.0  # Actual time span covered by forecast (Issue #431)
@@ -430,9 +421,6 @@ class CoordinatorData:
     optimizer_last_apply_status: str = "none"
     """Last apply attempt status: "none", "success", "fallback", "blocked"."""
 
-    optimizer_safety_block_reason: str = ""
-    """Reason for safety gate block (empty if not blocked)."""
-
     optimizer_apply_plan: dict[str, Any] | None = None
     """Apply plan derived from optimizer decisions.
     Contains: action, battery_mode, target_soc, reason.
@@ -477,9 +465,6 @@ class CoordinatorData:
 
     physical_response_watch: PhysicalResponseWatch | None = None
     """Issue #508 phase 2: active physical-response watch, if any."""
-
-    physical_response_timestamp: datetime | None = None
-    """Issue #508: when the battery physically responded."""
 
     physical_response_lag_seconds: float | None = None
     """Issue #508: physical lag, decision -> physical response (seconds)."""

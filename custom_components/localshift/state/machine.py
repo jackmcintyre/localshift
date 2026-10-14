@@ -147,7 +147,7 @@ class StateMachine:
         self._spike_discharge_reserve: float | None = None
         # Track grid charging target reserve (clamped for Tesla firmware compatibility)
         self._grid_charging_reserve: int | None = None
-        # Track self_consumption reserve (preserve_soc when set, otherwise 10)
+        # Track self_consumption reserve (10, or the away reserve when away)
         # Issue #375: Health check was using hardcoded 10, causing false mismatches
         self._self_consumption_reserve: float | None = None
         # Cooldown for health-check corrections (prevents command spam when
@@ -606,7 +606,7 @@ class StateMachine:
     def _build_self_consumption_config(self, data: CoordinatorData) -> ModeConfig:
         """Build SELF_CONSUMPTION / DEMAND_BLOCK config."""
         backup_reserve = calculate_self_consumption_reserve(
-            data.preserve_soc, self._resolve_away_reserve_pct(data)
+            None, self._resolve_away_reserve_pct(data)
         )
         return ModeConfig(
             operation_mode="self_consumption",
@@ -1895,7 +1895,7 @@ class StateMachine:
 
         """
         if mode == BatteryMode.SELF_CONSUMPTION:
-            # Use tracked reserve (preserve_soc when set, otherwise 10)
+            # Use tracked reserve (10, or the away reserve when away)
             reserve = (
                 int(self._self_consumption_reserve)
                 if self._self_consumption_reserve is not None
@@ -2161,7 +2161,7 @@ class StateMachine:
             return False
 
         fresh_reserve = calculate_self_consumption_reserve(
-            data.preserve_soc, self._resolve_away_reserve_pct(data)
+            None, self._resolve_away_reserve_pct(data)
         )
         tracked_reserve = (
             self._self_consumption_reserve
