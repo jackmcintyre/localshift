@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Any
@@ -48,6 +49,24 @@ from ..pricing.types import ForecastSlot
 from ..utils.validation import EntityValidator
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def read_fresh_soc(
+    hass: HomeAssistant, get_entity_id: Callable[[str], str]
+) -> float | None:
+    """Read the battery SOC straight from the HA state machine (cache bypass).
+
+    The single implementation behind BatteryController.read_fresh_soc and
+    ComputationEngine._read_fresh_soc (#980). Returns None when the entity is
+    missing, unknown, unavailable or not a number.
+    """
+    try:
+        state = hass.states.get(get_entity_id(CONF_TESLEMETRY_SOC))
+        if state and state.state not in (None, "unknown", "unavailable"):
+            return float(state.state)
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return None
 
 
 class StateReader:

@@ -364,8 +364,6 @@ def _members_of(tree: ast.Module, name: str) -> set[str]:
 # are restated because each PR removes its own lines from that file, and the
 # replay must stay clear of them until the code itself is gone.
 SCHEDULED_FOR_DELETION = frozenset({
-    "adaptive_params",
-    "set_adaptive_params",
     "optimizer_soc_underprepared",
     "optimizer_safety_block_reason",
     "hybrid_solar_accuracy",

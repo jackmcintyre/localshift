@@ -33,8 +33,7 @@ class ExcessSolarSignalsEngine:
         find_battery_fill_point: Callable[..., int | None],
         calculate_safe_additional_load: Callable[..., tuple[float, bool]],
         compute_load_shift_signal: Callable[..., tuple[str, float, int, str, str]],
-        get_entity_id: Callable[[str], str],
-        get_historical_hourly_averages: Callable[[str], dict[int, float]],
+        get_historical_hourly_averages: Callable[[], dict[int, float]],
         recent_load_1hr_getter: Callable[[], float],
         parse_time_option: Callable[[str, str], time],
     ) -> None:
@@ -46,7 +45,6 @@ class ExcessSolarSignalsEngine:
         self._find_battery_fill_point = find_battery_fill_point
         self._calculate_safe_additional_load = calculate_safe_additional_load
         self._compute_load_shift_signal = compute_load_shift_signal
-        self._get_entity_id = get_entity_id
         self._get_historical_hourly_averages = get_historical_hourly_averages
         self._recent_load_1hr_getter = recent_load_1hr_getter
         self._parse_time_option = parse_time_option
@@ -69,8 +67,7 @@ class ExcessSolarSignalsEngine:
 
         all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
 
-        load_entity_id = self._get_entity_id("teslemetry_load_power")
-        hourly_avg_kw = self._get_historical_hourly_averages(load_entity_id)
+        hourly_avg_kw = self._get_historical_hourly_averages()
         recent_load_kw = self._recent_load_1hr_getter()
 
         current_excess_kw = max(0.0, data.solar_power_kw - data.load_power_kw)

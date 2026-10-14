@@ -421,10 +421,8 @@ def test_b10_simplenamespace_without_away_active_gives_none():
 
 def test_b10_magicmock_away_active_gives_none():
     """A MagicMock's ``away_active`` attribute is truthy by default when
-    nothing set it — ``is True`` must refuse it. ``adaptive_params`` is
-    pinned to None; it is unrelated to this guard and a MagicMock there
-    breaks arithmetic elsewhere in the builder."""
-    data = MagicMock(adaptive_params=None)
+    nothing set it — ``is True`` must refuse it."""
+    data = MagicMock()
     config = _build_optimizer_config(data, {"away_reserve": 40})
     assert config.away_reserve_floor_pct is None
 

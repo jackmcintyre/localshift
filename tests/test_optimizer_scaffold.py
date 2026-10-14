@@ -410,7 +410,6 @@ def test_optimizer_result_serialization_safe(multi_slots):
         five_min_slots=0,
         thirty_min_slots=len(slots),
         horizon_hours=24.0,
-        solar_confidence_factor=1.0,
         slots_with_defaulted_solar=0,
         slots_with_defaulted_price=0,
     )
@@ -419,7 +418,7 @@ def test_optimizer_result_serialization_safe(multi_slots):
         def __init__(self, **_kwargs) -> None:
             pass
 
-        def build_slots(self, _data, _adaptive_params, now_dt=None):
+        def build_slots(self, _data, now_dt=None):
             return slots, metadata
 
     OptimizerFacade(slot_builder_cls=_RealSlots).run_inline(

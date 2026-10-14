@@ -68,7 +68,7 @@ compare a per-tick figure against a per-day threshold.
 ## What removing it changed
 
 A ten-day offline replay over real captured days, varying only the offsets
-(`scripts/replay_adaptive_arms.py`, full table in
+(`scripts/replay_adaptive_arms.py`, deleted with the offsets in #982; full table in
 [`simulations/replay/README.md`](../../simulations/replay/README.md)):
 
 - Planned demand-window entry SOC moved by at most **0.31pp**, on 10 of 10 days.
@@ -91,9 +91,6 @@ A ten-day offline replay over real captured days, varying only the offsets
   separate, healthy loop and was untouched.
 - **Weather/load correlation** (`learning/correlation.py`) feeds the load
   forecast and is independent of parameter learning.
-- **`data.adaptive_params`** remains at its zero default. The optimizer reads
-  the offsets unconditionally and zero is the identity, so the field stays
-  rather than threading a removal through seven call sites.
 
 ## Removed afterwards
 
@@ -105,6 +102,16 @@ A ten-day offline replay over real captured days, varying only the offsets
   attached to the load forecaster, so the multiplier was always 1.0. Its
   store file, `.storage/localshift.forecast_corrections.<entry_id>`, is left
   on disk, the same as the stores of the modules above.
+
+- **The adaptive offsets** (`data.adaptive_params`, `AdaptiveParameters`, the
+  `OPTIMIZABLE_PARAMS` table and every place that applied an offset) were
+  deleted in October 2026 (#982). The field had sat at its zero default since
+  the layer was retired, so every offset was the identity. The clamps in
+  `engine/optimizer_runner.py` that used to sit beside the offsets were kept.
+  The `adaptive_params_at_decision` key is no longer written on new decision
+  records; records already in the store that carry it still load, and the key
+  is ignored. `solar_confidence_factor` (a constant `1.0`) is gone from the
+  slot-build metadata.
 
 ## Bringing it back
 

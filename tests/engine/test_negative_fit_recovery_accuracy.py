@@ -354,7 +354,6 @@ def _replay(accuracy_pct: float | None):
 
     scenario = json.loads(REPLAY.read_text())
     payload = dict(scenario["input"])
-    payload["adaptive_params"] = {}
     test_time = datetime.fromisoformat(payload["test_time"])
 
     data = setup_coordinator_data(payload)
