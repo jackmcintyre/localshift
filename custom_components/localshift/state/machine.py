@@ -147,7 +147,7 @@ class StateMachine:
         self._spike_discharge_reserve: float | None = None
         # Track grid charging target reserve (clamped for Tesla firmware compatibility)
         self._grid_charging_reserve: int | None = None
-        # Track self_consumption reserve (preserve_soc when set, otherwise 10)
+        # Track self_consumption reserve (10, or the away reserve when away)
         # Issue #375: Health check was using hardcoded 10, causing false mismatches
         self._self_consumption_reserve: float | None = None
         # Cooldown for health-check corrections (prevents command spam when
@@ -1895,7 +1895,7 @@ class StateMachine:
 
         """
         if mode == BatteryMode.SELF_CONSUMPTION:
-            # Use tracked reserve (preserve_soc when set, otherwise 10)
+            # Use tracked reserve (10, or the away reserve when away)
             reserve = (
                 int(self._self_consumption_reserve)
                 if self._self_consumption_reserve is not None
