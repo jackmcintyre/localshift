@@ -1759,6 +1759,41 @@ class _DwellRig:
                 self.engine.compute_derived_values(self.data)
 
 
+@pytest.mark.parametrize(
+    ("grant_flag", "keeps"),
+    [
+        ("mode_decision_export_start_only", True),
+        ("mode_decision_plan_charge_only", True),
+        ("mode_decision_charge_release_only", True),
+        (None, False),
+    ],
+)
+def test_only_an_ordinary_grant_drops_a_held_release(
+    grant_flag: str | None, keeps: bool
+) -> None:
+    """#1159 review: an epoch grant that did not hold must not strand the release.
+
+    Only an ordinary price-context grant has decided afresh; an export-start or
+    plan-charge epoch grant the plan did not use leaves the held release armed.
+    """
+    machine = StateMachine(
+        MagicMock(),
+        MagicMock(),
+        lambda key: False,
+        lambda key, default=None: default,
+        MagicMock(),
+    )
+    held = dt_util.now()
+    machine._charge_dwell_release_due = held
+    data = _data(mode_decision_allowed=True, charge_dwell_release_due=None)
+    if grant_flag is not None:
+        setattr(data, grant_flag, True)
+
+    machine._note_charge_dwell_hold(data)
+
+    assert (machine._charge_dwell_release_due == held) is keeps
+
+
 class TestChargeDwellReGrant:
     """#1159: the dwell's clock survives the transition, and its hold is re-granted.
 

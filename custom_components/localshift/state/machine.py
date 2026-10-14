@@ -525,12 +525,17 @@ class StateMachine:
     def _note_charge_dwell_hold(self, data: CoordinatorData) -> None:
         """In-lock after the facade: did this granted evaluation hold a release?
 
-        A dwell grant the plan flickered away from leaves the latch armed.
+        A dwell grant the plan flickered away from leaves the latch armed, and so
+        does any other epoch grant (plan-charge, export-start): only an ordinary
+        price-context grant that did not hold has decided afresh.
         """
         due, data.charge_dwell_release_due = data.charge_dwell_release_due, None
-        if data.mode_decision_allowed and (
-            due is not None or not data.mode_decision_charge_release_only
-        ):
+        epoch_grant = (
+            data.mode_decision_charge_release_only
+            or data.mode_decision_export_start_only
+            or data.mode_decision_plan_charge_only
+        )
+        if data.mode_decision_allowed and (due is not None or not epoch_grant):
             self._charge_dwell_release_due = due
 
     def _update_charge_dwell_epoch(
