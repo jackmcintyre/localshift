@@ -106,11 +106,12 @@ A ten-day offline replay over real captured days, varying only the offsets
 - **The adaptive offsets** (`data.adaptive_params`, `AdaptiveParameters`, the
   `OPTIMIZABLE_PARAMS` table and every place that applied an offset) were
   deleted in October 2026 (#982). The field had sat at its zero default since
-  the layer was retired, so every offset was the identity. Three things were
-  kept: the clamps in `engine/optimizer_runner.py` that used to sit beside the
-  offsets, the `adaptive_params_at_decision` key on each persisted decision
-  record (now always `{}`), and `solar_confidence_factor` in the slot-build
-  metadata (now always `1.0`).
+  the layer was retired, so every offset was the identity. The clamps in
+  `engine/optimizer_runner.py` that used to sit beside the offsets were kept.
+  The `adaptive_params_at_decision` key is no longer written on new decision
+  records; records already in the store that carry it still load, and the key
+  is ignored. `solar_confidence_factor` (a constant `1.0`) is gone from the
+  slot-build metadata.
 
 ## Bringing it back
 

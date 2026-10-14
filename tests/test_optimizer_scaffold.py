@@ -410,7 +410,6 @@ def test_optimizer_result_serialization_safe(multi_slots):
         five_min_slots=0,
         thirty_min_slots=len(slots),
         horizon_hours=24.0,
-        solar_confidence_factor=1.0,
         slots_with_defaulted_solar=0,
         slots_with_defaulted_price=0,
     )

@@ -56,9 +56,6 @@ class SlotBuildMetadata:
     horizon_hours: float
     """Forecast horizon in hours."""
 
-    solar_confidence_factor: float
-    """Always 1.0 since the adaptive offsets were removed (#982); kept for diagnostics."""
-
     slots_with_defaulted_solar: int
     """Slots where solcast returned 0.0 kWh."""
 
@@ -124,7 +121,6 @@ class SlotBuildMetadata:
             "five_min_slots": self.five_min_slots,
             "thirty_min_slots": self.thirty_min_slots,
             "horizon_hours": self.horizon_hours,
-            "solar_confidence_factor": self.solar_confidence_factor,
         }
 
 
@@ -206,7 +202,6 @@ class SlotBuilder:
         dw_start_time = self._parse_time_option("demand_window_start")
         dw_end_time = self._parse_time_option("demand_window_end")
 
-        solar_confidence_factor = 1.0
         all_solcast = [*data.solcast_today, *data.solcast_tomorrow]
         base_slot = self._compute_base_slot(now_local)
         local_tz = self._get_local_timezone()
@@ -226,7 +221,6 @@ class SlotBuilder:
             hybrid_slots=hybrid_slots,
             data=data,
             all_solcast=all_solcast,
-            solar_confidence_factor=solar_confidence_factor,
             base_slot=base_slot,
             local_tz=local_tz,
             dw_start_time=dw_start_time,
@@ -247,7 +241,6 @@ class SlotBuilder:
             five_min_slots=counts["five_min"],
             thirty_min_slots=counts["thirty_min"],
             horizon_hours=hybrid_metadata.get("horizon_hours", 24.0),
-            solar_confidence_factor=solar_confidence_factor,
             slots_with_defaulted_solar=counts["defaulted_solar"],
             slots_with_defaulted_price=counts["defaulted_price"],
             slots_with_defaulted_consumption=counts["defaulted_consumption"],
@@ -261,11 +254,10 @@ class SlotBuilder:
 
         _LOGGER.debug(
             "SlotBuilder: built %d slots (%d x 5min, %d x 30min), "
-            "solar_confidence=%.2f, defaulted: solar=%d price=%d consumption=%d",
+            "defaulted: solar=%d price=%d consumption=%d",
             len(contexts),
             counts["five_min"],
             counts["thirty_min"],
-            solar_confidence_factor,
             counts["defaulted_solar"],
             counts["defaulted_price"],
             counts["defaulted_consumption"],
@@ -398,7 +390,6 @@ class SlotBuilder:
         hybrid_slots: list[dict[str, Any]],
         data: Any,
         all_solcast: list[dict[str, Any]],
-        solar_confidence_factor: float,
         base_slot: datetime,
         local_tz: ZoneInfo | None,
         dw_start_time: time,
@@ -423,7 +414,6 @@ class SlotBuilder:
                 slot=slot,
                 data=data,
                 all_solcast=all_solcast,
-                solar_confidence_factor=solar_confidence_factor,
                 base_slot=base_slot,
                 local_tz=local_tz,
                 dw_start_time=dw_start_time,
@@ -445,7 +435,6 @@ class SlotBuilder:
         slot: dict[str, Any],
         data: Any,
         all_solcast: list[dict[str, Any]],
-        solar_confidence_factor: float,
         base_slot: datetime,
         local_tz: ZoneInfo | None,
         dw_start_time: time,
@@ -481,7 +470,6 @@ class SlotBuilder:
             all_solcast,
             slot_start,
             interval_minutes,
-            solar_confidence_factor,
             confidence,
         )
         if solar_kwh < 0.001:
@@ -555,29 +543,18 @@ class SlotBuilder:
         all_solcast: list[dict[str, Any]],
         slot_start: datetime,
         interval_minutes: int,
-        solar_confidence_factor: float,
         confidence: float = 1.0,
     ) -> float:
         """Get solar kWh for a slot.
 
-        If bias correction has sufficient samples, return raw solar
-        (bias correction will be applied by OptimizerFacade).
-        Otherwise, apply solar_confidence_factor as fallback.
+        Returns the raw forecast for the slot; any bias correction is
+        applied later by OptimizerFacade.
         """
         solar_kwh = get_solar_for_slot_by_interval(
             all_solcast, slot_start, interval_minutes, confidence
         )
 
-        # Check if bias correction is ready
-        if (
-            self._solar_accuracy_tracker is not None
-            and self._solar_accuracy_tracker.has_sufficient_samples()
-        ):
-            # Bias correction will handle it - return raw
-            return max(0.0, solar_kwh)
-
-        # Fall back to solar_confidence_factor
-        return max(0.0, solar_kwh * solar_confidence_factor)
+        return max(0.0, solar_kwh)
 
     def _get_consumption_kwh(
         self,

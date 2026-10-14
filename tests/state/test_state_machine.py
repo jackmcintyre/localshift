@@ -277,7 +277,6 @@ def coordinator_data():
     data.boost_charge_active = False
     data.force_discharge_active = False
     data.decision_log = []
-    data.daily_forecast_soc_15min = []
     # Issue #349: Mark automation as ready for tests
     data.automation_ready = True
     return data
@@ -1733,6 +1732,101 @@ class TestGridChargingListener:
 
         mock_hass.services.async_call.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_own_boost_entry_write_is_not_reverted(
+        self,
+        state_machine,
+        mock_hass,
+        mock_battery_controller,
+        coordinator_data,
+        monkeypatch,
+        caplog,
+    ):
+        """Issue #1160: entering boost from self_consumption, the controller's
+        first write turns grid charging on. The switch's state event arrives
+        while the transition is still in flight and ``_commanded_mode`` is still
+        SELF_CONSUMPTION (it is only set after every write lands), so the
+        listener used to turn the switch straight back off and the controller's
+        read-back failed. Live 14 Oct 08:11:44-49: one wasted retry, ~4 s."""
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        mock_battery_controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
+        state_machine.start_grid_charging_listener(mock_hass)
+
+        async def _boost_with_own_switch_event(data, dry_run):
+            # The switch.turn_on lands and its state event fires mid-transition,
+            # then the client waits before reading the switch back.
+            captured["callback"](self._make_event("on"))
+            for _ in range(3):
+                await asyncio.sleep(0)
+            return True
+
+        mock_battery_controller.set_boost_charge = AsyncMock(
+            side_effect=_boost_with_own_switch_event
+        )
+        now = datetime.now(UTC)
+        state_machine._mode_desired_since[BatteryMode.BOOST_CHARGING] = now
+
+        with caplog.at_level(logging.INFO):
+            await state_machine._execute_transition_with_validation(
+                coordinator_data, BatteryMode.BOOST_CHARGING, now
+            )
+            await asyncio.sleep(0)
+
+        mock_hass.services.async_call.assert_not_called()
+        assert state_machine._commanded_mode == BatteryMode.BOOST_CHARGING
+        assert state_machine._last_health_correction is None
+        assert "Grid charging re-enabled while in" not in caplog.text
+        # The attribution line still records the event, flagged in-transition.
+        assert "in_transition=True" in caplog.text
+        assert "commanded_mode=self_consumption" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_external_flip_logs_attribution_before_correcting(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch, caplog
+    ):
+        """Issue #1160: an external flip outside a transition is still
+        corrected, and an INFO line carrying the event's context ids and old
+        state is logged first so the writer can be identified."""
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        mock_battery_controller._get_entity_id.return_value = (
+            "switch.my_home_allow_charging_from_grid"
+        )
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
+        state_machine.start_grid_charging_listener(mock_hass)
+
+        event = self._make_event("on")
+        event.context = MagicMock(id="ctx-1", parent_id="parent-1", user_id=None)
+
+        with caplog.at_level(logging.INFO):
+            captured["callback"](event)
+            await asyncio.sleep(0)
+
+        mock_hass.services.async_call.assert_called_once()
+        attribution = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.INFO and "context_id=ctx-1" in r.getMessage()
+        ]
+        assert len(attribution) == 1
+        assert "parent_id=parent-1" in attribution[0]
+        assert "user_id=None" in attribution[0]
+        assert "old_state=off" in attribution[0]
+        assert "in_transition=False" in attribution[0]
+        assert "commanded_mode=self_consumption" in attribution[0]
+        # Logged before the correction's WARNING.
+        messages = [r.getMessage() for r in caplog.records]
+        warning_idx = next(
+            i for i, m in enumerate(messages) if "re-enabled while in" in m
+        )
+        assert messages.index(attribution[0]) < warning_idx
+
 
 # =============================================================================
 # MANUAL OVERRIDE TESTS
@@ -2203,52 +2297,6 @@ class TestStateMachineInternalBranches:
         info = state_machine.get_tesla_override_info()
         assert info["active"] is True
         assert info["corroborated"] is True
-
-    def test_handle_debounce_timing_clears_stale_and_starts_timer(self, state_machine):
-        """Debounce helper should clear stale timers and start desired timer."""
-        stale_mode = BatteryMode.BOOST_CHARGING
-        desired_mode = BatteryMode.PROACTIVE_EXPORT
-        state_machine._mode_desired_since[stale_mode] = dt_aware(2026, 3, 1, 9, 0, 0)
-        now = dt_aware(2026, 3, 1, 10, 0, 0)
-
-        should_wait = state_machine._handle_debounce_timing(
-            desired_mode, now, timedelta(minutes=2)
-        )
-
-        assert should_wait is True
-        assert stale_mode not in state_machine._mode_desired_since
-        assert state_machine._mode_desired_since[desired_mode] == now
-
-    def test_handle_debounce_timing_allows_transition_after_elapsed(
-        self, state_machine
-    ):
-        """Debounce helper should return False when elapsed meets debounce."""
-        desired_mode = BatteryMode.PROACTIVE_EXPORT
-        desired_since = dt_aware(2026, 3, 1, 10, 0, 0)
-        state_machine._mode_desired_since[desired_mode] = desired_since
-
-        should_wait = state_machine._handle_debounce_timing(
-            desired_mode,
-            desired_since + timedelta(minutes=2, seconds=1),
-            timedelta(minutes=2),
-        )
-
-        assert should_wait is False
-
-    def test_handle_debounce_timing_still_waiting_mid_debounce(self, state_machine):
-        """Debounce helper should return True (and log) while a timer is
-        already running but hasn't yet met the required duration."""
-        desired_mode = BatteryMode.PROACTIVE_EXPORT
-        desired_since = dt_aware(2026, 3, 1, 10, 0, 0)
-        state_machine._mode_desired_since[desired_mode] = desired_since
-
-        should_wait = state_machine._handle_debounce_timing(
-            desired_mode,
-            desired_since + timedelta(minutes=1),
-            timedelta(minutes=2),
-        )
-
-        assert should_wait is True
 
     def test_record_transition_metrics_records_lag_and_trims_history(
         self, state_machine, coordinator_data

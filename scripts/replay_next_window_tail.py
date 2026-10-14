@@ -180,7 +180,6 @@ def _spliced_1435(day: str, directory: Path) -> dict[str, Any] | None:
 def run(scenario: dict[str, Any], tail: bool) -> dict[str, Any]:
     """Replay one instant with the tail re-plan on or off."""
     payload = dict(scenario["input"])
-    payload["adaptive_params"] = {}
     test_time = datetime.fromisoformat(payload["test_time"])
     data = setup_coordinator_data(payload)
     hass = setup_mock_hass(payload)

@@ -128,7 +128,6 @@ class TestEntityHealth:
             config_key="test_key",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.OK,
-            last_check=dt_util.now(),
         )
         assert health.is_healthy is True
 
@@ -139,7 +138,6 @@ class TestEntityHealth:
             config_key="test_key",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.UNAVAILABLE,
-            last_check=dt_util.now(),
         )
         assert health.is_healthy is False
 
@@ -150,7 +148,6 @@ class TestEntityHealth:
             config_key="test_key",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.OK,
-            last_check=dt_util.now(),
             is_broken=True,
         )
         assert health.is_healthy is False
@@ -362,7 +359,6 @@ class TestCheckEntity:
 
         assert health.status == EntityStatus.OK
         assert health.is_healthy is True
-        assert health.last_valid_value == 50.0
 
     def test_check_entity_optional_with_no_entity_id(
         self, mock_hass: MagicMock
@@ -658,7 +654,6 @@ class TestValidateEntityValue:
         health = validator.check_entity(CONF_PRICING_GENERAL_PRICE)
 
         assert health.status == EntityStatus.OK
-        assert health.last_valid_value == 0.25
 
     def test_validate_boolean_entity(self, mock_hass: MagicMock) -> None:
         """Boolean entity validation handles on/off states."""
@@ -682,7 +677,6 @@ class TestValidateEntityValue:
         health = validator.check_entity(CONF_PRICING_PRICE_SPIKE)
 
         assert health.status == EntityStatus.OK
-        assert health.last_valid_value is True
 
     def test_validate_boolean_entity_off(self, mock_hass: MagicMock) -> None:
         """Boolean entity validation handles off state."""
@@ -706,7 +700,6 @@ class TestValidateEntityValue:
         health = validator.check_entity(CONF_PRICING_PRICE_SPIKE)
 
         assert health.status == EntityStatus.OK
-        assert health.last_valid_value is False
 
     def test_validate_forecast_entity_pricing(self, mock_hass: MagicMock) -> None:
         """Forecast entity validation handles pricing forecasts."""
@@ -733,7 +726,6 @@ class TestValidateEntityValue:
         health = validator.check_entity(CONF_PRICING_GENERAL_FORECAST)
 
         assert health.status == EntityStatus.OK
-        assert len(health.last_valid_value) == 2
 
     def test_validate_forecast_entity_pricing_invalid(
         self, mock_hass: MagicMock
@@ -783,7 +775,6 @@ class TestValidateEntityValue:
         health = validator.check_entity(CONF_SOLCAST_FORECAST_TODAY)
 
         assert health.status == EntityStatus.OK
-        assert len(health.last_valid_value) == 2
 
     def test_validate_forecast_entity_solcast_detailed_hourly(
         self, mock_hass: MagicMock
@@ -1277,7 +1268,6 @@ class TestResetMethods:
         assert health.status == EntityStatus.OK
         assert health.consecutive_failures == 0
         assert health.is_broken is False
-        assert health.last_valid_value is None
 
     def test_reset_entity_tracking_unknown_key(self, mock_hass: MagicMock) -> None:
         """Reset entity tracking for unknown key does nothing."""
@@ -1341,7 +1331,6 @@ class TestIntegrationStatus:
             config_key="test",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.MISSING,
-            last_check=dt_util.now(),
         )
         is_error, is_warning = validator._categorize_health_severity(health)
         assert is_error is True
@@ -1401,7 +1390,6 @@ class TestEdgeCases:
             config_key="test",
             category=EntityCategory.REQUIRED,
             status=EntityStatus.MISSING,
-            last_check=dt_util.now(),
         )
         msg = validator._format_health_error_message(health, "Battery SOC")
         assert "not found" in msg

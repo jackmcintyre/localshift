@@ -138,7 +138,6 @@ def run(
     )
 
     payload = dict(scenario["input"])
-    payload["adaptive_params"] = {}
     test_time = datetime.fromisoformat(payload["test_time"])
 
     data = setup_coordinator_data(payload)

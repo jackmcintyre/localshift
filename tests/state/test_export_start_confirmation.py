@@ -83,7 +83,6 @@ class _Rig:
 
         scenario = json.loads(capture.read_text())
         self.payload = copy.deepcopy(scenario["input"])
-        self.payload["adaptive_params"] = {}
         self.now = datetime.fromisoformat(self.payload["test_time"])
 
         self.data = setup_coordinator_data(self.payload)
