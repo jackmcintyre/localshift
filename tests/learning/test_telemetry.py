@@ -168,7 +168,7 @@ async def test_initialize_with_nothing_stored_starts_empty(fake_store) -> None:
     await telemetry.async_initialize()
 
     assert telemetry.decision_tracker.completed_count == 0
-    assert telemetry.decision_tracker.pending_count == 0
+    assert len(telemetry.decision_tracker._pending_decisions) == 0
 
 
 async def test_save_all_before_initialize_writes_nothing(fake_store) -> None:

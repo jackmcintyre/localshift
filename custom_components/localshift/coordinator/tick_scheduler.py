@@ -77,16 +77,6 @@ class TickScheduler:
         self._coordinator.evaluation_dispatcher.on_state_change(_event)
 
     @callback
-    def handle_periodic_tick(self, now: datetime) -> None:
-        """Handle the 1-minute periodic re-evaluation.
-
-        DEPRECATED: This method is kept for backward compatibility.
-        New tiered handlers are used instead.
-        """
-        # Delegate to fast tick for backward compatibility
-        self.handle_fast_tick(now)
-
-    @callback
     def handle_fast_tick(self, now: datetime) -> None:
         """Handle FAST tier periodic tasks (1 minute).
 
