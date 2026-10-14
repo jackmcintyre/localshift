@@ -471,3 +471,83 @@ def test_preflight_cli_exit_codes(monkeypatch, capsys):
     )
     assert dc.main(["--preflight"]) == 1
     assert "FAIL  no grid charge within 30 min" in capsys.readouterr().out
+
+
+# --wait-restart: the after dump may only be taken once HA has really restarted.
+
+STARTED = datetime(2026, 10, 15, 21, 5, 30)
+
+
+def _fake_clock(step=3.0):
+    t = [0.0]
+
+    def clock():
+        return t[0]
+
+    def sleep(s):
+        t[0] += step
+
+    return clock, sleep
+
+
+def _log_starting(ts: datetime) -> list[str]:
+    return [f"{ts:%Y-%m-%d %H:%M:%S}.123 WARNING (MainThread) [x] first line"]
+
+
+def test_wait_restart_passes_after_down_and_up():
+    ups = iter([True, False, False, True])  # still up, shutting down, down, back
+    logs = iter([_log_starting(STARTED + timedelta(seconds=40))])
+    clock, sleep = _fake_clock()
+    reason = dc.wait_restart(
+        STARTED,
+        60,
+        up=lambda: next(ups),
+        fetch_log=lambda: next(logs),
+        sleep=sleep,
+        clock=clock,
+    )
+    assert reason is None
+
+
+def test_wait_restart_refuses_the_old_process_log():
+    # API keeps answering during shutdown with the pre-restart log: never judge it.
+    clock, sleep = _fake_clock()
+    reason = dc.wait_restart(
+        STARTED,
+        30,
+        up=lambda: True,
+        fetch_log=lambda: _log_starting(STARTED - timedelta(hours=13)),
+        sleep=sleep,
+        clock=clock,
+    )
+    assert reason is not None and "no restart after 21:05:30" in reason
+
+
+def test_wait_restart_reports_down_without_new_log():
+    ups = iter([False] * 100)
+    clock, sleep = _fake_clock()
+    reason = dc.wait_restart(
+        STARTED,
+        30,
+        up=lambda: next(ups),
+        fetch_log=lambda: [],
+        sleep=sleep,
+        clock=clock,
+    )
+    assert reason is not None and "API went down" in reason
+
+
+def test_wait_restart_unreadable_log_keeps_waiting():
+    def boom():
+        raise OSError("connection reset")
+
+    clock, sleep = _fake_clock()
+    reason = dc.wait_restart(
+        STARTED,
+        9,
+        up=lambda: True,
+        fetch_log=boom,
+        sleep=sleep,
+        clock=clock,
+    )
+    assert reason is not None

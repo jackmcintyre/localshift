@@ -27,6 +27,7 @@ active or within 30 minutes of firing. A restart cuts off a charge in flight.
 Usage
 -----
   scripts/deploy_check.py --preflight
+  scripts/deploy_check.py --wait-restart 21:05:30   # time just before the restart was issued
   scripts/deploy_check.py --before B.json --after A.json \\
       --component-dir /Volumes/appdata/Home-Assistant-Container/custom_components/localshift
 
@@ -37,6 +38,9 @@ Usage
   --expect-recompile           code was copied: every compiled file must post-date the restart
   --wait-settled SECONDS       re-fetch the after state every 20 s until settled,
                                then judge (cannot be combined with --log)
+  --wait-restart HH:MM:SS      wait (up to --timeout, default 900 s) until HA has gone
+                               down and come back with a log that starts after this
+                               time; take the after dump only once this exits 0
 
 Exit codes: 0 all invariants hold, 1 an invariant failed, 2 usage error,
 3 not settled yet (only without --wait-settled).
@@ -71,6 +75,7 @@ PLAN_LINE = "Pre-charge decision"
 PLAN_GAP_MAX = timedelta(seconds=150)
 MIN_PLANS = 2
 SETTLE_POLL_S = 20
+RESTART_POLL_S = 3
 # Distinct from argparse's 2, so a retry wrapper cannot loop on a typo.
 NOT_SETTLED_EXIT = 3
 
@@ -536,6 +541,68 @@ def fetch_live_states() -> dict[str, dict]:
     return {s["entity_id"]: s for s in states if bucket(s["entity_id"])}
 
 
+def _api_up() -> bool:
+    """True when the HA API answers 200; any error or other status is down."""
+    import types
+    import urllib.request
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from ha_entity_dump import resolve_credentials
+
+    url, token = resolve_credentials(types.SimpleNamespace(url=None, token=None))
+    req = urllib.request.Request(
+        f"{url}/api/", headers={"Authorization": f"Bearer {token}"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 200
+    except (OSError, ValueError):
+        return False
+
+
+def _log_restart_time(lines: list[str]) -> datetime | None:
+    """The log is truncated at every restart: its first timestamp is the start."""
+    return next((t for line in lines if (t := _log_time(line))), None)
+
+
+def wait_restart(
+    started: datetime,
+    timeout_s: float,
+    *,
+    up=None,
+    fetch_log=None,
+    sleep=time.sleep,
+    clock=time.monotonic,
+) -> str | None:
+    """Wait for HA to go down and come back after a restart issued at ``started``.
+
+    A snapshot taken while HA is shutting down reads every entity as missing,
+    and one taken just before the restart lands judges the old process. So
+    this waits for the API to stop answering, then to answer again, and then
+    requires the log's first timestamp (the new process's start) to be no
+    earlier than ``started``. A restart fast enough to be missed between polls
+    still passes on the log alone. Returns None when restarted, else why not.
+    """
+    up = up or _api_up
+    fetch_log = fetch_log or fetch_live_log
+    deadline = clock() + timeout_s
+    seen_down = False
+    while clock() < deadline:
+        if not up():
+            seen_down = True
+        else:
+            try:
+                restart = _log_restart_time(fetch_log())
+            except (OSError, ValueError):
+                restart = None
+            if restart is not None and restart >= started:
+                return None
+        sleep(RESTART_POLL_S)
+    return f"no restart after {started:%H:%M:%S} within {timeout_s:.0f} s" + (
+        " (API went down but the log never showed a new start)" if seen_down else ""
+    )
+
+
 def wait_settled(
     before, after, timeout_s, *, fetch=None, sleep=time.sleep, clock=time.monotonic
 ):
@@ -566,7 +633,20 @@ def main(argv=None) -> int:
     ap.add_argument("--allow-dw-entry-move", action="store_true")
     ap.add_argument("--expect-recompile", action="store_true")
     ap.add_argument("--wait-settled", type=float, metavar="SECONDS")
+    ap.add_argument("--wait-restart", metavar="HH:MM:SS")
+    ap.add_argument("--timeout", type=float, default=900.0)
     args = ap.parse_args(argv)
+    if args.wait_restart:
+        started = datetime.combine(
+            datetime.now().date(),
+            datetime.strptime(args.wait_restart, "%H:%M:%S").time(),
+        )
+        reason = wait_restart(started, args.timeout)
+        print(
+            reason
+            or f"restarted: HA came back with a log starting after {started:%H:%M:%S}"
+        )
+        return 0 if reason is None else 1
     if args.preflight:
         checks = preflight(fetch_live_states(), datetime.now().astimezone())
         print(render(checks))
