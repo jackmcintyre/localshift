@@ -192,8 +192,10 @@ class StateMachine:
         # commit → pending clears → pending re-set → fresh rising edge, forever,
         # inside one unchanged price context (measured: 11 grants over 21 ticks).
         # ``_plan_charge_context`` + ``_plan_charge_granted`` instead spend at most
-        # one grant per (price context × wanted-charge mode) and refuse to re-grant
-        # until the price/spike/DW/floor context genuinely changes.
+        # one COMMITTED charge per (price context × wanted-charge mode) and refuse
+        # to re-grant after that until the price/spike/DW/floor context changes.
+        # A grant that commits no charge is refunded (#1172), so grants that keep
+        # landing on a drifted hold may repeat; only committed charges are bounded.
         self._plan_charge_context: str | None = None
         self._plan_charge_granted: set[str] = set()
         self._plan_charge_epoch: int = 0
@@ -397,9 +399,9 @@ class StateMachine:
         have already been granted in ``_plan_charge_context``, and is cleared only
         when the price/spike/DW/floor context genuinely changes.
 
-        ⇒ at most ONE extra decision per (price context × wanted-charge mode) —
-        two charge modes exist, so at most two per context — and it can only start
-        charging. No charge→hold→charge cycle is reachable inside a single price
+        ⇒ at most ONE committed charge per (price context × wanted-charge mode) —
+        two charge modes exist, so at most two per context — and a grant can only
+        start charging. No charge→hold→charge cycle is reachable inside a single price
         context, and no unbounded re-grant loop is either.
 
         Issue #1172: an evaluation that spends the budget but commits no charge
