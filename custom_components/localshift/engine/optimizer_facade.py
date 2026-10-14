@@ -736,29 +736,8 @@ class OptimizerFacade:
                     data, new_mode, True, mode_source="precharge_backstop_release"
                 )
                 return
-            # Ordinary optimizer commit path. Apply a dwell band to release of a
-            # committed charge: the slot-0 sawtooth that flapped charge_forced 11x
-            # in 124 min on 2026-07-30 is suppressed here without touching the
-            # runway arm's own hysteresis (that path is above this check).
-            if decision_allowed and self._should_hold_charge_dwell(
-                data, new_mode, optimizer_config
-            ):
-                self._dwell_held_charge_at = data.charge_dwell_started_at
-                data.debug_plan_mode_pending = new_mode.value
-                return
-            if not decision_allowed and self._release_dwell_hold(
-                data, new_mode, optimizer_config
-            ):
-                self._commit_or_hold_mode(
-                    data, new_mode, True, mode_source="charge_dwell_release"
-                )
-                return
-            if decision_allowed:
-                # A granted evaluation that did not hold has decided afresh;
-                # whatever release was held earlier is not this one.
-                self._dwell_held_charge_at = None
-            self._commit_or_hold_mode(
-                data, new_mode, decision_allowed, mode_source="optimizer"
+            self._commit_with_charge_dwell(
+                data, new_mode, decision_allowed, optimizer_config
             )
         except ValueError:
             _LOGGER.warning(
@@ -773,6 +752,40 @@ class OptimizerFacade:
                 decision_allowed,
                 mode_source="fallback",
             )
+
+    def _commit_with_charge_dwell(
+        self,
+        data: CoordinatorData,
+        new_mode: Any,
+        decision_allowed: bool,
+        optimizer_config: Any,
+    ) -> None:
+        """Ordinary optimizer commit, with a dwell band on releasing a charge.
+
+        The slot-0 sawtooth that flapped charge_forced 11x in 124 min on
+        2026-07-30 is suppressed here without touching the runway arm's own
+        hysteresis (that path runs before this one).
+        """
+        if decision_allowed and self._should_hold_charge_dwell(
+            data, new_mode, optimizer_config
+        ):
+            self._dwell_held_charge_at = data.charge_dwell_started_at
+            data.debug_plan_mode_pending = new_mode.value
+            return
+        if not decision_allowed and self._release_dwell_hold(
+            data, new_mode, optimizer_config
+        ):
+            self._commit_or_hold_mode(
+                data, new_mode, True, mode_source="charge_dwell_release"
+            )
+            return
+        if decision_allowed:
+            # A granted evaluation that did not hold has decided afresh;
+            # whatever release was held earlier is not this one.
+            self._dwell_held_charge_at = None
+        self._commit_or_hold_mode(
+            data, new_mode, decision_allowed, mode_source="optimizer"
+        )
 
     @staticmethod
     def _epoch_grant_permits(data: CoordinatorData, new_mode: _BatteryMode) -> bool:
