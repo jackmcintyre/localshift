@@ -475,7 +475,9 @@ SWITCH_NOTIFICATIONS_ENABLED = "notifications_enabled"
 
 SWITCH_DEFAULTS = {
     SWITCH_AUTOMATION_ENABLED: True,
-    SWITCH_SPIKE_DISCHARGE_ENABLED: True,
+    # Issue #1120: spike export ships OFF; existing installs are turned off once
+    # by async_migrate_entry (config entry 1.1 -> 1.2).
+    SWITCH_SPIKE_DISCHARGE_ENABLED: False,
     SWITCH_SPIKE_DISCHARGE_CONSERVATIVE: False,
     SWITCH_DRY_RUN: False,
     SWITCH_DEMAND_WINDOW_BLOCK: True,

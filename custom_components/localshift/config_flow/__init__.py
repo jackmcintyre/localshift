@@ -90,6 +90,8 @@ class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for LocalShift."""
 
     VERSION = 1
+    # 1.2 (issue #1120): spike export starts OFF; see async_migrate_entry.
+    MINOR_VERSION = 2
 
     async def _discover_pricing_defaults(self, pricing_source: str) -> dict[str, str]:
         """Discover pricing entity defaults based on pricing source."""
