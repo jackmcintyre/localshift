@@ -7,7 +7,7 @@ breaking exactly one thing fails exactly that check.
 import copy
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -313,19 +313,29 @@ def test_main_exit_codes(tmp_path, capsys, monkeypatch):
     # Before the first health tick nothing is judged, even a broken switch.
     unticked = copy.deepcopy(broken_ents)
     unticked[dc.HEALTH]["state"] = "0/0"
-    assert dc.main([*base, "--after", str(write("unticked.json", unticked))]) == 2
+    after = str(write("unticked.json", unticked))
+    assert dc.main([*base, "--after", after]) == dc.NOT_SETTLED_EXIT
     out = capsys.readouterr().out
     assert "NOT SETTLED: re-run later" in out
     assert "FAIL" not in out and "PASS" not in out
 
+    # --wait-settled reads the log over the API, so it refuses --log.
+    with pytest.raises(SystemExit) as usage:
+        dc.main([*base, "--after", after, "--wait-settled", "60"])
+    assert usage.value.code == 2 != dc.NOT_SETTLED_EXIT
+
     # --wait-settled re-fetches until the tick lands, then judges.
+    api = ["--before", str(good), "--after", after]
+    monkeypatch.setattr(dc, "fetch_live_log", lambda: log.read_text().splitlines())
+    monkeypatch.setattr(dc, "SETTLE_POLL_S", 0)
     fetches = iter([unticked, _dump()])
     monkeypatch.setattr(dc, "fetch_live_states", lambda: next(fetches))
-    monkeypatch.setattr(dc, "SETTLE_POLL_S", 0)
-    after = str(write("unticked.json", unticked))
-    assert dc.main([*base, "--after", after, "--wait-settled", "60"]) == 0
-    # A timeout that passes before the tick still reports NOT SETTLED.
-    assert dc.main([*base, "--after", after, "--wait-settled", "0"]) == 2
+    assert dc.main([*api, "--wait-settled", "60"]) == 0
+    # A deadline that passes before the tick judges anyway: a sensor the deploy
+    # broke reads "unknown" for good and must fail, not wait forever.
+    monkeypatch.setattr(dc, "fetch_live_states", lambda: unticked)
+    assert dc.main([*api, "--wait-settled", "0"]) == 1
+    assert "judging anyway" in capsys.readouterr().out
 
 
 def _health(ents, statuses: dict[str, str]):
@@ -388,3 +398,76 @@ def test_wait_settled_polls_until_settled_or_timeout():
     stuck = dc.wait_settled(_dump(), unticked, 50, fetch=lambda: unticked, **kw)
     assert dc.not_settled(_dump(), stuck) is not None
     assert clock[0] == 50
+
+
+SYDNEY = datetime(2026, 10, 14, 12, 0).astimezone().tzinfo
+
+
+def _plan_ents(now, actions, *, backstop=False, slack=90.0, opts=None):
+    ents = _dump()
+    ents[dc.SUMMARY]["attributes"].update(
+        precharge_backstop_active=backstop, precharge_runway_slack_min=slack
+    )
+    if opts is not None:
+        ents[dc.SUMMARY]["attributes"]["config_options"] = opts
+    ents[dc.PLAN]["attributes"]["decisions"] = [
+        {
+            "timestamp_iso": (now + timedelta(minutes=5 * i)).isoformat(),
+            "slot_interval_minutes": 5,
+            "action": action,
+        }
+        for i, action in enumerate(actions)
+    ]
+    return ents
+
+
+def test_preflight_clear_plan_passes():
+    now = datetime(2026, 10, 14, 11, 2, tzinfo=SYDNEY)
+    assert _failed(dc.preflight(_plan_ents(now, ["hold"] * 12), now)) == []
+
+
+def test_preflight_refuses_a_charge_in_flight_or_within_30_minutes():
+    now = datetime(2026, 10, 14, 11, 2, tzinfo=SYDNEY)
+    soon = ["hold"] * 5 + ["charge_grid_boost"] + ["hold"] * 6
+    assert _failed(dc.preflight(_plan_ents(now, soon), now)) == [
+        "no grid charge within 30 min"
+    ]
+    later = ["hold"] * 7 + ["charge_grid_boost"]
+    assert _failed(dc.preflight(_plan_ents(now, later), now)) == []
+    # The current slot started before now but is still running.
+    running = _plan_ents(now - timedelta(minutes=2), ["charge_grid"] + ["hold"] * 6)
+    assert _failed(dc.preflight(running, now)) == ["no grid charge within 30 min"]
+
+
+def test_preflight_refuses_backstop_and_thin_runway():
+    now = datetime(2026, 10, 14, 13, 0, tzinfo=SYDNEY)
+    ents = _plan_ents(now, ["hold"] * 8, backstop=True, slack=7.0)
+    assert _failed(dc.preflight(ents, now)) == [
+        "backstop not active",
+        "runway slack over 30 min",
+    ]
+
+
+def test_preflight_uses_the_configured_window():
+    opts = {"demand_window_start": "14:55:00", "demand_window_end": "21:00:00"}
+    at = datetime(2026, 10, 14, 14, 56, tzinfo=SYDNEY)
+    assert _failed(dc.preflight(_plan_ents(at, ["hold"] * 8, opts=opts), at)) == [
+        "outside the demand window"
+    ]
+    after = datetime(2026, 10, 14, 21, 5, tzinfo=SYDNEY)
+    assert (
+        _failed(dc.preflight(_plan_ents(after, ["hold"] * 8, opts=opts), after)) == []
+    )
+
+
+def test_preflight_cli_exit_codes(monkeypatch, capsys):
+    now = datetime.now().astimezone()
+    monkeypatch.setattr(dc, "fetch_live_states", lambda: _plan_ents(now, ["hold"] * 12))
+    code = dc.main(["--preflight"])
+    in_dw = "15:00" <= now.strftime("%H:%M") < "21:00"
+    assert code == (1 if in_dw else 0)
+    monkeypatch.setattr(
+        dc, "fetch_live_states", lambda: _plan_ents(now, ["charge_grid_boost"] * 12)
+    )
+    assert dc.main(["--preflight"]) == 1
+    assert "FAIL  no grid charge within 30 min" in capsys.readouterr().out
