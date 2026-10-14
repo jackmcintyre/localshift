@@ -293,7 +293,7 @@ class TestDecisionOutcomeTracker:
             BatteryMode.SELF_CONSUMPTION,
         )
 
-        assert tracker.pending_count == 1
+        assert len(tracker._pending_decisions) == 1
         # record_decision normalises BatteryMode → PlannerAction
         assert (
             tracker._pending_decisions[0].mode_chosen
@@ -311,7 +311,7 @@ class TestDecisionOutcomeTracker:
             BatteryMode.GRID_CHARGING,
             BatteryMode.SELF_CONSUMPTION,
         )
-        assert tracker.pending_count == 1
+        assert len(tracker._pending_decisions) == 1
         assert tracker.completed_count == 0
 
         # Record second decision - should backfill first
@@ -424,7 +424,7 @@ class TestDecisionOutcomeTracker:
 
             await tracker.async_load()
 
-            assert tracker.pending_count == 0
+            assert len(tracker._pending_decisions) == 0
             assert tracker.completed_count == 0
 
     @pytest.mark.asyncio
@@ -468,7 +468,7 @@ class TestDecisionOutcomeTracker:
 
             await tracker.async_load()
 
-            assert tracker.pending_count == 0
+            assert len(tracker._pending_decisions) == 0
             assert tracker.completed_count == 1
             completed = tracker._completed_decisions[0]
             assert completed.duration_minutes == (
@@ -494,7 +494,7 @@ class TestDecisionOutcomeTracker:
             coordinator_data.soc = 60.0
             tracker.backfill_outcomes(coordinator_data)
 
-        assert tracker.pending_count == 0
+        assert len(tracker._pending_decisions) == 0
         assert tracker.completed_count == 1
         completed = tracker._completed_decisions[0]
         assert completed.duration_minutes == (
@@ -514,7 +514,7 @@ class TestDecisionOutcomeTracker:
             now,
         )
 
-        assert tracker.pending_count == 0
+        assert len(tracker._pending_decisions) == 0
         assert tracker.completed_count == 0
 
     def test_backfill_pending_decision_discharge_cost_zero(
@@ -547,7 +547,7 @@ class TestDecisionOutcomeTracker:
             end,
         )
 
-        assert tracker.pending_count == 0
+        assert len(tracker._pending_decisions) == 0
         completed = tracker._completed_decisions[0]
         assert completed.actual_cost_during_period == 0.0
         assert completed.actual_import_kwh == 0.0
