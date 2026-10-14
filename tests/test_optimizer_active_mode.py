@@ -11,7 +11,7 @@ from datetime import datetime
 
 import pytest
 
-from custom_components.localshift.engine.optimizer_dp import (
+from custom_components.localshift.engine.types import (
     ObjectiveTerms,
     OptimizerConfig,
     OptimizerResult,

@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from custom_components.localshift.const import BatteryMode
-from custom_components.localshift.engine.optimizer_dp import (
+from custom_components.localshift.engine.types import (
     ObjectiveTerms,
     OptimizerConfig,
     OptimizerResult,

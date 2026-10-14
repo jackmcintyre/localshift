@@ -21,9 +21,9 @@ from ..const import BatteryMode
 from ..forecast.solar import get_solar_for_slot_by_interval
 from ..forecast.solar_accuracy import SolarAccuracyTracker
 from ..utils.export_availability import export_available_at
-from .optimizer_dp import SlotContext
 from .price_calculator import get_price_for_slot_or_none
 from .slot_schedule import compute_hybrid_slot_schedule, find_current_entry
+from .types import SlotContext
 
 _LOGGER = logging.getLogger(__name__)
 

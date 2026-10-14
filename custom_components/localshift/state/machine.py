@@ -913,16 +913,16 @@ class StateMachine:
         # fingerprint is invalidated, that tick is decision-allowed and the
         # optimizer mode commits instead of staying pinned at MANUAL.
 
-    async def _handle_soc_monitoring(self, data: CoordinatorData) -> bool:
-        """Handle SOC-based charge target enforcement.
+    def _log_soc_target_reached(self, data: CoordinatorData) -> None:
+        """Log that a charging mode has reached the battery target SOC.
 
-        Returns True if a transition was executed and evaluation should return.
+        Log-only: the optimizer, not this check, decides when to leave the mode.
         """
         if self._commanded_mode not in (
             BatteryMode.GRID_CHARGING,
             BatteryMode.BOOST_CHARGING,
         ):
-            return False
+            return
 
         battery_target = float(
             self._get_option(CONF_BATTERY_TARGET, DEFAULT_BATTERY_TARGET)
@@ -939,7 +939,7 @@ class StateMachine:
         if not (
             needs_soc_monitoring and data.soc is not None and data.soc >= battery_target
         ):
-            return False
+            return
 
         # SOC target reached, but we respect optimizer control.
         # Hardware will naturally stop charging when backup reserve is reached.
@@ -950,7 +950,6 @@ class StateMachine:
             battery_target,
             self._commanded_mode.value,
         )
-        return False
 
     def _get_debounce_duration(
         self, desired: BatteryMode, data: CoordinatorData | None = None
@@ -1262,8 +1261,7 @@ class StateMachine:
         self._pending_retry_mode = None
         self._skip_next_debounce = False
 
-        if await self._handle_soc_monitoring(data):
-            return
+        self._log_soc_target_reached(data)
 
         if not self._get_switch_state("dry_run"):
             if await self._abandon_inverted_export(data):

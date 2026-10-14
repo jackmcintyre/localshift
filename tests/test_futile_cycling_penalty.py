@@ -21,8 +21,8 @@ from custom_components.localshift.engine.penalties import (
     cheap_recovery_charge_relief,
     get_futile_cycling_penalty_factor,
 )
-from custom_components.localshift.engine.optimizer_dp import (
-    DPPlanner,
+from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.types import (
     ObjectiveTerms,
     OptimizerConfig,
     OptimizerInputs,
@@ -295,7 +295,7 @@ class TestStageCostFutilePenalty:
 
     def test_zero_factor_gives_zero_penalty(self, default_config):
         """With factor=0, futile_cycling_penalty in ObjectiveTerms should be 0."""
-        from custom_components.localshift.engine.optimizer_dp import DPPlanner
+        from custom_components.localshift.engine.core import DPPlanner
 
         slot = self._make_charge_slot()
         terms = stage_cost(
@@ -311,7 +311,7 @@ class TestStageCostFutilePenalty:
 
     def test_nonzero_factor_gives_positive_penalty(self, default_config):
         """With factor=1.0, penalty equals (eff_loss + margin) × import cost of wasted energy."""
-        from custom_components.localshift.engine.optimizer_dp import DPPlanner
+        from custom_components.localshift.engine.core import DPPlanner
 
         slot = self._make_charge_slot()
         grid_import = 1.65  # kWh
@@ -336,7 +336,7 @@ class TestStageCostFutilePenalty:
 
     def test_penalty_scales_with_factor(self, default_config):
         """futile_cycling_penalty scales linearly with the factor."""
-        from custom_components.localshift.engine.optimizer_dp import DPPlanner
+        from custom_components.localshift.engine.core import DPPlanner
 
         slot = self._make_charge_slot()
         terms_half = stage_cost(
@@ -363,7 +363,7 @@ class TestStageCostFutilePenalty:
 
     def test_hold_action_never_gets_penalty(self, default_config):
         """HOLD action must never receive a futile_cycling_penalty."""
-        from custom_components.localshift.engine.optimizer_dp import DPPlanner
+        from custom_components.localshift.engine.core import DPPlanner
 
         slot = self._make_charge_slot()
         terms = stage_cost(
@@ -379,7 +379,7 @@ class TestStageCostFutilePenalty:
 
     def test_penalty_included_in_net_cost(self, default_config):
         """futile_cycling_penalty must increase net_cost."""
-        from custom_components.localshift.engine.optimizer_dp import DPPlanner
+        from custom_components.localshift.engine.core import DPPlanner
 
         slot = self._make_charge_slot()
         terms_no_penalty = stage_cost(
@@ -417,7 +417,7 @@ class TestSCDiscountNearFloor:
 
     def test_sc_full_credit_at_high_soc_no_solar(self, default_config):
         """At SOC well above floor (e.g. 60%) with no solar, SC value is present."""
-        from custom_components.localshift.engine.optimizer_dp import DPPlanner
+        from custom_components.localshift.engine.core import DPPlanner
 
         slot = make_slot(0, 2, 0, solar_kwh=0.0, consumption_kwh=0.25, buy_price=0.14)
         terms = stage_cost(
@@ -434,7 +434,7 @@ class TestSCDiscountNearFloor:
 
     def test_sc_zero_at_soc_floor_no_solar(self, default_config):
         """At SOC = min_soc (10%) with no solar, SC value is 0 — physically unavailable."""
-        from custom_components.localshift.engine.optimizer_dp import DPPlanner
+        from custom_components.localshift.engine.core import DPPlanner
 
         slot = make_slot(0, 2, 0, solar_kwh=0.0, consumption_kwh=0.25, buy_price=0.14)
         terms = stage_cost(
@@ -451,7 +451,7 @@ class TestSCDiscountNearFloor:
 
     def test_sc_scales_with_available_soc(self, default_config):
         """SC value scales naturally with available battery energy, no artificial discount."""
-        from custom_components.localshift.engine.optimizer_dp import DPPlanner
+        from custom_components.localshift.engine.core import DPPlanner
 
         # Use a large consumption so battery capacity is the binding constraint,
         # not the load amount. At SOC=15% (floor+5pp) available ≈ 0.641 kWh;
@@ -484,7 +484,7 @@ class TestSCDiscountNearFloor:
 
     def test_sc_no_artificial_discount_at_mid_soc(self, default_config):
         """SC credit at mid-SOC equals battery_for_load * buy_price."""
-        from custom_components.localshift.engine.optimizer_dp import DPPlanner
+        from custom_components.localshift.engine.core import DPPlanner
 
         # At SOC=25% (floor+15pp), available battery is 15/90 of capacity ≈ 0.675 kWh
         # Consumption = 0.25 kWh — battery can cover it fully

@@ -22,10 +22,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from .optimizer_dp import (
-    OptimizerConfig,
-    OptimizerResult,
-)
+from .types import OptimizerConfig, OptimizerResult
 
 _LOGGER = logging.getLogger(__name__)
 

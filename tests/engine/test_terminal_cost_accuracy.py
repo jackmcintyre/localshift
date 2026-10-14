@@ -281,7 +281,7 @@ class TestOptimizerResultDiagnosticFields:
 
     def test_diagnostic_fields_default_to_none(self):
         """New diagnostic fields should default to None."""
-        from custom_components.localshift.engine.optimizer_dp import OptimizerResult
+        from custom_components.localshift.engine.types import OptimizerResult
 
         result = OptimizerResult(success=True, total_slots=3)
         # After Issue #816: simplified diagnostics
@@ -379,7 +379,7 @@ class TestProjectedSolcastGainWithConfidence:
 
     def test_diagnostic_fields_set_explicitly(self):
         """Diagnostic fields can be set via constructor."""
-        from custom_components.localshift.engine.optimizer_dp import OptimizerResult
+        from custom_components.localshift.engine.types import OptimizerResult
 
         result = OptimizerResult(
             success=True,
