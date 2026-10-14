@@ -2709,7 +2709,7 @@ class TestDecisionFingerprint:
         # decision context: buy|sell|spike|dw_active|soc_floor_breached, plus the
         # plan-charge epoch (2026-07-27 pre-charge incident — the plan is itself a
         # decision input; the epoch is 0 until a wanted charge is starved).
-        assert fp1 == "0.2500|0.0800|False|False|False|0|0"
+        assert fp1 == "0.2500|0.0800|False|False|False|0|0|0"
 
 
 class TestModeTransitionGating:
@@ -3394,14 +3394,14 @@ class TestDecisionTokenUsesFingerprintMethod:
         coordinator_data.active_mode = BatteryMode.SELF_CONSUMPTION
         coordinator_data.soc = 50.0
         state_machine._apply_decision_token(coordinator_data)
-        assert state_machine._last_evaluated_fingerprint.endswith("|0|0")
+        assert state_machine._last_evaluated_fingerprint.endswith("|0|0|0")
 
         # Same prices, and the plan now wants to start charging.
         coordinator_data.debug_plan_mode_pending = BatteryMode.GRID_CHARGING.value
         state_machine._apply_decision_token(coordinator_data)
 
         assert state_machine._plan_charge_epoch == 1
-        assert state_machine._last_evaluated_fingerprint.endswith("|1|0")
+        assert state_machine._last_evaluated_fingerprint.endswith("|1|0|0")
         assert coordinator_data.mode_decision_allowed is True
         assert coordinator_data.mode_decision_plan_charge_only is True
 

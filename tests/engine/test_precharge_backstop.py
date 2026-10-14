@@ -37,7 +37,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.util import dt as dt_util
@@ -54,6 +54,7 @@ from custom_components.localshift.engine.optimizer_facade import (
     OptimizerFacade,
 )
 from custom_components.localshift.engine.types import OptimizerConfig, OptimizerResult
+from custom_components.localshift.state.machine import StateMachine
 
 # The 14:30 line of the evidence pack: SOC 62.2%, price 11.6 c, plan projects a 72.6%
 # DW entry against a 95% target, and the DP has a pre-DW grid charge at slot 4.
@@ -1381,6 +1382,7 @@ def _commit_charge_data(
     data.active_mode = BatteryMode.GRID_CHARGING
     data.decision_mode = BatteryMode.GRID_CHARGING
     data.decision_timestamp = committed_at
+    data.charge_dwell_started_at = committed_at
     return data
 
 
@@ -1633,6 +1635,246 @@ class TestChargeCommitDwell:
 
         assert data.active_mode == BatteryMode.BOOST_CHARGING
         assert data.debug_mode_source == "runway_backstop"
+
+    @pytest.mark.parametrize(
+        ("plan_mode", "price_spike", "export_start_only"),
+        [
+            (BatteryMode.SPIKE_DISCHARGE, False, False),
+            (BatteryMode.PROACTIVE_EXPORT, False, False),
+            # The #1119 export-start grant must start the export, not be held.
+            (BatteryMode.PROACTIVE_EXPORT, False, True),
+            (BatteryMode.SELF_CONSUMPTION, True, False),
+        ],
+    )
+    def test_spike_and_export_releases_are_exempt(
+        self,
+        plan_mode: BatteryMode,
+        price_spike: bool,
+        export_start_only: bool,
+    ) -> None:
+        """#1159: the dwell never holds a charge against a spike response."""
+        facade = OptimizerFacade()
+        data = _commit_charge_data(
+            _data(
+                mode_backstop_allowed=False,
+                mode_decision_allowed=True,
+                mode_decision_export_start_only=export_start_only,
+                price_spike=price_spike,
+            ),
+            dt_util.now() - timedelta(minutes=1),
+        )
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        self._run_for_commit_dwell(facade, data, config, plan_mode)
+
+        assert data.active_mode == plan_mode
+        assert data.debug_plan_mode_pending is None
+        assert data.charge_dwell_release_due is None
+
+    @pytest.mark.parametrize(
+        ("committed_at", "overrides", "reason"),
+        [
+            (None, {}, "no dwell clock"),
+            (datetime.now(), {}, "naive/aware timestamp mismatch"),
+            ("recent", {"demand_window_active": True}, "demand window active"),
+            ("recent", {"price_spike": True}, "price spike active"),
+        ],
+    )
+    def test_fail_open_declines_are_logged_with_the_reason(
+        self, caplog, committed_at: Any, overrides: dict[str, Any], reason: str
+    ) -> None:
+        """#1159: every unheld release says why, so a live log can tell a
+        restart from a missing clock from an exemption."""
+        if committed_at == "recent":
+            committed_at = dt_util.now() - timedelta(minutes=1)
+        facade = OptimizerFacade()
+        data = _commit_charge_data(
+            _data(mode_backstop_allowed=False, mode_decision_allowed=True, **overrides),
+            committed_at,
+        )
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        with caplog.at_level("INFO"):
+            self._run_for_commit_dwell(
+                facade, data, config, BatteryMode.SELF_CONSUMPTION
+            )
+
+        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
+        assert any(
+            "Charge dwell: allowing release" in r.getMessage()
+            and reason in r.getMessage()
+            and r.levelname == "INFO"
+            for r in caplog.records
+        )
+
+
+class _DwellRig:
+    """The real in-lock evaluation around the real facade commit path (#1159).
+
+    ``StateMachine.evaluate_state_machine`` decides the token, runs the facade
+    through a stub computation engine and closes the token in its finally
+    block, so "granted", "frozen" and "out of lock" are computed, not asserted.
+    Prices never move unless a test moves them. Only the hardware transition
+    (``_evaluate_core``) is stubbed out.
+    """
+
+    def __init__(self, committed_at_min: float | None = 0.0) -> None:
+        self.t0 = dt_util.now()
+        self.facade = OptimizerFacade()
+        self.machine = StateMachine(
+            MagicMock(),
+            MagicMock(),
+            lambda key: False,
+            lambda key, default=None: default,
+            MagicMock(),
+        )
+        self.machine._evaluate_core = AsyncMock()
+        # No pre-DW charge in the plan: the #901 backstop stays out of the way.
+        self.data = _data(optimizer_decisions=[])
+        self.data.feed_in_price = 0.05
+        if committed_at_min is not None:
+            _commit_charge_data(
+                self.data, self.t0 + timedelta(minutes=committed_at_min)
+            )
+        self.config = _dwell_config(precharge_runway_quantum_min=5.0)
+        self.plan = BatteryMode.SELF_CONSUMPTION
+        self.engine = MagicMock()
+        self.engine.compute_derived_values.side_effect = lambda data: (
+            TestChargeCommitDwell._run_for_commit_dwell(
+                self.facade, data, self.config, self.plan
+            )
+        )
+
+    async def evaluate(
+        self, minutes: float, plan: BatteryMode, in_lock: bool = True
+    ) -> None:
+        self.plan = plan
+        with patch.object(
+            dt_util, "now", return_value=self.t0 + timedelta(minutes=minutes)
+        ):
+            if in_lock:
+                await self.machine.evaluate_state_machine(self.data, self.engine)
+            else:
+                # coordinator.async_recompute_and_evaluate's out-of-lock recompute
+                self.engine.compute_derived_values(self.data)
+
+
+class TestChargeDwellReGrant:
+    """#1159: the dwell's clock survives the transition, and its hold is re-granted.
+
+    The dwell read ``decision_timestamp``, which lag tracking clears once the
+    transition completes, so it failed open seconds after every real commit
+    (live 2026-10-13: released 56 s after commit; 2026-10-14: 3 min 55 s). With
+    its own clock it holds, and the hold spends that evaluation's token, so the
+    state machine re-grants one, scoped to the held release, when the band ends.
+    """
+
+    SC = BatteryMode.SELF_CONSUMPTION
+    GRID = BatteryMode.GRID_CHARGING
+    BAND = PRECHARGE_RUNWAY_HYSTERESIS_MIN
+
+    async def test_release_held_after_a_real_transition_completes(self) -> None:
+        """Commit, transition lag recorded, then the next grant wants a release."""
+        rig = _DwellRig(committed_at_min=None)
+        await rig.evaluate(0.0, BatteryMode.BOOST_CHARGING)  # first token: commit
+        assert rig.data.active_mode == BatteryMode.BOOST_CHARGING
+        with patch.object(dt_util, "now", return_value=rig.t0 + timedelta(seconds=13)):
+            rig.machine._record_transition_metrics(
+                rig.data, BatteryMode.BOOST_CHARGING, dry_run=False
+            )
+        assert rig.data.decision_timestamp is None  # lag tracking done with it
+
+        rig.data.general_price = 0.409  # 11:30 confirmed dearer: a fresh token
+        await rig.evaluate(0.93, self.SC)
+
+        assert rig.data.active_mode == BatteryMode.BOOST_CHARGING
+        assert rig.data.debug_plan_mode_pending == self.SC.value
+
+    async def test_held_release_commits_on_the_first_evaluation_after_the_band(
+        self,
+    ) -> None:
+        rig = _DwellRig()
+        await rig.evaluate(1.0, self.SC)  # first token: granted, and held
+        assert rig.data.active_mode == self.GRID
+        for minute in (2.0, 5.0, self.BAND - 0.1):  # flat prices: frozen, held
+            await rig.evaluate(minute, self.SC)
+            assert rig.data.active_mode == self.GRID
+
+        await rig.evaluate(self.BAND + 0.1, self.SC)
+
+        assert rig.data.active_mode == self.SC
+        assert rig.data.debug_plan_mode_pending is None
+        assert rig.machine._last_grant_source == "charge_dwell"
+
+    @pytest.mark.parametrize("flicker_in_lock", [True, False])
+    async def test_sawtooth_flicker_does_not_strand_the_release(
+        self, flicker_in_lock: bool
+    ) -> None:
+        rig = _DwellRig()
+        await rig.evaluate(1.0, self.SC)  # granted, held
+        await rig.evaluate(2.0, self.GRID, in_lock=flicker_in_lock)
+        await rig.evaluate(3.0, self.SC)
+        assert rig.data.active_mode == self.GRID  # inside the band
+
+        await rig.evaluate(self.BAND + 1.0, self.SC)
+
+        assert rig.data.active_mode == self.SC
+
+    async def test_flicker_on_the_re_granted_evaluation_keeps_the_release(
+        self,
+    ) -> None:
+        """The plan flickers back to charge on the very evaluation the band's
+        grant lands on: nothing commits, and the release lands the next time the
+        plan wants it, still without a price change."""
+        rig = _DwellRig()
+        await rig.evaluate(1.0, self.SC)  # granted, held
+        await rig.evaluate(5.0, self.SC)  # frozen; pending release
+        await rig.evaluate(self.BAND + 1.0, self.GRID)  # re-granted, plan charges
+        assert rig.data.active_mode == self.GRID
+        await rig.evaluate(self.BAND + 2.0, self.SC)  # frozen; pending release
+
+        await rig.evaluate(self.BAND + 3.0, self.SC)
+
+        assert rig.data.active_mode == self.SC
+        assert rig.machine._charge_dwell_epoch == 2  # one grant per release wish
+
+    @pytest.mark.parametrize(
+        "drift", [BatteryMode.PROACTIVE_EXPORT, BatteryMode.SPIKE_DISCHARGE]
+    )
+    async def test_frozen_drift_to_an_exempt_mode_never_commits(
+        self, drift: BatteryMode
+    ) -> None:
+        """The token held an ordinary release, not an export or a discharge."""
+        rig = _DwellRig()
+        await rig.evaluate(1.0, self.SC)  # granted, held
+        for minute in (2.0, self.BAND + 1.0, self.BAND + 2.0):
+            await rig.evaluate(minute, drift)
+            assert rig.data.active_mode == self.GRID
+        assert rig.machine._charge_dwell_epoch == 0  # never re-granted
+
+    async def test_out_of_lock_recompute_never_commits_the_held_release(
+        self,
+    ) -> None:
+        rig = _DwellRig()
+        await rig.evaluate(1.0, self.SC)  # granted, held
+        await rig.evaluate(self.BAND + 1.0, self.SC, in_lock=False)
+
+        assert rig.data.active_mode == self.GRID
+        assert rig.data.charge_dwell_release_due is None
+
+    async def test_a_hold_a_fresh_token_lapsed_is_not_re_granted(self) -> None:
+        """Hold, then a granted evaluation that wants to keep charging: that
+        fresh decision ends the hold, and a later release wish waits for its
+        own token."""
+        rig = _DwellRig()
+        await rig.evaluate(1.0, self.SC)  # granted, held
+        rig.data.feed_in_price = 0.06  # a new price context
+        await rig.evaluate(3.0, self.GRID)
+        await rig.evaluate(4.0, self.SC)
+
+        await rig.evaluate(30.0, self.SC)  # same prices: frozen
+
+        assert rig.data.active_mode == self.GRID
 
 
 class TestRunwayBackstopLogsOncePerHold:

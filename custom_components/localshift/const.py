@@ -44,6 +44,10 @@ class BatteryMode(StrEnum):
         return names[self]
 
 
+# Issue #1159: charge releases the charge dwell never holds (nor re-grants): a
+# spike response must not wait out a band, nor an export start (#1119) be spent.
+DWELL_EXEMPT_RELEASES = (BatteryMode.PROACTIVE_EXPORT, BatteryMode.SPIKE_DISCHARGE)
+
 # Teslemetry export modes (select.allow_export options)
 TESLEMETRY_EXPORT_PV_ONLY = "pv_only"
 TESLEMETRY_EXPORT_BATTERY_OK = "battery_ok"

@@ -445,6 +445,14 @@ class CoordinatorData:
     decision_mode: BatteryMode | None = None
     """The mode that was decided (for lag tracking)."""
 
+    charge_dwell_started_at: datetime | None = None
+    """When the optimizer last committed a charge mode, else None: the charge
+    dwell's clock, since decision_timestamp is cleared seconds later (#1159)."""
+
+    charge_dwell_release_due: datetime | None = None
+    """When the band of a release the dwell just held ends. Facade to state
+    machine, read and cleared in-lock by ``_note_charge_dwell_hold`` (#1159)."""
+
     command_completion_timestamp: datetime | None = None
     """Issue #508 phase 1: when the last control entity command completed."""
 
@@ -497,8 +505,8 @@ class CoordinatorData:
     construction; that is a correction, not a mode change.
 
     grant_source (#941) is `price` | `spike` | `demand_window` | `soc_floor`
-    | `plan_charge` | `price_confirmed` | `debounce` | `retry` | `backstop`
-    | `unknown`.
+    | `plan_charge` | `price_confirmed` | `charge_dwell` | `debounce` | `retry`
+    | `backstop` | `unknown`.
     `debounce` and `retry` mark a transition that did NOT land on a fresh
     decision token — a debounce completing after its wait, or a retry of a
     command the controller rejected or the entity validator blocked — and
@@ -547,6 +555,10 @@ class CoordinatorData:
 
     Such a grant may only commit PROACTIVE_EXPORT, for the same reason a
     plan-charge grant may only commit a charge mode. Transient; not persisted."""
+
+    mode_decision_charge_release_only: bool = False
+    """Granted solely because a release the charge dwell held has outlived its
+    band (#1159): may commit only that release. Transient; not persisted."""
 
     mode_backstop_allowed: bool = False
     """Transient in-lock permission for the pre-charge execution backstop. Opened by
