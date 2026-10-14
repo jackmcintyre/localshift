@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, Any
 # const.py is dependency-free (stdlib only) and imports nothing from the engine, so this
 # cannot cycle. Imported so the runway-margin dataclass default and the live number
 # entity's default are literally the same object rather than two literals that drift.
-from ..const import DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN, EXPORT_FLOOR_LOAD_MARGIN
+from ..const import (
+    CHARGE_EFFICIENCY,
+    DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
+    DISCHARGE_EFFICIENCY,
+    EXPORT_FLOOR_LOAD_MARGIN,
+)
 
 if TYPE_CHECKING:
     from custom_components.localshift.forecast.solar_accuracy import (
@@ -182,10 +187,10 @@ class OptimizerConfig:
     discharge_rate_kw: float = 5.0
     """Maximum battery discharge rate in kW."""
 
-    charge_efficiency: float = 0.92
+    charge_efficiency: float = CHARGE_EFFICIENCY
     """Charging efficiency (energy lost going into battery)."""
 
-    discharge_efficiency: float = 0.95
+    discharge_efficiency: float = DISCHARGE_EFFICIENCY
     """Round-trip discharging efficiency (0–1)."""
 
     min_soc_pct: float = 10.0

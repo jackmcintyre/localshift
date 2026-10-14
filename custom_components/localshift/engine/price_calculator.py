@@ -11,6 +11,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BATTERY_CAPACITY_KWH,
+    CHARGE_EFFICIENCY,
     CHARGE_RATE_GRID_KW,
     CONF_CHEAP_PRICE_PERCENTILE,
     CONF_MAX_PRECHARGE_PRICE,
@@ -306,7 +307,7 @@ class PriceCalculator:
             target_pct,
             BATTERY_CAPACITY_KWH,
             CHARGE_RATE_GRID_KW,
-            0.92,
+            CHARGE_EFFICIENCY,
         )
         # Shared with the optimizer's per-slot pre-DW thresholds
         # (constraints.compute_pre_dw_charge_thresholds) so the live "now" threshold and
