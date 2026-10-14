@@ -214,9 +214,6 @@ class OptimizerConfig:
     allow_dw_entry_under_target: bool = False
     """If True, allow reaching target during DW via solar (instead of by DW start)."""
 
-    stale_solar_conservative: bool = True
-    """If True, cap confidence when Solcast data is stale or absent."""
-
     solar_forecast_accuracy: float = 1.0
     """Forecast accuracy (0-1) used to discount projected solar in the pre-charge
     feasibility gate (``check_global_solar_sufficiency``).
