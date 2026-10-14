@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.localshift.engine.optimizer_dp import (
-    DPPlanner,
+from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.types import (
     OptimizerConfig,
     OptimizerInputs,
     PlannerAction,
@@ -129,9 +129,7 @@ def test_dp_planner_applies_switching_penalty():
 
 def test_objective_terms_includes_switching_penalty():
     """Test that ObjectiveTerms serializes switching_penalty correctly."""
-    from custom_components.localshift.engine.optimizer_dp import (
-        ObjectiveTerms,
-    )
+    from custom_components.localshift.engine.types import ObjectiveTerms
 
     terms = ObjectiveTerms(import_cost=0.10, switching_penalty=0.05)
     assert terms.net_cost == pytest.approx(0.15)

@@ -216,9 +216,7 @@ class TestBuildSummary:
 
     def test_includes_parity_completeness(self, mock_coordinator_data):
         """Verify parity_completeness_pct included in summary."""
-        from custom_components.localshift.engine.optimizer_dp import (
-            OptimizerResult,
-        )
+        from custom_components.localshift.engine.types import OptimizerResult
 
         result = OptimizerResult(success=True, total_slots=3)
         parity_info = {"completeness_pct": 95.0, "defaulted_fields": {}}
@@ -231,9 +229,7 @@ class TestBuildSummary:
 
     def test_includes_alignment_results(self, mock_coordinator_data):
         """Verify alignment results included in summary."""
-        from custom_components.localshift.engine.optimizer_dp import (
-            OptimizerResult,
-        )
+        from custom_components.localshift.engine.types import OptimizerResult
 
         result = OptimizerResult(success=True, total_slots=3)
         alignment = {"valid": True, "issues": [], "warnings": ["test_warning"]}
@@ -247,9 +243,7 @@ class TestBuildSummary:
 
     def test_includes_alignment_issues(self, mock_coordinator_data):
         """Verify alignment issues included when present."""
-        from custom_components.localshift.engine.optimizer_dp import (
-            OptimizerResult,
-        )
+        from custom_components.localshift.engine.types import OptimizerResult
 
         result = OptimizerResult(success=True, total_slots=3)
         alignment = {"valid": False, "issues": ["test_issue"], "warnings": []}
@@ -264,9 +258,7 @@ class TestBuildSummary:
         self, mock_coordinator_data
     ):
         """Verify summary exposes cycle timestamp under computed_at for sensors."""
-        from custom_components.localshift.engine.optimizer_dp import (
-            OptimizerResult,
-        )
+        from custom_components.localshift.engine.types import OptimizerResult
 
         result = OptimizerResult(success=True, total_slots=3)
         summary = _build_summary(
@@ -280,7 +272,7 @@ class TestBuildSummary:
 
     def test_includes_terminal_diagnostics(self, mock_coordinator_data):
         """Verify terminal diagnostic fields included in summary."""
-        from custom_components.localshift.engine.optimizer_dp import OptimizerResult
+        from custom_components.localshift.engine.types import OptimizerResult
 
         result = OptimizerResult(
             success=True,
@@ -299,7 +291,7 @@ class TestBuildSummary:
 
     def test_terminal_diagnostics_none_when_not_set(self, mock_coordinator_data):
         """Verify None diagnostics pass through as None."""
-        from custom_components.localshift.engine.optimizer_dp import OptimizerResult
+        from custom_components.localshift.engine.types import OptimizerResult
 
         result = OptimizerResult(success=True, total_slots=3)
         summary = _build_summary(result, "cycle123", "2025-01-15T06:00:00Z")

@@ -20,10 +20,8 @@ from custom_components.localshift.engine.export_floor import (
     apply_export_floor,
     compute_export_floor_pct_by_slot,
 )
-from custom_components.localshift.engine.optimizer_dp import (
-    DPPlanner,
-    OptimizerInputs,
-)
+from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.types import OptimizerInputs
 from custom_components.localshift.engine.transitions import _transition_export
 from custom_components.localshift.engine.types import (
     OptimizerConfig,

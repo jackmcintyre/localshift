@@ -17,10 +17,8 @@ import pytest
 
 from custom_components.localshift.engine.constraints import feasible_actions
 from custom_components.localshift.engine.core import _floor_guard_blocks
-from custom_components.localshift.engine.optimizer_dp import (
-    DPPlanner,
-    OptimizerInputs,
-)
+from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.types import OptimizerInputs
 from custom_components.localshift.engine.optimizer_runner import (
     _build_optimizer_config,
 )

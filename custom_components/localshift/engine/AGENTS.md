@@ -19,7 +19,6 @@ terminal_cost()    → What MUST I achieve? (deadline)
 | `cost.py` | `stage_cost()` and `terminal_cost()` |
 | `transitions.py` | `transition()`, the SOC and grid-flow model for one slot |
 | `types.py` | `OptimizerConfig`, `SlotContext`, `ObjectiveTerms` and the other planner types |
-| `optimizer_dp.py` | Backward-compatibility shim that re-exports the modules above. Import from them directly in new code |
 | `slots.py` | `SlotBuilder`: turns raw coordinator data into `SlotContext` objects |
 | `slot_schedule.py` | Hybrid 5-minute / 30-minute slot schedule built from the price forecast |
 | `price_calculator.py` | Price and feed-in calculation helpers for the computation engine |

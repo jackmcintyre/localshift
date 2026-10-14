@@ -3,8 +3,8 @@
 Issue #624: Terminal cost penalty too weak - optimizer accepts shortfall instead of charging.
 """
 
-from custom_components.localshift.engine.optimizer_dp import (
-    DPPlanner,
+from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.types import (
     OptimizerConfig,
     OptimizerInputs,
     PlannerAction,

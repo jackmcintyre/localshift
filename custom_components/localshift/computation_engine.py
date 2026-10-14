@@ -73,8 +73,8 @@ from .engine import (
     parse_forecast_dt,
     percentile,
 )
+from .engine.core import DPPlanner
 from .engine.excess_solar import ExcessSolarEngine
-from .engine.optimizer_dp import DPPlanner
 from .engine.optimizer_facade import (
     PRECHARGE_BACKSTOP_SHORTFALL_PCT,
     OptimizerFacade,

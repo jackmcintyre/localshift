@@ -26,7 +26,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import BATTERY_CAPACITY_KWH, BatteryMode
 from ..coordinator.data import PerformanceMetrics
-from .optimizer_dp import PlannerAction
+from .types import PlannerAction
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant

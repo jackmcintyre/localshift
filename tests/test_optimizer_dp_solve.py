@@ -19,8 +19,13 @@ from custom_components.localshift.engine.cost import stage_cost
 from custom_components.localshift.engine.negative_fit import (
     assess_negative_fit_avoidance,
 )
-from custom_components.localshift.engine.optimizer_dp import (
-    DPPlanner,
+from custom_components.localshift.engine.core import DPPlanner
+from custom_components.localshift.engine.dp_math import (
+    _build_soc_grid,
+    _map_soc_to_bin,
+    _simulate_max_soc_in_demand_window,
+)
+from custom_components.localshift.engine.types import (
     ObjectiveTerms,
     OptimizerConfig,
     OptimizerInputs,
@@ -29,9 +34,6 @@ from custom_components.localshift.engine.optimizer_dp import (
     PlannerAction,
     PlannerReasonCode,
     SlotContext,
-    _build_soc_grid,
-    _map_soc_to_bin,
-    _simulate_max_soc_in_demand_window,
 )
 from custom_components.localshift.engine.penalties import (
     get_futile_cycling_penalty_factor,
@@ -2436,9 +2438,7 @@ def test_terminal_shortfall_cross_day_uses_first_dw_only():
 
 def test_interpolate_cost_to_soc_empty_inputs():
     """Line 536-537: Empty soc_grid or cost_table returns inf."""
-    from custom_components.localshift.engine.optimizer_dp import (
-        _interpolate_cost_to_soc,
-    )
+    from custom_components.localshift.engine.dp_math import _interpolate_cost_to_soc
 
     soc_grid = [0.0, 50.0, 100.0]
     cost_table = {0: 1.0, 1: 0.5, 2: 0.0}
@@ -2449,9 +2449,7 @@ def test_interpolate_cost_to_soc_empty_inputs():
 
 def test_interpolate_cost_to_soc_below_grid():
     """Line 545-547: SOC below all grid points uses lowest bin."""
-    from custom_components.localshift.engine.optimizer_dp import (
-        _interpolate_cost_to_soc,
-    )
+    from custom_components.localshift.engine.dp_math import _interpolate_cost_to_soc
 
     soc_grid = [20.0, 50.0, 80.0]
     cost_table = {0: 1.0, 1: 0.5, 2: 0.0}
@@ -2462,9 +2460,7 @@ def test_interpolate_cost_to_soc_below_grid():
 
 def test_interpolate_cost_to_soc_above_grid():
     """Line 554-556: SOC above all grid points uses highest bin."""
-    from custom_components.localshift.engine.optimizer_dp import (
-        _interpolate_cost_to_soc,
-    )
+    from custom_components.localshift.engine.dp_math import _interpolate_cost_to_soc
 
     soc_grid = [20.0, 50.0, 80.0]
     cost_table = {0: 1.0, 1: 0.5, 2: 0.0}
@@ -2475,9 +2471,7 @@ def test_interpolate_cost_to_soc_above_grid():
 
 def test_interpolate_cost_to_soc_linear():
     """Line 570-571: Linear interpolation between bins."""
-    from custom_components.localshift.engine.optimizer_dp import (
-        _interpolate_cost_to_soc,
-    )
+    from custom_components.localshift.engine.dp_math import _interpolate_cost_to_soc
 
     soc_grid = [0.0, 50.0, 100.0]
     cost_table = {0: 1.0, 1: 0.5, 2: 0.0}
@@ -2718,7 +2712,7 @@ def test_stage_cost_uncertainty_penalty():
 
 def test_simulate_max_soc_with_demand_bounds():
     """Lines 2333-2339: Simulate with demand_bounds entry/end indices."""
-    from custom_components.localshift.engine.optimizer_dp import (
+    from custom_components.localshift.engine.dp_math import (
         _simulate_max_soc_in_demand_window,
     )
 
