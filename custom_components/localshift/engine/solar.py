@@ -44,11 +44,12 @@ def can_solar_reach_target_feasible(
     config: OptimizerConfig,
     terminal_penalty_idx: int | None,
 ) -> bool:
-    """Check if solar alone can reach target at terminal penalty index.
+    """Check if solar alone can reach target on entering the terminal penalty slot.
 
     This function checks pure solar feasibility without the allow_dw_entry_under_target
-    gate. It returns True if solar alone can reach the target SOC at the terminal
-    penalty index (typically DW entry).
+    gate. It returns True if solar alone can reach the target SOC entering the
+    terminal penalty slot (typically DW entry). Like ``check_global_solar_sufficiency``
+    since #1141, the entry slot's own solar does not count (#1185).
 
     Args:
         inputs: Optimizer inputs
@@ -57,7 +58,7 @@ def can_solar_reach_target_feasible(
         terminal_penalty_idx: Terminal penalty index (typically DW entry)
 
     Returns:
-        True if solar alone can reach target at terminal penalty index
+        True if solar alone can reach target entering the terminal penalty slot
     """
     from custom_components.localshift.engine.dp_math import (
         _simulate_solar_only_terminal_soc,
@@ -65,8 +66,8 @@ def can_solar_reach_target_feasible(
 
     terminal_soc = _simulate_solar_only_terminal_soc(
         initial_soc_pct=inputs.initial_soc_pct,
-        slots=slots,
-        terminal_penalty_idx=terminal_penalty_idx,
+        slots=slots if terminal_penalty_idx is None else slots[:terminal_penalty_idx],
+        terminal_penalty_idx=None,
         config=config,
     )
     return terminal_soc >= config.demand_window_target_soc_pct

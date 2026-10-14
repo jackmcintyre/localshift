@@ -188,6 +188,23 @@ class TestComputePreDwChargeThresholds:
         # min-cycle-saving exemption must not widen beyond the urgency window.
         assert config.pre_dw_funding_water_level is None
 
+    def test_entry_slot_own_solar_does_not_shrink_required_charge(self):
+        """Issue #1185: size the deficit on the SOC ENTERING the window.
+
+        From 92%, four pre-window slots of 0.25 kWh load drain to ~84.2% entering the
+        window. The entry slot's own solar (2.0 kWh, ~11.9 points) would lift a
+        through-the-slot simulation past 95% and zero the required charge, leaving no
+        water level, so the target funding fell to the urgency ramp's last slot
+        instead of the cheapest one. Entering the window the deficit is ~1.5 kWh,
+        which the cheapest pre-window slot ($0.10) covers.
+        """
+        slots = _slots([0.10, 0.12, 0.12, 0.12], [0.30] * 2)
+        slots[4].solar_kwh = 2.0
+        config = _config(solar_forecast_accuracy=1.0)
+        thresholds = compute_pre_dw_charge_thresholds(slots, config, 4, 92.0)
+        assert thresholds is not None
+        assert config.pre_dw_funding_water_level == 0.10
+
 
 class TestGateIntegration:
     """The thresholds actually unlock charge actions in feasible_actions."""

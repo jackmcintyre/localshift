@@ -486,16 +486,16 @@ def _required_stored_kwh_to_target(
 
     Expected SOC at DW entry on solar alone, discounting only the positive gain by
     forecast accuracy (the raw-vs-discounted asymmetry behind the 2026-06-09
-    undercharge / #816). Unlike ``check_global_solar_sufficiency`` since #1141, this
-    still simulates through the entry slot and so credits that slot's own solar;
-    #1185 tracks aligning it.
+    undercharge / #816). Like ``check_global_solar_sufficiency`` since #1141, it
+    measures the SOC entering the entry slot, so that slot's own solar does not
+    count (#1185).
     """
     from custom_components.localshift.engine.dp_math import (
         _simulate_solar_only_terminal_soc,
     )
 
     sim_soc = _simulate_solar_only_terminal_soc(
-        initial_soc_pct, slots, terminal_penalty_idx, config
+        initial_soc_pct, slots[:terminal_penalty_idx], None, config
     )
     accuracy = max(0.0, min(1.0, config.solar_forecast_accuracy))
     if sim_soc >= initial_soc_pct:
@@ -745,8 +745,8 @@ def check_global_solar_sufficiency(
     Uses realistic simulation that accounts for charge rate limits and efficiency.
     Since #1141 it judges the SOC entering the window, so the entry slot's own
     solar does not count. ``can_solar_reach_target_feasible`` (the
-    solar_can_reach_target sensor) and ``_required_stored_kwh_to_target`` still
-    simulate through the entry slot; #1185 tracks aligning them.
+    solar_can_reach_target sensor) and ``_required_stored_kwh_to_target`` use the
+    same entering-the-window semantics since #1185.
 
     Fixes Issue #701: Previous implementation used raw surplus without rate limits,
     incorrectly blocking cheap grid charging when solar was insufficient in reality.
