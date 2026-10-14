@@ -14,7 +14,6 @@
 # site of the same attribute). Sorted; no line numbers on purpose. Notes
 # survive --update.
 
-attribute    coordinator/coordinator.py  LocalShiftCoordinator._listeners
 attribute    coordinator/coordinator.py  self.data.hybrid_solar_accuracy
 attribute    coordinator/coordinator.py  self.data.hybrid_solar_accuracy@2
 attribute    coordinator/coordinator.py  self.data.hybrid_solar_accuracy@3
