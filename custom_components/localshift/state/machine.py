@@ -999,48 +999,6 @@ class StateMachine:
         spike = summary.get("spike_export") if isinstance(summary, dict) else None
         return isinstance(spike, dict) and spike.get("skip_debounce") is True
 
-    def _handle_debounce_timing(
-        self, desired: BatteryMode, now: datetime, debounce: timedelta
-    ) -> bool:
-        """Handle debounce tracking for desired transitions.
-
-        Returns True if evaluation should return early.
-        """
-        # Clear timers for modes no longer desired.
-        # Prevents debounce bypass when prices oscillate: if GRID_CHARGING was
-        # desired at t=0, flipped away at t=2min, then desired again at t=3min,
-        # the old t=0 timer would make the debounce appear nearly satisfied.
-        # Clearing stale timers ensures the full debounce is always served from
-        # a continuous period of desire.
-        for mode in list(self._mode_desired_since.keys()):
-            if mode != desired:
-                self._mode_desired_since.pop(mode, None)
-
-        if desired not in self._mode_desired_since:
-            # First time this mode is (continuously) desired — start the timer
-            self._mode_desired_since[desired] = now
-            if debounce > timedelta(0):
-                _LOGGER.info(
-                    "Mode %s desired, debounce %s starts now",
-                    desired.value,
-                    debounce,
-                )
-                return True
-
-        desired_since = self._mode_desired_since[desired]
-        elapsed = now - desired_since
-
-        if elapsed < debounce:
-            _LOGGER.info(
-                "Mode %s desired for %s, need %s — waiting",
-                desired.value,
-                elapsed,
-                debounce,
-            )
-            return True
-
-        return False
-
     async def evaluate_state_machine(
         self,
         data: CoordinatorData,
@@ -2481,6 +2439,23 @@ class StateMachine:
                 return
             # Only react to the switch turning ON (reversion)
             if new_state.state != "on":
+                return
+            # Issue #1160: the event context identifies the writer.
+            old_state = event.data.get("old_state")
+            _LOGGER.info(
+                "[GRID CHARGING LISTENER] Switch turned on: context_id=%s "
+                "parent_id=%s user_id=%s old_state=%s in_transition=%s "
+                "commanded_mode=%s",
+                event.context.id,
+                event.context.parent_id,
+                event.context.user_id,
+                old_state.state if old_state is not None else None,
+                self._in_mode_transition,
+                self._commanded_mode.value,
+            )
+            # Issue #1160: mid-transition this is LocalShift's own write;
+            # _commanded_mode is only updated once every write has landed.
+            if self._in_mode_transition:
                 return
             hass.async_create_task(
                 self._reactive_correct_grid_charging(hass, entity_id)

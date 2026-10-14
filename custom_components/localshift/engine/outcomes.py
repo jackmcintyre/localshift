@@ -907,11 +907,6 @@ class DecisionOutcomeTracker:
         )
 
     @property
-    def pending_count(self) -> int:
-        """Return number of pending decisions awaiting outcome."""
-        return len(self._pending_decisions)
-
-    @property
     def completed_count(self) -> int:
         """Return total number of completed decisions."""
         return len(self._completed_decisions)
