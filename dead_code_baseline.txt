@@ -29,42 +29,16 @@ attribute    engine/spike_analyzer.py  data.spike_end_time
 attribute    engine/spike_analyzer.py  data.spike_end_time@2
 attribute    state/reader.py  data.primary_decision
 attribute    state/reader.py  data.shadow_decision
-attribute    utils/validation.py  health.last_check
-attribute    utils/validation.py  health.last_check@2
-attribute    utils/validation.py  health.last_valid_value
-attribute    utils/validation.py  health.last_valid_value@2
-attribute    utils/validation.py  health.last_valid_value@3
 method       coordinator/coordinator.py  LocalShiftCoordinator._check_entity_health
 method       coordinator/coordinator.py  LocalShiftCoordinator._handle_periodic_tick  # marked DEPRECATED in its own docstring; superseded by the tiered tick handlers
 method       state/machine.py  StateMachine._handle_debounce_timing  # orphan with tests: evaluate() uses the newer _clear_stale_debounce_timers path (#968 shape)
 property     engine/outcomes.py  DecisionOutcomeTracker.pending_count
 unread-field coordinator/data.py  CoordinatorData.allow_dw_entry_under_target  # written every cycle 'for forecast_computer'; the planner reads config.allow_dw_entry_under_target instead
-unread-field coordinator/data.py  CoordinatorData.charging_needed_before_dw
-unread-field coordinator/data.py  CoordinatorData.daily_forecast_hourly
-unread-field coordinator/data.py  CoordinatorData.daily_forecast_soc_15min
-unread-field coordinator/data.py  CoordinatorData.debug_commanded_mode
-unread-field coordinator/data.py  CoordinatorData.debug_debounce_wait_seconds
-unread-field coordinator/data.py  CoordinatorData.debug_dry_run
-unread-field coordinator/data.py  CoordinatorData.debug_pending_transition
-unread-field coordinator/data.py  CoordinatorData.excess_solar_current_kw
-unread-field coordinator/data.py  CoordinatorData.forecast_charging_decisions
-unread-field coordinator/data.py  CoordinatorData.hybrid_slot_metadata
 unread-field coordinator/data.py  CoordinatorData.hybrid_solar_accuracy  # #778 phase 2: `_update_hybrid_accuracy` in coordinator/coordinator.py ~687-741 computes this every cycle and nothing consumes it; deleting the field leaves the computing method still called, which the gate cannot see; unfinished feature, owner decides finish or remove both
-unread-field coordinator/data.py  CoordinatorData.optimal_charge_end
-unread-field coordinator/data.py  CoordinatorData.optimal_charge_start
-unread-field coordinator/data.py  CoordinatorData.optimizer_active_applied_at
 unread-field coordinator/data.py  CoordinatorData.optimizer_safety_block_reason  # written when the safety gate blocks, never surfaced
 unread-field coordinator/data.py  CoordinatorData.physical_response_timestamp
 unread-field coordinator/data.py  CoordinatorData.primary_decision
-unread-field coordinator/data.py  CoordinatorData.proactive_export_active
 unread-field coordinator/data.py  CoordinatorData.shadow_decision
 unread-field coordinator/data.py  CoordinatorData.spike_end_time
-unread-field coordinator/data.py  CoordinatorData.surplus_ratio
 variable     coordinator/coordinator.py  PERIODIC_INTERVAL
-variable     coordinator/data.py  ChargingDecision.charge_amount_kwh
-variable     coordinator/data.py  ChargingDecision.price_per_kwh
-variable     coordinator/data.py  ChargingDecision.should_boost
-variable     coordinator/data.py  ChargingDecision.should_grid_charge
 variable     engine/types.py  NegativeFitAvoidanceContext.risk_window_start_idx
-variable     utils/validation.py  EntityHealth.last_check  # write-only; decide together with last_valid_value (#1076)
-variable     utils/validation.py  EntityHealth.last_valid_value  # write-only; decide together with last_check (#1076)

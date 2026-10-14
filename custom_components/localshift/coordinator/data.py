@@ -70,22 +70,6 @@ class PerformanceMetrics:
 
 
 @dataclass
-class ChargingDecision:
-    """Represents a charging decision for a specific time slot.
-
-    This is the shared decision structure used by both the forecast
-    simulation and the active mode logic to ensure consistency.
-    """
-
-    slot_start: datetime
-    should_grid_charge: bool = False
-    should_boost: bool = False
-    charge_amount_kwh: float = 0.0
-    price_per_kwh: float = 0.0
-    reason: str = ""
-
-
-@dataclass
 class PhysicalResponseWatch:
     """Active watch for a physical battery response after a mode command.
 
@@ -159,7 +143,6 @@ class CoordinatorData:
     force_discharge_active: bool = False
     force_charge_active: bool = False
     boost_charge_active: bool = False
-    proactive_export_active: bool = False
     forecast_expensive_period_coming: bool = False
     solar_can_reach_target: bool = False
     solar_can_reach_target_in_dw: bool = False
@@ -172,7 +155,6 @@ class CoordinatorData:
     # Extra attributes for binary sensors
     max_forecast_price: float = 0.0
     max_buy_forecast_price: float = 0.0  # Max buy price (general_forecast) for display
-    surplus_ratio: float = 0.0
 
     # Computed sensors
     effective_cheap_price: float = 0.0
@@ -188,9 +170,6 @@ class CoordinatorData:
     solar_battery_forecast: dict[str, Any] = field(default_factory=dict)
     decision_log: list[dict[str, Any]] = field(default_factory=list)
     forecast_history: list[dict[str, Any]] = field(default_factory=list)
-    # Legacy forecast fields — retained for compatibility, always empty after #441 migration.
-    daily_forecast_hourly: list[dict[str, Any]] = field(default_factory=list)
-    daily_forecast_soc_15min: list[list[Any]] = field(default_factory=list)
     consumption_source: str = "unknown"
     consumption_profile_hours: int = 0
     consumption_hourly_sample_counts: dict[int, int] = field(default_factory=dict)
@@ -281,12 +260,6 @@ class CoordinatorData:
     solar_absent_confidence: float = 1.0
     """Confidence to use when Solcast analysis is absent; 0.3 when stale_solar_conservative=True."""
 
-    # Shared charging decisions (computed once, used by both forecast and active_mode)
-    forecast_charging_decisions: list[ChargingDecision] = field(default_factory=list)
-    charging_needed_before_dw: float = 0.0  # Total kWh needed before DW
-    optimal_charge_start: datetime | None = None  # Earliest optimal charging slot
-    optimal_charge_end: datetime | None = None  # Latest optimal charging slot
-
     # Debug/diagnostic fields for dashboard troubleshooting
     forecast_ready: bool = (
         False  # True when Solcast data is available and valid (Issue #319)
@@ -303,10 +276,6 @@ class CoordinatorData:
     debug_mode_source: str = (
         "unknown"  # "manual_override" | "optimizer" | "fallback" | "unknown"
     )
-    debug_dry_run: bool = False  # Dry run mode active
-    debug_commanded_mode: str = ""  # State machine's commanded mode
-    debug_pending_transition: str = ""  # Pending mode transition (if any)
-    debug_debounce_wait_seconds: float = 0.0  # Seconds remaining in debounce
 
     # Spike analysis fields for conservative spike discharge
     spike_end_time: datetime | None = None  # Estimated end of current spike
@@ -318,7 +287,6 @@ class CoordinatorData:
 
     # Excess solar load shifting sensors (backlog-high-017)
     excess_solar_available: bool = False  # Simple ON/OFF for basic automations
-    excess_solar_current_kw: float = 0.0  # Current excess generation rate
     excess_solar_current_hour_kwh: float = 0.0  # Excess available in current hour
     excess_solar_next_2h_kwh: float = 0.0  # Excess available in next 2 hours
     excess_solar_next_4h_kwh: float = 0.0  # Excess available in next 4 hours
@@ -411,10 +379,6 @@ class CoordinatorData:
         None  # Combined LocalShift + Solcast MAPE accuracy
     )
 
-    # --- Hybrid timescale metadata (Issue #329) ---
-    hybrid_slot_metadata: dict[str, Any] = field(
-        default_factory=dict
-    )  # slot_intervals, transition_boundary, total_slots, horizon_hours
     forecast_horizon_hours: float = (
         0.0  # Actual time span covered by forecast (Issue #431)
     )
@@ -468,9 +432,6 @@ class CoordinatorData:
 
     optimizer_safety_block_reason: str = ""
     """Reason for safety gate block (empty if not blocked)."""
-
-    optimizer_active_applied_at: str | None = None
-    """ISO timestamp of last successful apply."""
 
     optimizer_apply_plan: dict[str, Any] | None = None
     """Apply plan derived from optimizer decisions.
