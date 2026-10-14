@@ -114,12 +114,6 @@ class DecisionRecord:
     next_mode: PlannerAction | None = None
     outcome_score: float | None = None  # 0.0-1.0, computed quality score
 
-    # Issue #913: adaptive parameter values in force when the decision was
-    # made. The offsets were removed (#982), so new records carry an empty
-    # dict; the key stays because it is persisted. None on records persisted
-    # before Issue #913.
-    adaptive_params_at_decision: dict[str, float] | None = None
-
     # Issue #915: meter accumulator values copied at decision time, differenced
     # at backfill to attribute import/export/cost to this decision's window.
     # None on records persisted before Issue #915 (outcome fields are then
@@ -150,7 +144,6 @@ class DecisionRecord:
             "duration_minutes": self.duration_minutes,
             "next_mode": self.next_mode.value if self.next_mode else None,
             "outcome_score": self.outcome_score,
-            "adaptive_params_at_decision": self.adaptive_params_at_decision,
             "energy_at_decision": self.energy_at_decision,
         }
 
@@ -207,7 +200,6 @@ class DecisionRecord:
             if data.get("next_mode")
             else None,
             outcome_score=data.get("outcome_score"),
-            adaptive_params_at_decision=data.get("adaptive_params_at_decision"),
             energy_at_decision=data.get("energy_at_decision"),
         )
 
@@ -304,7 +296,6 @@ class DecisionOutcomeTracker:
             day_of_week=now.weekday(),
             hour_of_day=now.hour,
             is_demand_window=data.demand_window_active,
-            adaptive_params_at_decision={},
             energy_at_decision=_snapshot_energy_meters(data),
         )
 

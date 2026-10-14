@@ -188,7 +188,6 @@ def _seed_horizon(data: Any, payload: dict[str, Any]) -> None:
 def run_arm(scenario: dict[str, Any], arm: dict[str, Any]) -> dict[str, Any]:
     """Run one scenario under one arm and extract the plan's behaviour."""
     payload = dict(scenario["input"])
-    payload["adaptive_params"] = {}  # learning layer retired 2026-09-04
 
     test_time = datetime.fromisoformat(payload["test_time"])
     data = setup_coordinator_data(payload)
