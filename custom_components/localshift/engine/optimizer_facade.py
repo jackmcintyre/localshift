@@ -580,12 +580,12 @@ class OptimizerFacade:
         dw_entry: float | None,
         target_soc: float | None,
     ) -> None:
-        """Loudly flag the silent-failure mode and set a coordinator flag.
+        """Loudly flag the silent-failure mode in the log.
 
         Trips when a demand window is active but the real SOC is far below target
-        — i.e. pre-charge appears to have been missed. Sets
-        ``data.optimizer_soc_underprepared`` (a sensor / coordinator notification
-        can surface it) and emits a WARNING so the failure is never silent again.
+        — i.e. pre-charge appears to have been missed. Log-only: it emits a
+        WARNING so the failure is never silent again; no sensor or attribute
+        carries it, so look for "SOC UNDERPREPARED" in the Home Assistant log.
 
         The message carries the *captured* DW-entry actual as well as the live SOC
         (2026-07-27): by the time this trips, the battery may have recovered some
@@ -594,9 +594,7 @@ class OptimizerFacade:
         threshold = target_soc if target_soc is not None else 95.0
         in_dw = getattr(data, "demand_window_active", False)
         # Materially short = more than 20 points below target while the DW is live.
-        underprepared = bool(in_dw and initial_soc < (threshold - 20.0))
-        data.optimizer_soc_underprepared = underprepared
-        if underprepared:
+        if in_dw and initial_soc < (threshold - 20.0):
             _LOGGER.warning(
                 "SOC UNDERPREPARED: demand window active but battery at %.1f%% "
                 "(target %.0f%%, planned DW-entry %s, entered at %s). Pre-charge "
