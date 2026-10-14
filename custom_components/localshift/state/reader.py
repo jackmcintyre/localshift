@@ -701,7 +701,9 @@ class StateReader:
         data.load_power_kw = self._read_float(
             self._get_entity_id(CONF_TESLEMETRY_LOAD_POWER)
         )
-        data.soc = self._read_float(self._get_entity_id(CONF_TESLEMETRY_SOC))
+        soc_raw = self._read_float_optional(self._get_entity_id(CONF_TESLEMETRY_SOC))
+        data.soc_available = soc_raw is not None
+        data.soc = soc_raw if soc_raw is not None else 0.0
         data.operation_mode = self._read_state(
             self._get_entity_id(CONF_TESLEMETRY_OPERATION_MODE)
         )
@@ -966,9 +968,9 @@ class StateReader:
         status: dict[str, bool] = {}
         missing: list[str] = []
 
-        # 1. SOC must be valid (> 0 and not None)
-        # SOC of 0 indicates the entity hasn't populated yet
-        soc_valid = data.soc is not None and data.soc > 0
+        # 1. SOC must be read. Issue #987: 0% is a real (empty) battery; only
+        # an unavailable entity counts as missing.
+        soc_valid = data.soc is not None and data.soc_available
         status["soc"] = soc_valid
         if not soc_valid:
             missing.append(f"SOC (current: {data.soc})")

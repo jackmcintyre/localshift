@@ -94,6 +94,7 @@ class CoordinatorData:
     solar_power_kw: float = 0.0
     load_power_kw: float = 0.0
     soc: float = 0.0
+    soc_available: bool = True  # False when the SOC entity is unavailable (#987)
     operation_mode: str = ""
     backup_reserve: float = 0.0
     # Tesla override corroboration signals (Storm Watch / Grid Event / VPP).

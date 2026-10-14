@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from datetime import datetime, time
 
@@ -137,7 +138,21 @@ class SpikeAnalyzer:
         else:
             required_hours = spike_duration_hours
 
-        expected_load_kw = data.load_power_kw if data.load_power_kw > 0 else 0.5
+        expected_load_kw = _expected_load_kw(data, required_hours)
         reserve_kwh = expected_load_kw * required_hours
         reserve_soc = (reserve_kwh / BATTERY_CAPACITY_KWH) * 100
         return min(reserve_soc, 100.0)
+
+
+def _expected_load_kw(data: CoordinatorData, hours: float) -> float:
+    """Mean forecast load over the next ``hours`` of 15-minute bins (#987).
+
+    Without a forecast: the recent-load median, the live reading, then 0.5 kW.
+    """
+    bins = data.load_forecast_slots[: max(1, math.ceil(hours * 4))]
+    if bins:
+        return sum(bins) / len(bins)
+    for load_kw in (data.recent_load_short_kw, data.load_power_kw):
+        if load_kw > 0:
+            return load_kw
+    return 0.5
