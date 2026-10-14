@@ -999,48 +999,6 @@ class StateMachine:
         spike = summary.get("spike_export") if isinstance(summary, dict) else None
         return isinstance(spike, dict) and spike.get("skip_debounce") is True
 
-    def _handle_debounce_timing(
-        self, desired: BatteryMode, now: datetime, debounce: timedelta
-    ) -> bool:
-        """Handle debounce tracking for desired transitions.
-
-        Returns True if evaluation should return early.
-        """
-        # Clear timers for modes no longer desired.
-        # Prevents debounce bypass when prices oscillate: if GRID_CHARGING was
-        # desired at t=0, flipped away at t=2min, then desired again at t=3min,
-        # the old t=0 timer would make the debounce appear nearly satisfied.
-        # Clearing stale timers ensures the full debounce is always served from
-        # a continuous period of desire.
-        for mode in list(self._mode_desired_since.keys()):
-            if mode != desired:
-                self._mode_desired_since.pop(mode, None)
-
-        if desired not in self._mode_desired_since:
-            # First time this mode is (continuously) desired — start the timer
-            self._mode_desired_since[desired] = now
-            if debounce > timedelta(0):
-                _LOGGER.info(
-                    "Mode %s desired, debounce %s starts now",
-                    desired.value,
-                    debounce,
-                )
-                return True
-
-        desired_since = self._mode_desired_since[desired]
-        elapsed = now - desired_since
-
-        if elapsed < debounce:
-            _LOGGER.info(
-                "Mode %s desired for %s, need %s — waiting",
-                desired.value,
-                elapsed,
-                debounce,
-            )
-            return True
-
-        return False
-
     async def evaluate_state_machine(
         self,
         data: CoordinatorData,

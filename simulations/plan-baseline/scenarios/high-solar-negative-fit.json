@@ -78,7 +78,7 @@
     "negative_fit_suppressed": false,
     "negative_fit_window_open": false,
     "next_window_entry_soc_pct": null,
-    "next_window_gap_min": 300.0,
+    "next_window_gap_min": 480.0,
     "next_window_required_soc_pct": null,
     "next_window_tail_start_idx": null,
     "next_window_tail_status": "gap_too_long",

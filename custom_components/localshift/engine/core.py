@@ -1690,7 +1690,8 @@ class DPPlanner:
 
             hard_constraint_penalty = max_grid_cost * 10  # 10x the max cost
 
-            # Apply accuracy-based discount to beyond-horizon solar (Issue #785)
+            # Issue #785 / #1132: logged only. Not applied below; effective_soc
+            # adds future_solar_gain_pct undiscounted.
             forecast_accuracy = get_forecast_accuracy(inputs.solar_accuracy_tracker)
             accuracy_discount = max(0.5, min(1.0, forecast_accuracy))
 
@@ -1770,7 +1771,8 @@ class DPPlanner:
 
         Args:
             soc_pct: Current state of charge percentage
-            accuracy_discount: Applied discount factor
+            accuracy_discount: Forecast accuracy floored at 0.5; reported, not
+                applied to the plan (#1132)
             decisions: All optimizer decisions with predicted SOC
             terminal_penalty_idx: Index of terminal penalty slot
 

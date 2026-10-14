@@ -9,6 +9,14 @@ name: Replay baseline
 on:
   pull_request:
     branches: [main, test]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+
+# A new push to a PR supersedes the run still in flight for the old commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   replay-baseline:

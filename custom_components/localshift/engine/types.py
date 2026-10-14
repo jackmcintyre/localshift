@@ -932,10 +932,19 @@ class OptimizerResult:
 
     # Terminal cost diagnostic fields (PR #789 wiring)
     forecast_accuracy: float | None = None
-    """Forecast accuracy (0-1.0) used for solar discount. None if no terminal penalty."""
+    """Forecast accuracy (0-1.0). None if no terminal penalty.
+
+    This is the factor that acts on the plan: the pre-charge gate
+    (``check_global_solar_sufficiency``) and the required-charge estimate scale
+    projected solar gain by it, unfloored, and the negative-FIT recoverability
+    floor is capped by it. The shortfall classifier also uses it, but only to
+    pick the reported reason code."""
 
     accuracy_discount_factor: float | None = None
-    """Discount factor applied to solar gain (0.5-1.0)."""
+    """``forecast_accuracy`` floored at 0.5 (0.5-1.0). Diagnostic only (#1132).
+
+    Not applied to the plan anywhere; the terminal cost computes and logs it but
+    never uses it. Kept under this name because dashboards read the key."""
 
     peak_soc_pct: float | None = None
     """Peak SOC (%) across all planned slots."""

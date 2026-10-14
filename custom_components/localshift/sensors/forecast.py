@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorStateClass
@@ -68,6 +68,17 @@ class NetElectricityCostSensor(LocalShiftSensorBase):
     def _update_from_coordinator(self) -> None:
         d = self.coordinator.data
         self._attr_native_value = round(d.grid_import_cost - d.grid_export_revenue, 2)
+        # Issue #1140: a daily total that can also fall within the day (export
+        # revenue, negative prices) is TOTAL with a last_reset, not
+        # TOTAL_INCREASING. Without last_reset the recorder books the midnight
+        # drop to zero as a negative change. The reset time is the start of
+        # the day the totals belong to, so it moves with the totals themselves.
+        totals_date = getattr(self.coordinator.cost_tracker, "totals_date", None)
+        self._attr_last_reset = (
+            dt_util.start_of_local_day(totals_date)
+            if isinstance(totals_date, date)
+            else None
+        )
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

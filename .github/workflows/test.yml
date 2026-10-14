@@ -4,6 +4,11 @@ on:
   pull_request:
     branches: [main, test]
 
+# A new push to a PR supersedes the run still in flight for the old commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -24,7 +29,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          uv run pytest --cov=custom_components/localshift --cov-report=json --cov-report=term-missing --tb=short -q
+          uv run pytest -n auto --cov=custom_components/localshift --cov-report=json --cov-report=term-missing --tb=short -q
           if [ -f coverage.json ]; then
             CURRENT=$(python3 -c "import json; c=json.load(open('coverage.json')); print(round(c['totals']['percent_covered'], 1))")
             echo "Current coverage: ${CURRENT}%"

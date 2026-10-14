@@ -388,10 +388,10 @@ class TestHandleStateChange:
 # =============================================================================
 
 
-class TestHandlePeriodicTick:
-    """Tests for _handle_periodic_tick method."""
+class TestHandleFastTick:
+    """Tests for the 1-minute tick (TickScheduler.handle_fast_tick)."""
 
-    def test_handle_periodic_tick_reads_state(self, coordinator, coordinator_data):
+    def test_fast_tick_reads_state(self, coordinator, coordinator_data):
         """Test that periodic tick reads external state."""
         coordinator.data = coordinator_data
 
@@ -431,12 +431,12 @@ class TestHandlePeriodicTick:
         coordinator._entity_monitor.read_all_external_state = MagicMock()
 
         now = datetime(2026, 2, 16, 12, 0, 0, tzinfo=UTC)
-        coordinator._handle_periodic_tick(now)
+        coordinator._tick_scheduler.handle_fast_tick(now)
 
         # Verify state was read through entity monitor
         coordinator._entity_monitor.read_all_external_state.assert_called_once()
 
-    def test_handle_periodic_tick_accumulates_costs(
+    def test_fast_tick_accumulates_costs(
         self, coordinator, coordinator_data
     ):
         """Test that periodic tick accumulates costs."""
@@ -475,7 +475,7 @@ class TestHandlePeriodicTick:
         )
 
         now = datetime(2026, 2, 16, 12, 0, 0, tzinfo=UTC)
-        coordinator._handle_periodic_tick(now)
+        coordinator._tick_scheduler.handle_fast_tick(now)
 
         # Verify costs were accumulated
         coordinator._cost_tracker.accumulate_costs.assert_called_once()
@@ -1006,7 +1006,7 @@ class TestCoordinatorHealthAndValidation:
     """Tests for entity health checking and validation."""
 
     def test_check_entity_health_when_validator_is_none(self, coordinator):
-        """Test _check_entity_health leaves status alone when validator is None."""
+        """Test check_entity_health leaves status alone when validator is None."""
         from custom_components.localshift.coordinator.entity_monitor import (
             EntityMonitor,
         )
@@ -1016,14 +1016,14 @@ class TestCoordinatorHealthAndValidation:
         coordinator.data.integration_status = "sentinel"
         coordinator.data.entity_errors = ["sentinel"]
 
-        coordinator._check_entity_health()
+        coordinator._entity_monitor.check_entity_health()
 
         # Nothing validated, so the previous status is not overwritten.
         assert coordinator.data.integration_status == "sentinel"
         assert coordinator.data.entity_errors == ["sentinel"]
 
     def test_check_entity_health_updates_data_when_validator_present(self, coordinator):
-        """Test _check_entity_health updates data when validator is present."""
+        """Test check_entity_health updates data when validator is present."""
         from unittest.mock import MagicMock
 
         # Mock the entity validator
@@ -1054,7 +1054,7 @@ class TestCoordinatorHealthAndValidation:
         coordinator._entity_monitor = EntityMonitor(coordinator)
 
         # Call the method
-        coordinator._check_entity_health()
+        coordinator._entity_monitor.check_entity_health()
 
         # Verify data was updated
         assert coordinator.data.integration_status == "ok"
@@ -1240,7 +1240,7 @@ class TestCoordinatorEntityHealthLogging:
     """Tests for entity health error and warning logging."""
 
     def test_check_entity_health_logs_errors_when_present(self, coordinator, caplog):
-        """Test _check_entity_health logs errors when present."""
+        """Test check_entity_health logs errors when present."""
         from unittest.mock import MagicMock
         import logging
 
@@ -1268,13 +1268,13 @@ class TestCoordinatorEntityHealthLogging:
 
         # Call the method with log capture
         with caplog.at_level(logging.WARNING):
-            coordinator._check_entity_health()
+            coordinator._entity_monitor.check_entity_health()
 
         # Verify errors were logged
         assert any("Entity health error" in record.message for record in caplog.records)
 
     def test_check_entity_health_logs_warnings_when_present(self, coordinator, caplog):
-        """Test _check_entity_health logs warnings when present."""
+        """Test check_entity_health logs warnings when present."""
         from unittest.mock import MagicMock
         import logging
 
@@ -1302,7 +1302,7 @@ class TestCoordinatorEntityHealthLogging:
 
         # Call the method with log capture
         with caplog.at_level(logging.DEBUG):
-            coordinator._check_entity_health()
+            coordinator._entity_monitor.check_entity_health()
 
         # Verify warnings were logged
         assert any(
