@@ -281,6 +281,22 @@ class TestNegativeFeedInWindow:
         assert timedelta(0) <= window_start - start <= timedelta(minutes=10)
         assert duration >= 60
 
+    def test_window_that_already_ended_is_not_the_nearest(self):
+        """#987: the scan starts at now's 5-minute slot, not the top of the hour."""
+        ended = _feed_in(NOW, NOW.replace(minute=0), window_minutes=10, hours=3)
+        upcoming = _feed_in(NOW, NOW.replace(hour=12, minute=0), 60, hours=3)
+        feed_in = [
+            later if later["per_kwh"] < 0 else earlier
+            for earlier, later in zip(ended, upcoming, strict=True)
+        ]
+
+        start, _ = _engine(StubSimulator(None)).find_nearest_negative_fit_window(
+            feed_in, NOW, max_hours=3
+        )
+
+        assert start is not None
+        assert start >= NOW
+
     def test_no_window(self):
         feed_in = _feed_in(NOW, NOW - timedelta(days=1), window_minutes=5)
 

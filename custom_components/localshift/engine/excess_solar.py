@@ -132,7 +132,11 @@ class ExcessSolarEngine:
             (window_start, duration_minutes) or (None, 0) if no window found
 
         """
-        base_slot = start_time.replace(minute=0, second=0, microsecond=0)
+        # Issue #987: floor to 5 minutes, not the hour, or a window that ended
+        # up to 59 minutes ago is returned as the nearest.
+        base_slot = start_time.replace(
+            minute=start_time.minute - start_time.minute % 5, second=0, microsecond=0
+        )
         current_window_start = None
         window_duration_minutes = 0
 

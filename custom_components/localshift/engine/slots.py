@@ -18,7 +18,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..const import BatteryMode
-from ..forecast.solar import get_solar_for_slot_by_interval
+from ..forecast.solar import get_solar_for_slot_by_interval, solcast_span
 from ..forecast.solar_accuracy import SolarAccuracyTracker
 from ..utils.export_availability import export_available_at
 from .price_calculator import get_price_for_slot_or_none
@@ -57,10 +57,10 @@ class SlotBuildMetadata:
     """Forecast horizon in hours."""
 
     slots_with_defaulted_solar: int
-    """Slots where solcast returned 0.0 kWh."""
+    """Slots no Solcast period covers (night slots with 0 kWh are not defaults)."""
 
     slots_with_defaulted_price: int
-    """Slots where buy or sell price was 0.0 $/kWh."""
+    """Slots with no buy price, or no feed-in entry at or before the slot."""
 
     slots_with_defaulted_consumption: int = 0
     """Slots where load_forecast_slots was unavailable (fallback to 0.0)."""
@@ -414,6 +414,7 @@ class SlotBuilder:
             "defaulted_consumption": 0,
         }
         prev_in_demand_window = False
+        solar_span = solcast_span(all_solcast)
 
         for i, slot in enumerate(hybrid_slots):
             ctx, slot_counts, in_demand_window = self._process_single_slot(
@@ -428,6 +429,7 @@ class SlotBuilder:
                 prev_in_demand_window=prev_in_demand_window,
                 feed_in_forecast=feed_in_forecast,
                 resolver=resolver,
+                solar_span=solar_span,
             )
             contexts.append(ctx)
             for key in counts:
@@ -449,6 +451,7 @@ class SlotBuilder:
         prev_in_demand_window: bool,
         feed_in_forecast: list[dict[str, Any]] | None = None,
         resolver: Any | None = None,
+        solar_span: tuple[datetime, datetime] | None = None,
     ) -> tuple[SlotContext, dict[str, int], bool]:
         """Process a single slot, returning (context, counts, in_demand_window)."""
         slot_start: datetime = slot["start"]
@@ -464,12 +467,18 @@ class SlotBuilder:
             "defaulted_consumption": 0,
         }
 
-        buy_price = float(slot.get("price", 0.0))
+        # Issue #987: a default is a slot the lookup had no entry for, not a
+        # legitimate zero (night solar) or zero/negative price (negative FIT).
+        buy_raw = slot.get("price")
+        buy_price = float(buy_raw) if buy_raw is not None else 0.0
         # Use override feed_in_forecast if provided (for shadow optimizer)
-        sell_price = self._get_sell_price(
+        sell_raw = get_price_for_slot_or_none(
             feed_in_forecast if feed_in_forecast is not None else data.feed_in_forecast,
             slot_start,
         )
+        sell_price = sell_raw if sell_raw is not None else 0.0
+        if buy_raw is None or sell_raw is None:
+            counts["defaulted_price"] = 1
 
         # Get confidence from resolver (defaults to 1.0 if no resolver)
         confidence = resolver.get_confidence(slot_start) if resolver else 1.0
@@ -479,7 +488,10 @@ class SlotBuilder:
             interval_minutes,
             confidence,
         )
-        if solar_kwh < 0.001:
+        slot_end = slot_start + timedelta(minutes=interval_minutes)
+        if solar_span is None or not (
+            solar_span[0] < slot_end and slot_start < solar_span[1]
+        ):
             counts["defaulted_solar"] = 1
 
         consumption_kwh = self._get_consumption_kwh(
@@ -487,9 +499,6 @@ class SlotBuilder:
         )
         if consumption_kwh < 0.001:
             counts["defaulted_consumption"] = 1
-
-        if buy_price < 0.001 or sell_price < 0.001:
-            counts["defaulted_price"] = 1
 
         # Issue #896: handle cross-midnight (overnight) demand windows where
         # end <= start (e.g. 22:00 -> 06:00). The naive ``start <= t < end``
@@ -537,13 +546,6 @@ class SlotBuilder:
         if local_tz is not None and slot_start.tzinfo is not None:
             return slot_start.astimezone(local_tz).time()
         return slot_start.time()
-
-    def _get_sell_price(
-        self, feed_in_forecast: list[dict[str, Any]], slot_start: datetime
-    ) -> float:
-        """Get sell price for a slot from feed_in_forecast."""
-        result = get_price_for_slot_or_none(feed_in_forecast, slot_start)
-        return result if result is not None else 0.0
 
     def _get_solar_kwh(
         self,

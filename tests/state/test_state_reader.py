@@ -560,6 +560,28 @@ class TestReadAllExternalState:
         assert coordinator_data.grid_services_active is None
         assert coordinator_data.storm_watch_active is None
 
+    @pytest.mark.parametrize(
+        ("soc_state", "available"), [("0", True), ("unavailable", False)]
+    )
+    def test_read_all_external_state_soc_availability(
+        self, state_reader, mock_hass, coordinator_data, soc_state, available
+    ):
+        """#987: an empty battery reads as available; an unavailable entity not."""
+
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            state.state = (
+                soc_state if entity_id == "sensor.tesla_powerwall_soc" else "0"
+            )
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        state_reader.read_all_external_state(coordinator_data)
+
+        assert coordinator_data.soc == 0.0
+        assert coordinator_data.soc_available is available
+
     def test_read_all_external_state_pricing(
         self, state_reader, mock_hass, coordinator_data
     ):
@@ -789,10 +811,26 @@ class TestCheckAutomationReady:
         assert len(missing) == 0
         assert data.automation_ready is True
 
-    def test_automation_not_ready_soc_zero(self, state_reader):
-        """Test automation not ready when SOC is zero."""
+    def test_automation_ready_soc_zero(self, state_reader):
+        """#987: a genuinely empty battery (0%) does not block automation."""
         data = CoordinatorData()
         data.soc = 0.0
+        data.prices_available = True
+        data.operation_mode = "autonomous"
+        data.backup_reserve = 20.0
+        data.forecast_ready = True
+
+        is_ready, status, missing = state_reader.check_automation_ready(data)
+
+        assert is_ready is True
+        assert status["soc"] is True
+        assert missing == []
+
+    def test_automation_not_ready_soc_unavailable(self, state_reader):
+        """Test automation not ready when the SOC entity is unavailable."""
+        data = CoordinatorData()
+        data.soc = 0.0
+        data.soc_available = False
         data.prices_available = True
         data.operation_mode = "autonomous"
         data.backup_reserve = 20.0
@@ -924,7 +962,7 @@ class TestCheckAutomationReady:
     def test_automation_ready_suppress_warning(self, state_reader):
         """Test suppress_warning parameter logs at DEBUG level."""
         data = CoordinatorData()
-        data.soc = 0.0
+        data.soc_available = False
         data.prices_available = True
         data.operation_mode = "autonomous"
         data.backup_reserve = 20.0

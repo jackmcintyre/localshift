@@ -9,7 +9,7 @@ Tests verify that SlotBuilder.build_slots() correctly:
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -187,37 +187,73 @@ class TestGetSlotTimeForDW:
         assert result is not None
 
 
-class TestGetSellPrice:
-    """Tests for _get_sell_price method."""
+class TestParityDefaults:
+    """Issue #987: a default is a slot with no covering entry, not a zero value.
+
+    Night solar (0 kWh) and a zero or negative feed-in price are real data; they
+    used to count as defaults, so parity_completeness_pct read low at night and
+    on negative-FIT days.
+    """
+
+    START = datetime(2026, 10, 15, 1, 0, tzinfo=timezone.utc)
 
     @pytest.fixture
     def builder(self):
-        """Create a SlotBuilder instance."""
         config = {"demand_window_start": "18:00:00", "demand_window_end": "22:00:00"}
-        return SlotBuilder(config_options=config, ha_timezone="Australia/Sydney")
+        return SlotBuilder(config_options=config, ha_timezone="UTC")
 
-    def test_empty_forecast_returns_zero(self, builder):
-        """Test empty feed_in_forecast returns 0.0."""
-        from datetime import timezone
+    def _counts(self, builder, feed_in, solcast, start=START):
+        from zoneinfo import ZoneInfo
 
-        now = datetime.now(timezone.utc)
-        result = builder._get_sell_price([], now)
-        assert result == 0.0
+        data = MagicMock()
+        data.feed_in_forecast = feed_in
+        data.load_forecast_slots = [0.5] * 96
+        _, counts = builder._process_all_slots(
+            hybrid_slots=[
+                {"start": start, "interval_minutes": 30, "price": 0.10},
+            ],
+            data=data,
+            all_solcast=solcast,
+            base_slot=start,
+            local_tz=ZoneInfo("UTC"),
+            dw_start_time=time(18, 0),
+            dw_end_time=time(22, 0),
+        )
+        return counts
 
-    def test_matching_forecast_returns_price(self, builder):
-        """Test matching forecast entry returns price."""
-        from datetime import timezone
-
-        now = datetime.now(timezone.utc)
-        forecast = [
-            {
-                "start_time": now.isoformat(),
-                "per_kwh": 0.08,
-                "duration": 30,
-            }
+    def _feed_in(self, per_kwh):
+        return [
+            {"start_time": self.START.isoformat(), "per_kwh": per_kwh, "duration": 30}
         ]
-        result = builder._get_sell_price(forecast, now)
-        assert result == 0.08
+
+    def _night_solcast(self):
+        return [
+            {
+                "period_start": (self.START + timedelta(minutes=30 * i)).isoformat(),
+                "pv_estimate": 0.0,
+            }
+            for i in range(4)
+        ]
+
+    def test_night_solar_is_not_a_default(self, builder):
+        counts = self._counts(builder, self._feed_in(0.05), self._night_solcast())
+        assert counts["defaulted_solar"] == 0
+
+    def test_slot_outside_the_solcast_forecast_is_a_default(self, builder):
+        late = self.START + timedelta(hours=3)
+        counts = self._counts(
+            builder, self._feed_in(0.05), self._night_solcast(), start=late
+        )
+        assert counts["defaulted_solar"] == 1
+
+    @pytest.mark.parametrize("per_kwh", [0.0, -0.04])
+    def test_zero_or_negative_feed_in_is_not_a_default(self, builder, per_kwh):
+        counts = self._counts(builder, self._feed_in(per_kwh), self._night_solcast())
+        assert counts["defaulted_price"] == 0
+
+    def test_missing_feed_in_is_a_default(self, builder):
+        counts = self._counts(builder, [], self._night_solcast())
+        assert counts["defaulted_price"] == 1
 
 
 class TestGetSolarKwh:
