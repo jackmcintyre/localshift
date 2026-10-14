@@ -377,12 +377,6 @@ SCHEDULED_FOR_DELETION = frozenset({
 })
 
 
-# The script sets this as a config option and as a switch state, which is how
-# strict demand-window entry is turned on. The dead-code list holds a
-# CoordinatorData field of the same name, which the script never touches.
-OPTION_KEYS_SHARING_A_DEAD_NAME = frozenset({"allow_dw_entry_under_target"})
-
-
 def _identifiers(tree: ast.Module) -> set[str]:
     """Every name the script could reach production code by.
 
@@ -435,7 +429,7 @@ class TestTheScriptStaysClearOfCodeScheduledForDeletion:
         if not DEAD_CODE_BASELINE.exists():
             pytest.skip("dead_code_baseline.txt is not on this branch yet")
         dead = _dead_names(DEAD_CODE_BASELINE.read_text())
-        named = _identifiers(_script_tree()) - OPTION_KEYS_SHARING_A_DEAD_NAME
+        named = _identifiers(_script_tree())
         overlap = {name: dead[name] for name in sorted(named & set(dead))}
         assert not overlap, (
             "scripts/replay_plan_baseline.py refers to names that are on the "
