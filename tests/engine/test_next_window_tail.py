@@ -391,6 +391,29 @@ class TestGapFromSlotBuilder:
         """The feed is stamped UTC; 04:30Z is 14:30 in Sydney."""
         assert self._gap(datetime.fromisoformat("2026-09-08T04:30:00+00:00")) == 0.0
 
+    def test_window_opening_inside_the_last_slot_is_a_zero_gap(self):
+        """Live stores 14:55: the 14:30-15:00 slot starts before the window, so
+        it is not flagged, but the window has opened by the time the feed ends.
+        """
+        builder = SlotBuilder(
+            {"demand_window_start": "14:55:00", "demand_window_end": "21:00:00"},
+            "Australia/Sydney",
+        )
+        last = SlotContext(
+            slot_index=0,
+            timestamp_iso="2026-09-08T14:30:00+10:00",
+            slot_interval_minutes=30,
+            buy_price=0.1,
+            sell_price=0.03,
+            solar_kwh=0.0,
+            consumption_kwh=0.0,
+            is_demand_window_slot=False,
+        )
+        gap = builder._next_demand_window_gap_min(
+            [last], builder._get_local_timezone(), time(14, 55)
+        )
+        assert gap == 0.0
+
     def test_no_slots(self):
         builder = SlotBuilder({}, "Australia/Sydney")
         assert builder._next_demand_window_gap_min([], None, _DW_START) is None

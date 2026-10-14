@@ -278,7 +278,7 @@ def _slot_flags(
     engine._get_switch_state = lambda _key: False
 
     builder = SlotBuilder(engine._build_optimizer_config_options(), str(tz))
-    slots, _meta = builder.build_slots(data, None, now_dt=now)
+    slots, _meta = builder.build_slots(data, now_dt=now)
 
     def label(slot: object) -> tuple[str, int]:
         local = datetime.fromisoformat(slot.timestamp_iso).astimezone(tz)

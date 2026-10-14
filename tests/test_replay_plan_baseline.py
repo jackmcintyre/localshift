@@ -95,7 +95,7 @@ class TestTheReplayIgnoresWhereItRuns:
         capture = REPO_ROOT / NO_ZONE_SCENARIO
         document = json.loads(rpb.baseline_path(capture).read_text())
         # A scenario with no zone of its own is planned in Sydney local time:
-        # under UTC its 17:00 July test time would carry a +00:00 offset.
+        # under UTC the first slot would read 07:00:00+00:00 instead.
         first_slot_time = document["arms"]["captured"]["decisions"][0][0]
         assert first_slot_time == "2026-07-29T17:00:00+10:00"
 

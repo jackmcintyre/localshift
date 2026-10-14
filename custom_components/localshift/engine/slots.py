@@ -382,6 +382,13 @@ class SlotBuilder:
             microsecond=0,
         )
         if next_start < horizon_end:
+            # A window that opens part-way through the last slot (14:55 inside
+            # 14:30-15:00) has started by the time the feed ends: the slot is
+            # not flagged because it starts before the window, but the gap is
+            # zero, not a day.
+            last_start = horizon_end - timedelta(minutes=last.slot_interval_minutes)
+            if next_start > last_start:
+                return 0.0
             next_start += timedelta(days=1)
         return (next_start - horizon_end).total_seconds() / 60.0
 
@@ -627,5 +634,5 @@ class SlotBuilder:
                 except ValueError:
                     continue
 
-        # Fallback to default
-        return time(18, 0)
+        # Fallback to the same default the engine uses, never a third value.
+        return datetime.strptime(defaults.get(key, "18:00:00"), "%H:%M:%S").time()
