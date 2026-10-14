@@ -9,6 +9,7 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from ..const import DWELL_EXEMPT_RELEASES
 from ..const import BatteryMode as _BatteryMode
 from ..coordinator.data import CoordinatorData
 from ..forecast.solar import get_solar_for_slot_by_interval
@@ -776,13 +777,17 @@ class OptimizerFacade:
         An ordinary token (price/spike/DW/floor moved) may commit anything. A
         token granted solely by an epoch may commit only what that epoch exists
         to start: a charge mode for the plan-charge epoch, PROACTIVE_EXPORT for
-        the export-start epoch (Issue #1119).
+        the export-start epoch (Issue #1119), a non-exempt release of the charge
+        for the charge-dwell epoch (Issue #1159).
         """
         plan_charge = getattr(data, "mode_decision_plan_charge_only", False)
         export_start = getattr(data, "mode_decision_export_start_only", False)
-        if not (plan_charge or export_start):
+        release = getattr(data, "mode_decision_charge_release_only", False)
+        if not (plan_charge or export_start or release):
             return True
         if plan_charge and new_mode in _CHARGE_MODES:
+            return True
+        if release and new_mode not in _CHARGE_MODES + DWELL_EXEMPT_RELEASES:
             return True
         return bool(export_start and new_mode == _BatteryMode.PROACTIVE_EXPORT)
 
@@ -1254,22 +1259,50 @@ class OptimizerFacade:
             return False
         if new_mode in _CHARGE_MODES:
             return False
-        # Demand-window active takes priority — never trap a charge into a DW.
+        # Not decision_timestamp: lag tracking clears that once the transition
+        # completes, which made this fail open seconds after every commit (#1159).
+        ts = getattr(data, "charge_dwell_started_at", None)
+        reason = None
+        elapsed = 0.0
+        # Never trap a charge into a DW, nor hold one against a spike response.
         if getattr(data, "demand_window_active", False):
+            reason = "demand window active"
+        elif getattr(data, "price_spike", False):
+            reason = "price spike active"
+        elif new_mode in DWELL_EXEMPT_RELEASES:
+            reason = f"release into {new_mode.value} is exempt"
+        elif ts is None:
+            reason = "no dwell clock (restart, or no charge commit seen)"
+        else:
+            try:
+                elapsed = (dt_util.now() - ts).total_seconds() / 60.0
+            except TypeError:
+                reason = "naive/aware timestamp mismatch"
+        if reason is not None:
+            _LOGGER.info(
+                "Charge dwell: allowing release of %s to %s unheld: %s",
+                data.active_mode.value,
+                new_mode.value,
+                reason,
+            )
             return False
-        ts = getattr(data, "decision_timestamp", None)
-        if ts is None:
-            # Fresh session / no timestamp: fail open, commit immediately.
-            return False
-        now = dt_util.now()
-        try:
-            elapsed = (now - ts).total_seconds() / 60.0
-        except TypeError:
-            # Naive/aware timestamp mismatch: fail open rather than propagate.
-            return False
+        assert ts is not None  # nosec B101 — type narrowing, not assertion
         quantum = getattr(optimizer_config, "precharge_runway_quantum_min", 0.0) or 0.0
         band = max(PRECHARGE_RUNWAY_HYSTERESIS_MIN, quantum)
-        return elapsed < band
+        _LOGGER.info(
+            "Charge dwell: %s release of %s committed at %s (%.2f of %.2f min)",
+            "holding" if elapsed < band else "allowing",
+            data.active_mode.value,
+            ts.isoformat(),
+            elapsed,
+            band,
+        )
+        if elapsed >= band:
+            return False
+        # The hold spends this evaluation's token: the state machine re-grants
+        # one when the band ends (StateMachine._update_charge_dwell_epoch).
+        data.charge_dwell_release_due = ts + timedelta(minutes=band)
+        return True
 
     @staticmethod
     def _commit_or_hold_mode(
@@ -1303,6 +1336,9 @@ class OptimizerFacade:
             if decision_time is not None:
                 data.decision_timestamp = decision_time
                 data.decision_mode = new_mode
+                data.charge_dwell_started_at = (
+                    decision_time if new_mode in _CHARGE_MODES else None
+                )
                 _LOGGER.info(
                     "Decision lag tracking: mode change %s → %s at %s",
                     data.active_mode.value,

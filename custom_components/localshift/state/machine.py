@@ -23,6 +23,7 @@ from ..const import (
     DEFAULT_BATTERY_TARGET,
     DEFAULT_MANUAL_OVERRIDE_TIMEOUT,
     DEFAULT_MINIMUM_TARGET_SOC,
+    DWELL_EXEMPT_RELEASES,
     EXPORT_INVERSION_CONFIRM_SECONDS,
     EXPORT_INVERSION_HOLDOFF_MINUTES,
     EXPORT_INVERSION_POWER_KW,
@@ -217,6 +218,10 @@ class StateMachine:
         # _update_export_start_epoch).
         self._export_start_owed: bool = False
         self._export_start_epoch: int = 0
+        # Issue #1159: a release the charge dwell held spent its token; when the
+        # band ends the epoch re-grants it (see _update_charge_dwell_epoch).
+        self._charge_dwell_release_due: datetime | None = None
+        self._charge_dwell_epoch: int = 0
         self._MIN_CORRECTION_INTERVAL = timedelta(
             minutes=STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES
         )
@@ -517,6 +522,56 @@ class StateMachine:
         )
         return True
 
+    def _note_charge_dwell_hold(self, data: CoordinatorData) -> None:
+        """In-lock after the facade: did this granted evaluation hold a release?
+
+        A dwell grant the plan flickered away from leaves the latch armed, and so
+        does any other epoch grant (plan-charge, export-start): only an ordinary
+        price-context grant that did not hold has decided afresh.
+        """
+        due, data.charge_dwell_release_due = data.charge_dwell_release_due, None
+        epoch_grant = (
+            data.mode_decision_charge_release_only
+            or data.mode_decision_export_start_only
+            or data.mode_decision_plan_charge_only
+        )
+        if data.mode_decision_allowed and (due is not None or not epoch_grant):
+            self._charge_dwell_release_due = due
+
+    def _update_charge_dwell_epoch(
+        self, data: CoordinatorData, context: str | None
+    ) -> bool:
+        """Advance the charge-dwell epoch when a held release's band has ended.
+
+        Bounded: the previous plan must still want a non-exempt release, and the
+        grant may commit only that (``mode_decision_charge_release_only``). It
+        either commits, ending the latch, or leaves no such pending mode.
+        """
+        due = self._charge_dwell_release_due
+        if due is None:
+            return False
+        if data.active_mode not in _CHARGE_MODES:
+            self._charge_dwell_release_due = None  # released by another path
+            return False
+        pending = data.debug_plan_mode_pending
+        if (
+            context is None
+            or self._suppress_plan_charge_grant
+            or not pending
+            or pending in _CHARGE_MODE_VALUES
+            or pending in DWELL_EXEMPT_RELEASES
+            or dt_util.now() < due
+        ):
+            return False
+        self._charge_dwell_epoch += 1
+        _LOGGER.info(
+            "Charge dwell: band ended at %s, granting the held release of %s to %s",
+            due.isoformat(),
+            data.active_mode.value,
+            pending,
+        )
+        return True
+
     def _get_decision_fingerprint(self, data: CoordinatorData) -> str | None:
         """Generate the discrete decision-context fingerprint.
 
@@ -535,6 +590,8 @@ class StateMachine:
         - export_start_epoch: an export start that was held back on an
           unconfirmed price is no longer held back (one-directional; see
           _update_export_start_epoch)
+        - charge_dwell_epoch: a charge release the dwell held has outlived its
+          band (Issue #1159; see _update_charge_dwell_epoch)
 
         ``dw_active`` and ``soc_floor_breached`` are read from ``data`` *before*
         compute_derived_values refreshes them this tick. The resulting 1-tick
@@ -549,9 +606,8 @@ class StateMachine:
         the falling edge (the disagreement resolving) is deliberately invisible,
         which is what makes the trigger flap-free.
 
-        This method is side-effect-free: it *reads* the two epochs and never
-        updates them (``_apply_decision_token`` calls
-        ``_update_plan_charge_epoch`` and ``_update_export_start_epoch`` first). Tests call it out-of-band to
+        This method is side-effect-free: it *reads* the epochs and never
+        updates them (``_apply_decision_token`` updates them first). Tests call it out-of-band to
         enumerate distinct contexts; a mutating fingerprint would corrupt them.
 
         Args:
@@ -565,7 +621,10 @@ class StateMachine:
         base = self._get_decision_context(data)
         if base is None:
             return None
-        return f"{base}|{self._plan_charge_epoch}|{self._export_start_epoch}"
+        return (
+            f"{base}|{self._plan_charge_epoch}|{self._export_start_epoch}"
+            f"|{self._charge_dwell_epoch}"
+        )
 
     def _get_decision_context(self, data: CoordinatorData) -> str | None:
         """The price/spike/DW/floor half of the fingerprint, without the epoch.
@@ -1067,6 +1126,7 @@ class StateMachine:
                 computation_engine.compute_derived_values(data)
                 self._refund_unspent_plan_charge(data)
                 self._note_export_start_deferral(data)
+                self._note_charge_dwell_hold(data)
                 await self._evaluate_core(data, computation_engine)
             finally:
                 # #622 gate replacement (transience guarantee): the decision
@@ -1081,6 +1141,7 @@ class StateMachine:
                 data.mode_decision_allowed = False
                 data.mode_decision_plan_charge_only = False
                 data.mode_decision_export_start_only = False
+                data.mode_decision_charge_release_only = False
                 data.mode_backstop_allowed = False
                 if notify_func is not None:
                     notify_func()
@@ -1112,6 +1173,7 @@ class StateMachine:
         context = self._get_decision_context(data)
         plan_epoch_before = self._plan_charge_epoch
         self._update_plan_charge_epoch(data, context)
+        dwell_epoch_moved = self._update_charge_dwell_epoch(data, context)
         self._suppress_plan_charge_grant = False
         plan_epoch_moved = self._plan_charge_epoch != plan_epoch_before
         export_epoch_moved = self._update_export_start_epoch(data, context)
@@ -1128,14 +1190,17 @@ class StateMachine:
         # grant is not mistaken for a plan-charge one (and vice versa).
         same_base = decision_allowed and context == self._last_evaluated_base
         export_start_only = same_base and export_epoch_moved
-        plan_charge_only = same_base and (plan_epoch_moved or not export_epoch_moved)
+        charge_release_only = same_base and dwell_epoch_moved
+        plan_charge_only = same_base and (
+            plan_epoch_moved or not (export_epoch_moved or dwell_epoch_moved)
+        )
         if decision_allowed:
             # Issue #510 slice 1 (measurement only): attribute the grant BEFORE
             # _last_evaluated_base is overwritten below — by transition time the
             # "previous" base is already this one, so the comparison must happen
             # here or the tag is unrecoverable.
             self._last_grant_source = self._classify_grant_source(
-                context, export_start_only and not plan_epoch_moved
+                context, export_start_only and not plan_epoch_moved, charge_release_only
             )
             # Issue #966: a fresh token is a new decision by construction, so
             # whatever attempt failed before it is no longer pending. Cleared
@@ -1160,6 +1225,7 @@ class StateMachine:
         data.mode_decision_allowed = decision_allowed
         data.mode_decision_plan_charge_only = plan_charge_only
         data.mode_decision_export_start_only = export_start_only
+        data.mode_decision_charge_release_only = charge_release_only
         # The pre-charge execution backstop is NOT a decision token, but it is
         # confined to the same in-lock window: opening it here (and closing it in
         # the evaluate finally block) guarantees the out-of-lock
@@ -1192,7 +1258,7 @@ class StateMachine:
         _LOGGER.log(level, msg, *args)
 
     def _classify_grant_source(
-        self, context: str | None, export_start: bool = False
+        self, context: str | None, export_start: bool = False, dwell: bool = False
     ) -> str:
         """Attribute a grant to the fingerprint component that moved (Issue #510).
 
@@ -1210,7 +1276,9 @@ class StateMachine:
             # Base unchanged ⇒ only an epoch moved. Issue #1119: a deferred
             # export start released by the price being confirmed lands tens of
             # seconds into the interval by design, so it gets its own tag.
-            return "price_confirmed" if export_start else "plan_charge"
+            if export_start:
+                return "price_confirmed"
+            return "charge_dwell" if dwell else "plan_charge"
         old = previous.split("|")
         new = context.split("|")
         if len(old) != 5 or len(new) != 5:
@@ -1884,9 +1952,8 @@ class StateMachine:
         # fire up to once per 5 minutes for the length of a drift episode and
         # carry no analytic signal for the Amber-latency baseline, so they are
         # demoted to DEBUG. Every decision-granted transition (price, spike,
-        # demand_window, soc_floor, plan_charge, price_confirmed, debounce,
-        # retry, unknown)
-        # stays at INFO.
+        # demand_window, soc_floor, plan_charge, price_confirmed, charge_dwell,
+        # debounce, retry, unknown) stays at INFO.
         level = logging.DEBUG if grant_source == "backstop" else logging.INFO
         _LOGGER.log(
             level,
