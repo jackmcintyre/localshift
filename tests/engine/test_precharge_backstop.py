@@ -1716,6 +1716,51 @@ class TestChargeCommitDwell:
         assert data.debug_mode_source == "charge_dwell_release"
         assert data.debug_plan_mode_pending is None
 
+    def test_lapsed_hold_does_not_release_a_later_wish_without_a_token(
+        self,
+    ) -> None:
+        """#1159 second review: hold, plan back to charge, release wish after the band.
+
+        The release held at +1 min lapsed when a granted evaluation at +3 min
+        wanted to charge again. A frozen evaluation at +30 min that wants a
+        release is a new decision: it must wait for its own token, not ride the
+        old hold through the token gate.
+        """
+        facade = OptimizerFacade()
+        state_machine = StateMachine(
+            MagicMock(),
+            MagicMock(),
+            lambda key: False,
+            lambda key, default=None: default,
+            MagicMock(),
+        )
+        committed_at = dt_util.now()
+        data = _commit_charge_data(_data(optimizer_decisions=[]), committed_at)
+        data.feed_in_price = 0.05
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        def evaluate(minutes_after_commit: float, mode: BatteryMode) -> None:
+            with patch.object(
+                dt_util,
+                "now",
+                return_value=committed_at + timedelta(minutes=minutes_after_commit),
+            ):
+                state_machine._apply_decision_token(data)
+                self._run_for_commit_dwell(facade, data, config, mode)
+
+        evaluate(1.0, BatteryMode.SELF_CONSUMPTION)  # granted, and held
+        assert data.active_mode == BatteryMode.GRID_CHARGING
+        data.feed_in_price = 0.06  # a new price context: the next one is granted
+        evaluate(3.0, BatteryMode.GRID_CHARGING)
+        assert data.mode_decision_allowed is True
+        assert data.active_mode == BatteryMode.GRID_CHARGING
+
+        evaluate(30.0, BatteryMode.SELF_CONSUMPTION)  # same prices: frozen
+
+        assert data.mode_decision_allowed is False
+        assert data.active_mode == BatteryMode.GRID_CHARGING
+        assert data.debug_mode_source != "charge_dwell_release"
+
     @pytest.mark.parametrize(
         ("plan_mode", "price_spike", "export_start_only"),
         [

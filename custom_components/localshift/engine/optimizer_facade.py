@@ -753,6 +753,10 @@ class OptimizerFacade:
                     data, new_mode, True, mode_source="charge_dwell_release"
                 )
                 return
+            if decision_allowed:
+                # A granted evaluation that did not hold has decided afresh;
+                # whatever release was held earlier is not this one.
+                self._dwell_held_charge_at = None
             self._commit_or_hold_mode(
                 data, new_mode, decision_allowed, mode_source="optimizer"
             )
@@ -801,6 +805,11 @@ class OptimizerFacade:
         held_at = self._dwell_held_charge_at
         if held_at is None:
             return False
+        if new_mode in _CHARGE_MODES:
+            # The plan has gone back to charging, so the held release lapsed. A
+            # later release wish is a new decision and needs its own token.
+            self._dwell_held_charge_at = None
+            return False
         # In-lock only, like the backstop: never from the out-of-lock recompute.
         if not getattr(data, "mode_backstop_allowed", False):
             return False
@@ -811,9 +820,7 @@ class OptimizerFacade:
             # A later commit moved the mode on: nothing left to release.
             self._dwell_held_charge_at = None
             return False
-        if new_mode in _CHARGE_MODES or self._should_hold_charge_dwell(
-            data, new_mode, optimizer_config
-        ):
+        if self._should_hold_charge_dwell(data, new_mode, optimizer_config):
             return False
         self._dwell_held_charge_at = None
         _LOGGER.info(
