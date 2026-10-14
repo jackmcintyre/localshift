@@ -92,6 +92,7 @@ class SocSimulator:
                 current_load_kw,
                 recent_load_kw,
                 hours_ahead=hours_ahead,
+                day_of_week=slot_start.weekday(),
             )
 
             # Add the additional load we're testing
@@ -176,6 +177,7 @@ class SocSimulator:
                     current_load_kw,
                     recent_load_kw,
                     hours_ahead=hours_ahead,
+                    day_of_week=slot_start.weekday(),
                 )
                 # Scale consumption to slot duration
                 consumption_kwh = load_kw * slot_fraction
@@ -215,6 +217,7 @@ class SocSimulator:
                     current_load_kw,
                     recent_load_kw,
                     hours_ahead=hours_ahead,
+                    day_of_week=slot_start.weekday(),
                 )
                 consumption_kwh = load_kw * slot_fraction
                 net_kwh = solar_kwh - consumption_kwh
