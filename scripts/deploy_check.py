@@ -38,9 +38,10 @@ Usage
   --expect-recompile           code was copied: every compiled file must post-date the restart
   --wait-settled SECONDS       re-fetch the after state every 20 s until settled,
                                then judge (cannot be combined with --log)
-  --wait-restart HH:MM:SS      wait (up to --timeout, default 900 s) until HA has gone
+  --wait-restart TIME          wait (up to --timeout, default 900 s) until HA has gone
                                down and come back with a log that starts after this
-                               time; take the after dump only once this exits 0
+                               time (HH:MM:SS today, or YYYY-MM-DD HH:MM:SS); take
+                               the after dump only once this exits 0
 
 Exit codes: 0 all invariants hold, 1 an invariant failed, 2 usage error,
 3 not settled yet (only without --wait-settled).
@@ -49,6 +50,7 @@ Exit codes: 0 all invariants hold, 1 an invariant failed, 2 usage error,
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import re
 import sys
@@ -541,7 +543,7 @@ def fetch_live_states() -> dict[str, dict]:
     return {s["entity_id"]: s for s in states if bucket(s["entity_id"])}
 
 
-def _api_up() -> bool:
+def _api_up(urlopen=None) -> bool:
     """True once HA reports RUNNING; any error, other status or state is down.
 
     The HTTP server answers early in start-up, before custom integrations
@@ -558,9 +560,9 @@ def _api_up() -> bool:
         f"{url}/api/config", headers={"Authorization": f"Bearer {token}"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with (urlopen or urllib.request.urlopen)(req, timeout=10) as resp:
             return json.loads(resp.read().decode()).get("state") == "RUNNING"
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         return False
 
 
@@ -569,10 +571,22 @@ def _log_restart_time(lines: list[str]) -> datetime | None:
     return next((t for line in lines if (t := _log_time(line))), None)
 
 
-def restart_issued_at(hhmmss: str, now: datetime) -> datetime:
-    """The wall time a restart was issued; one before midnight checked after it is yesterday."""
-    started = datetime.combine(now.date(), datetime.strptime(hhmmss, "%H:%M:%S").time())
-    return started - timedelta(days=1) if started > now else started
+def restart_issued_at(value: str, now: datetime) -> datetime:
+    """Parse the restart time: "YYYY-MM-DD HH:MM:SS", or "HH:MM:SS" meaning today.
+
+    A time later than now is refused rather than guessed at: read as
+    yesterday it would let the still-running old process pass at once.
+    Across midnight, pass the full date.
+    """
+    try:
+        started = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        started = datetime.combine(
+            now.date(), datetime.strptime(value, "%H:%M:%S").time()
+        )
+    if started > now:
+        raise ValueError(f"restart time {value} is in the future")
+    return started
 
 
 def wait_restart(
@@ -603,7 +617,7 @@ def wait_restart(
         else:
             try:
                 restart = _log_restart_time(fetch_log())
-            except (OSError, ValueError):
+            except (OSError, ValueError, http.client.HTTPException):
                 restart = None
             if restart is not None and restart >= started:
                 return None
@@ -647,7 +661,10 @@ def main(argv=None) -> int:
     ap.add_argument("--timeout", type=float, default=900.0)
     args = ap.parse_args(argv)
     if args.wait_restart:
-        started = restart_issued_at(args.wait_restart, datetime.now())
+        try:
+            started = restart_issued_at(args.wait_restart, datetime.now())
+        except ValueError as exc:
+            ap.error(str(exc))
         reason = wait_restart(started, args.timeout)
         print(
             reason

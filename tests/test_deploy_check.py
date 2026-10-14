@@ -572,7 +572,39 @@ def test_wait_restart_down_then_old_process_answering_still_fails():
     assert reason is not None and "API went down" in reason
 
 
-def test_restart_issued_before_midnight_checked_after_it():
+def test_restart_time_in_the_future_is_refused():
+    now = datetime(2026, 10, 15, 21, 5, 0)
+    with pytest.raises(ValueError):
+        dc.restart_issued_at("21:05:30", now)
+
+
+def test_restart_time_across_midnight_takes_the_full_date():
     now = datetime(2026, 10, 16, 0, 0, 10)
-    assert dc.restart_issued_at("23:59:40", now) == datetime(2026, 10, 15, 23, 59, 40)
+    assert dc.restart_issued_at("2026-10-15 23:59:40", now) == datetime(
+        2026, 10, 15, 23, 59, 40
+    )
     assert dc.restart_issued_at("00:00:05", now) == datetime(2026, 10, 16, 0, 0, 5)
+
+
+class _Resp:
+    def __init__(self, body):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self.body.encode()
+
+
+@pytest.mark.parametrize(
+    ("body", "up"),
+    [('{"state": "RUNNING"}', True), ('{"state": "STARTING"}', False), ("{}", False)],
+)
+def test_api_up_means_ha_reports_running(monkeypatch, body, up):
+    monkeypatch.setenv("HA_URL", "http://ha.invalid:8123")
+    monkeypatch.setenv("HA_TOKEN", "t")
+    assert dc._api_up(urlopen=lambda req, timeout: _Resp(body)) is up
