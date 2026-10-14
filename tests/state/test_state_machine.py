@@ -2311,10 +2311,9 @@ class TestStateMachineInternalBranches:
 
         assert should_skip is True
 
-    def test_soc_monitoring_logs_when_target_reached_in_grid_charging(
-        self, state_machine, coordinator_data
-    ):
-        """SOC monitoring should hit target-reached branch for clamped grid charge."""
+    @staticmethod
+    def _run_soc_monitoring(state_machine, coordinator_data, caplog, mode, soc):
+        """Run SOC monitoring at a 90% target; return the target-reached records."""
 
         def get_option(key, default):
             if key == CONF_BATTERY_TARGET:
@@ -2322,12 +2321,51 @@ class TestStateMachineInternalBranches:
             return default
 
         state_machine._get_option = get_option
-        state_machine._commanded_mode = BatteryMode.GRID_CHARGING
-        coordinator_data.soc = 90.0
+        state_machine._commanded_mode = mode
+        coordinator_data.soc = soc
 
-        result = asyncio.run(state_machine._handle_soc_monitoring(coordinator_data))
+        with caplog.at_level(
+            logging.INFO, logger="custom_components.localshift.state.machine"
+        ):
+            result = asyncio.run(state_machine._handle_soc_monitoring(coordinator_data))
 
         assert result is False
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if "reached battery target" in record.getMessage()
+        ]
+
+    def test_soc_monitoring_logs_when_target_reached_in_grid_charging(
+        self, state_machine, coordinator_data, caplog
+    ):
+        """Issue #1065: the target-reached INFO line is a live production signal."""
+        messages = self._run_soc_monitoring(
+            state_machine, coordinator_data, caplog, BatteryMode.GRID_CHARGING, 90.0
+        )
+
+        assert messages == [
+            "SOC 90.0% reached battery target 90% but remaining in "
+            f"{BatteryMode.GRID_CHARGING.value} (optimizer control)"
+        ]
+
+    @pytest.mark.parametrize(
+        ("mode", "soc"),
+        [
+            pytest.param(BatteryMode.GRID_CHARGING, 89.9, id="soc-below-target"),
+            pytest.param(BatteryMode.GRID_CHARGING, None, id="soc-unknown"),
+            pytest.param(BatteryMode.SELF_CONSUMPTION, 95.0, id="not-charging"),
+        ],
+    )
+    def test_soc_monitoring_silent_when_target_not_reached(
+        self, state_machine, coordinator_data, caplog, mode, soc
+    ):
+        """Issue #1065: no target-reached line below target or outside charging."""
+        messages = self._run_soc_monitoring(
+            state_machine, coordinator_data, caplog, mode, soc
+        )
+
+        assert messages == []
 
 
 # =============================================================================

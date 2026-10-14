@@ -51,7 +51,6 @@ class TestOptimizerSafetyGate:
                 "enabled": True,
                 "success": True,
                 "cycle_timestamp_iso": datetime.now().isoformat(),
-                "alignment_valid": True,
             },
         )
         decision = PlannedSlotDecision(
@@ -70,10 +69,8 @@ class TestOptimizerSafetyGate:
             total_slots=48,
             decisions=[decision],
         )
-        alignment = {"valid": True, "issues": []}
-
         gate = OptimizerSafetyGate(config_options)
-        result = gate.check_admission(data, optimizer_result, alignment)
+        result = gate.check_admission(data, optimizer_result)
 
         assert result.allowed is True
         assert result.block_reason is None
@@ -81,7 +78,7 @@ class TestOptimizerSafetyGate:
     def test_blocks_on_none_result(self):
         """Gate should block when optimizer result is None."""
         gate = OptimizerSafetyGate({})
-        result = gate.check_admission(MockData(), None, {"valid": True})
+        result = gate.check_admission(MockData(), None)
 
         assert result.allowed is False
         assert result.block_reason == "optimizer_result_none"
@@ -94,32 +91,17 @@ class TestOptimizerSafetyGate:
         )
 
         gate = OptimizerSafetyGate({})
-        result = gate.check_admission(MockData(), optimizer_result, None)
+        result = gate.check_admission(MockData(), optimizer_result)
 
         assert result.allowed is False
         assert result.block_reason == "optimizer_solve_failed"
-
-    def test_blocks_on_slot_alignment_failure(self):
-        """Gate should block when slot alignment is invalid."""
-        optimizer_result = OptimizerResult(success=True, decisions=[])
-        alignment = {"valid": False, "issues": ["slot_count_mismatch"]}
-
-        gate = OptimizerSafetyGate({})
-        result = gate.check_admission(MockData(), optimizer_result, alignment)
-
-        assert result.allowed is False
-        assert result.block_reason == "slot_alignment_invalid"
 
     def test_blocks_on_no_decisions(self):
         """Gate should block when there are no decisions."""
         optimizer_result = OptimizerResult(success=True, decisions=[])
 
         gate = OptimizerSafetyGate({})
-        result = gate.check_admission(
-            MockData(),
-            optimizer_result,
-            {"valid": True},
-        )
+        result = gate.check_admission(MockData(), optimizer_result)
 
         assert result.allowed is False
         assert result.block_reason == "no_decisions_available"
@@ -147,7 +129,7 @@ class TestOptimizerSafetyGate:
         optimizer_result = OptimizerResult(success=True, decisions=[decision])
 
         gate = OptimizerSafetyGate({})
-        result = gate.check_admission(data, optimizer_result, {"valid": True})
+        result = gate.check_admission(data, optimizer_result)
 
         assert result.allowed is False
         assert result.block_reason == "forecast_stale"
@@ -259,7 +241,7 @@ class TestSafetyGateFailureDefaultsToSelfConsumption:
             error_message="solve_failed",
         )
         gate = OptimizerSafetyGate({})
-        result = gate.check_admission(MockData(), optimizer_result, None)
+        result = gate.check_admission(MockData(), optimizer_result)
 
         assert result.allowed is False
         assert result.block_reason is not None

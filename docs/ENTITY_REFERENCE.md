@@ -646,7 +646,7 @@ Attributes:
 
 
 
-### 20. sensor.localshift_learning_decision_history
+### 18. sensor.localshift_learning_decision_history
 
 **Purpose:** Recent decision history with measured outcomes.
 
@@ -665,7 +665,7 @@ Attributes:
 ---
 
 
-### 22. sensor.localshift_decision_lag
+### 19. sensor.localshift_decision_lag
 
 **Purpose:** Time between decision timestamp and implementation timestamp.
 
@@ -705,7 +705,7 @@ Issue #510 slice 1 (measurement only) adds `boundary_lag_seconds` / `boundary_la
 
 ---
 
-### 23. sensor.localshift_forecast_status
+### 20. sensor.localshift_forecast_status
 
 **Purpose:** Current forecast data readiness status.
 
@@ -734,7 +734,7 @@ Attributes:
 
 ---
 
-### 24. sensor.localshift_automation_ready
+### 21. sensor.localshift_automation_ready
 
 **Purpose:** Overall automation readiness status.
 
@@ -764,7 +764,7 @@ Attributes:
 
 ---
 
-### 25. sensor.localshift_solar_forecast_accuracy
+### 22. sensor.localshift_solar_forecast_accuracy
 
 **Purpose:** Solar forecast accuracy compared to actual generation.
 
@@ -787,7 +787,7 @@ Attributes:
 
 ---
 
-### 27. sensor.localshift_load_deviation
+### 23. sensor.localshift_load_deviation
 
 **Purpose:** Real-time diagnostic for current load-vs-forecast deviation while an optimizer runtime plan is active.
 
@@ -827,7 +827,7 @@ Attributes:
 
 ---
 
-### 25. sensor.localshift_cloud_event
+### 24. sensor.localshift_cloud_event
 
 **Purpose:** Real-time diagnostic for solar cloud event detection and re-optimization status.
 
@@ -879,7 +879,7 @@ Attributes:
 
 ---
 
-### 26. sensor.localshift_optimizer_plan_detailed
+### 25. sensor.localshift_optimizer_plan_detailed
 
 **Purpose:** Detailed DP optimizer plan with full decision breakdown.
 
@@ -913,7 +913,7 @@ Attributes:
 
 ---
 
-### 29. sensor.localshift_optimizer_summary
+### 26. sensor.localshift_optimizer_summary
 
 **Purpose:** DP optimizer run summary.
 
@@ -981,7 +981,7 @@ Attributes:
 
 ---
 
-### 30. sensor.localshift_comparison_result (Issue #300)
+### 27. sensor.localshift_comparison_result (Issue #300)
 
 **Purpose:** Comparison result between primary and shadow pricing sources.
 
@@ -998,7 +998,7 @@ State: match
 
 ---
 
-### 31. sensor.localshift_price_delta (Issue #300)
+### 28. sensor.localshift_price_delta (Issue #300)
 
 **Purpose:** Price difference between primary and shadow pricing sources.
 
@@ -1640,7 +1640,7 @@ planner: "DP_OPTIMIZER"
 
 ### Binary Sensor Notes
 
-`binary_sensor.localshift_solar_can_reach_target` now reads from `optimizer_result.can_solar_reach_target` — powered by DP optimizer terminal shortfall analysis.
+`binary_sensor.localshift_solar_can_reach_target` reads `coordinator.data.solar_can_reach_target`, which `_write_optimizer_fields` (`engine/optimizer_facade.py`) copies from the DP optimizer result's `can_solar_reach_target` (terminal shortfall analysis). The `can_solar_reach_target` key in the optimizer summary is a mirror for the contradiction regression test — the entity does not read it.
 
 ### Dashboard Migration
 
