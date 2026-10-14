@@ -485,9 +485,10 @@ def _required_stored_kwh_to_target(
     """Grid charge (stored kWh) needed to reach the DW target, net of expected solar.
 
     Expected SOC at DW entry on solar alone, discounting only the positive gain by
-    forecast accuracy — the same shape as ``check_global_solar_sufficiency``, so the
-    required grid charge is no more optimistic than the solar feasibility gate
-    (the raw-vs-discounted asymmetry behind the 2026-06-09 undercharge / #816).
+    forecast accuracy (the raw-vs-discounted asymmetry behind the 2026-06-09
+    undercharge / #816). Unlike ``check_global_solar_sufficiency`` since #1141, this
+    still simulates through the entry slot and so credits that slot's own solar;
+    #1185 tracks aligning it.
     """
     from custom_components.localshift.engine.dp_math import (
         _simulate_solar_only_terminal_soc,
@@ -741,8 +742,11 @@ def check_global_solar_sufficiency(
 ) -> bool:
     """Check if remaining solar before the deadline covers the SOC deficit to target.
 
-    Uses realistic simulation that accounts for charge rate limits and efficiency,
-    ensuring consistency with solar_can_reach_target sensor.
+    Uses realistic simulation that accounts for charge rate limits and efficiency.
+    Since #1141 it judges the SOC entering the window, so the entry slot's own
+    solar does not count. ``can_solar_reach_target_feasible`` (the
+    solar_can_reach_target sensor) and ``_required_stored_kwh_to_target`` still
+    simulate through the entry slot; #1185 tracks aligning them.
 
     Fixes Issue #701: Previous implementation used raw surplus without rate limits,
     incorrectly blocking cheap grid charging when solar was insufficient in reality.
