@@ -73,13 +73,11 @@ class TestPhysicalResponseWatch:
         watch = PhysicalResponseWatch(
             decision_timestamp=decision,
             expected_direction="charging",
-            baseline_power_kw=0.1,
             target_mode=BatteryMode.GRID_CHARGING,
             timeout_at=decision + timedelta(minutes=10),
         )
         assert watch.decision_timestamp == decision
         assert watch.expected_direction == "charging"
-        assert watch.baseline_power_kw == 0.1
         assert watch.target_mode == BatteryMode.GRID_CHARGING
         assert watch.timeout_at == decision + timedelta(minutes=10)
 
@@ -160,7 +158,6 @@ class TestRecordTransitionMetrics:
         assert watch.decision_timestamp == dt_aware(2026, 8, 27, 6, 0, 0)
         assert watch.expected_direction == "charging"
         assert watch.target_mode == BatteryMode.GRID_CHARGING
-        assert watch.baseline_power_kw == 0.0
         assert watch.timeout_at == dt_aware(2026, 8, 27, 6, 10, 0)
 
     def test_watch_not_started_dry_run(self, state_machine, data):
@@ -297,7 +294,6 @@ class TestFailedTransitionCleanup:
         data.physical_response_watch = PhysicalResponseWatch(
             decision_timestamp=decision,
             expected_direction="charging",
-            baseline_power_kw=0.0,
             target_mode=BatteryMode.GRID_CHARGING,
             timeout_at=decision + timedelta(minutes=10),
         )
@@ -377,7 +373,6 @@ class TestCoordinatorPhysicalWatch:
         return PhysicalResponseWatch(
             decision_timestamp=decision,
             expected_direction=direction,
-            baseline_power_kw=0.0,
             target_mode=BatteryMode.GRID_CHARGING
             if direction == "charging"
             else BatteryMode.SPIKE_DISCHARGE,

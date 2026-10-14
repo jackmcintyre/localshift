@@ -142,7 +142,6 @@ class PhysicalResponseWatch:
 
     decision_timestamp: datetime
     expected_direction: Literal["charging", "discharging"]
-    baseline_power_kw: float
     target_mode: BatteryMode
     timeout_at: datetime
 

@@ -37,15 +37,8 @@ attribute    utils/validation.py  health.last_valid_value@2
 attribute    utils/validation.py  health.last_valid_value@3
 method       coordinator/coordinator.py  LocalShiftCoordinator._check_entity_health
 method       coordinator/coordinator.py  LocalShiftCoordinator._handle_periodic_tick  # marked DEPRECATED in its own docstring; superseded by the tiered tick handlers
-method       forecast/history.py  HistoryFetcher._separate_samples_by_day_type
 method       state/machine.py  StateMachine._handle_debounce_timing  # orphan with tests: evaluate() uses the newer _clear_stale_debounce_timers path (#968 shape)
-property     coordinator/coordinator.py  LocalShiftCoordinator.entity_ids
 property     engine/outcomes.py  DecisionOutcomeTracker.pending_count
-property     forecast/bootstrapper.py  ForecastBootstrapper.solcast_ready
-property     pricing/provider.py  AmberExpressProvider.entity_prefix
-property     pricing/provider.py  AmberProvider.entity_prefix
-property     pricing/provider.py  PricingProvider.entity_prefix
-property     utils/validation.py  EntityHealth.is_available
 unread-field coordinator/data.py  CoordinatorData.allow_dw_entry_under_target  # written every cycle 'for forecast_computer'; the planner reads config.allow_dw_entry_under_target instead
 unread-field coordinator/data.py  CoordinatorData.charging_needed_before_dw
 unread-field coordinator/data.py  CoordinatorData.daily_forecast_hourly
@@ -77,11 +70,6 @@ variable     coordinator/data.py  ChargingDecision.charge_amount_kwh
 variable     coordinator/data.py  ChargingDecision.price_per_kwh
 variable     coordinator/data.py  ChargingDecision.should_boost
 variable     coordinator/data.py  ChargingDecision.should_grid_charge
-variable     coordinator/data.py  PhysicalResponseWatch.baseline_power_kw
 variable     engine/types.py  NegativeFitAvoidanceContext.risk_window_start_idx
-variable     learning/anomaly.py  WeatherAnomalyResult.deviation_sigma
-variable     learning/anomaly.py  WeatherAnomalyResult.mean_temperature
-variable     learning/anomaly.py  WeatherAnomalyResult.std_temperature
 variable     utils/validation.py  EntityHealth.last_check  # write-only; decide together with last_valid_value (#1076)
 variable     utils/validation.py  EntityHealth.last_valid_value  # write-only; decide together with last_check (#1076)
-variable     utils/validation.py  ValidationResult.warning_message

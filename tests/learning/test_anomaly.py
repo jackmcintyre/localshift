@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import date, timedelta
 from unittest.mock import patch
 
-import pytest
-
 from custom_components.localshift.learning.anomaly import (
     WEATHER_ANOMALY_ANOMALOUS_WEIGHT,
     WEATHER_ANOMALY_NORMAL_WEIGHT,
@@ -73,15 +71,13 @@ class TestWeatherAnomalyDetection:
         result = anomaly_detector.detect_weather_anomaly(35.0)
         assert result.is_anomalous is False
         assert result.weight == WEATHER_ANOMALY_NORMAL_WEIGHT
-        assert result.deviation_sigma == 0.0
-        assert result.mean_temperature == 0.0
-        assert result.std_temperature == 0.0
 
     def test_exactly_7_days_history_is_enough(self, anomaly_detector):
         """Test that exactly 7 days of history is sufficient."""
         _populate_anomaly_history(anomaly_detector, [20.0] * 7)
         result = anomaly_detector.detect_weather_anomaly(20.0)
-        assert result.mean_temperature is not None
+        assert result.is_anomalous is False
+        assert result.weight == WEATHER_ANOMALY_NORMAL_WEIGHT
 
     def test_normal_temperature_not_flagged(self, anomaly_detector):
         """Test that normal temperature is not flagged as anomalous."""
@@ -98,8 +94,6 @@ class TestWeatherAnomalyDetection:
         result = anomaly_detector.detect_weather_anomaly(40.0)
         assert result.is_anomalous is True
         assert result.weight == WEATHER_ANOMALY_ANOMALOUS_WEIGHT
-        assert result.deviation_sigma is not None
-        assert result.deviation_sigma > 2.0
 
     def test_extreme_low_temperature_is_anomalous(self, anomaly_detector):
         """Test that extreme low temperature is flagged as anomalous."""
@@ -114,14 +108,6 @@ class TestWeatherAnomalyDetection:
         _populate_anomaly_history(anomaly_detector, [20.0] * 10)
         result = anomaly_detector.detect_weather_anomaly(35.0)
         assert result.temperature == 35.0
-
-    def test_anomaly_result_mean_and_std_fields(self, anomaly_detector):
-        """Test that WeatherAnomalyResult includes mean and std."""
-        temps = [20.0] * 10
-        _populate_anomaly_history(anomaly_detector, temps)
-        result = anomaly_detector.detect_weather_anomaly(20.0)
-        assert result.mean_temperature == pytest.approx(20.0)
-        assert result.std_temperature == pytest.approx(0.0)
 
     def test_zero_std_does_not_raise(self, anomaly_detector):
         """Test that zero standard deviation is handled gracefully."""
