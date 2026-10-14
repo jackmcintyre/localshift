@@ -197,9 +197,11 @@ class StateMachine:
         self._plan_charge_context: str | None = None
         self._plan_charge_granted: set[str] = set()
         self._plan_charge_epoch: int = 0
-        # Issue #1172: the charge mode this evaluation's plan-charge-only grant
-        # was raised for, so a grant the facade declines can be refunded.
+        # Issue #1172: the charge mode this evaluation spent the budget on, so it
+        # can be refunded when the evaluation commits no charge; and which
+        # plan-charge log lines have already logged at INFO in this context.
         self._plan_charge_grant_mode: str | None = None
+        self._plan_charge_logged: set[str] = set()
         # One-shot suppression for callers that explicitly must not grant a mode
         # change (async_recompute_and_evaluate(invalidate_decision=False)).
         self._suppress_plan_charge_grant: bool = False
@@ -400,12 +402,10 @@ class StateMachine:
         charging. No charge→hold→charge cycle is reachable inside a single price
         context, and no unbounded re-grant loop is either.
 
-        Issue #1172: a grant the facade DECLINES (its fresh plan's slot 0 has
-        drifted off the charge) committed nothing, so it is refunded
-        (``_refund_declined_plan_charge``). Otherwise one drifted replan spends
-        the budget and, on a flat-price hour, no later plan can start the charge.
-        Declined grants can recur while the plan keeps drifting, but none of
-        them changes the mode; a grant that commits stays spent.
+        Issue #1172: an evaluation that spends the budget but commits no charge
+        mode (slot 0 drifted to hold, safety gate, early exit; ordinary grant or
+        not) is refunded (``_refund_unspent_plan_charge``). A grant that commits
+        a charge stays spent, so the bound above is a bound on committed charges.
 
         Args:
             data: Coordinator data (read-only here).
@@ -420,11 +420,13 @@ class StateMachine:
             # is not judged against a stale one.
             self._plan_charge_context = context
             self._plan_charge_granted.clear()
+            self._plan_charge_logged.clear()
             return
 
         if context != self._plan_charge_context:
             self._plan_charge_context = context
             self._plan_charge_granted.clear()
+            self._plan_charge_logged.clear()
 
         pending = data.debug_plan_mode_pending
         battery_target = float(
@@ -446,7 +448,8 @@ class StateMachine:
         ):
             self._plan_charge_granted.add(pending)
             self._plan_charge_epoch += 1
-            _LOGGER.info(
+            self._log_plan_charge(
+                "epoch",
                 "Plan-charge disagreement epoch %d (plan wants %s, committed %s)",
                 self._plan_charge_epoch,
                 pending,
@@ -1061,7 +1064,7 @@ class StateMachine:
                 # mode_decision_allowed / mode_backstop_allowed still True — leaving
                 # the out-of-lock recompute armed to force a charge.
                 computation_engine.compute_derived_values(data)
-                self._refund_declined_plan_charge(data)
+                self._refund_unspent_plan_charge(data)
                 self._note_export_start_deferral(data)
                 await self._evaluate_core(data, computation_engine)
             finally:
@@ -1077,7 +1080,6 @@ class StateMachine:
                 data.mode_decision_allowed = False
                 data.mode_decision_plan_charge_only = False
                 data.mode_decision_export_start_only = False
-                data.mode_decision_epoch_declined = False
                 data.mode_backstop_allowed = False
                 if notify_func is not None:
                     notify_func()
@@ -1152,14 +1154,11 @@ class StateMachine:
                 export_start_only,
             )
         self._plan_charge_grant_mode = (
-            data.debug_plan_mode_pending
-            if plan_charge_only and plan_epoch_moved
-            else None
+            data.debug_plan_mode_pending if plan_epoch_moved else None
         )
         data.mode_decision_allowed = decision_allowed
         data.mode_decision_plan_charge_only = plan_charge_only
         data.mode_decision_export_start_only = export_start_only
-        data.mode_decision_epoch_declined = False
         # The pre-charge execution backstop is NOT a decision token, but it is
         # confined to the same in-lock window: opening it here (and closing it in
         # the evaluate finally block) guarantees the out-of-lock
@@ -1167,24 +1166,29 @@ class StateMachine:
         # never trip it.
         data.mode_backstop_allowed = True
 
-    def _refund_declined_plan_charge(self, data: CoordinatorData) -> None:
-        """Return a declined plan-charge grant to the budget (Issue #1172).
+    def _refund_unspent_plan_charge(self, data: CoordinatorData) -> None:
+        """Return the plan-charge budget when no charge was committed (#1172).
 
-        The grant reads the previous tick's plan; the facade re-plans and, when
-        ``first_charge`` has drifted a slot later, declines to spend it. Nothing
-        was committed, so keeping the budget spent would silence the trigger for
-        the rest of the price context. On 14 Oct the price sat at one value from
-        12:00 to 13:00 and the plan's slot 0 asked for a charge from 12:40
-        without one being committed.
+        The budget is spent on the previous tick's plan, before the facade
+        re-plans. Keyed on the committed mode, not on why none was committed: on
+        14 Oct the price sat flat from 12:00 to 13:00 and, after one drifted
+        replan, slot 0 asked for a charge from 12:40 that nothing could start.
         """
-        mode = self._plan_charge_grant_mode
-        self._plan_charge_grant_mode = None
-        if (
-            mode is not None
-            and data.mode_decision_epoch_declined
-            and data.active_mode not in _CHARGE_MODES
-        ):
+        mode, self._plan_charge_grant_mode = self._plan_charge_grant_mode, None
+        if mode is not None and data.active_mode not in _CHARGE_MODES:
             self._plan_charge_granted.discard(mode)
+            self._log_plan_charge(
+                "refund",
+                "Plan-charge grant for %s not spent (committed %s): refunded",
+                mode,
+                data.active_mode.value,
+            )
+
+    def _log_plan_charge(self, key: str, msg: str, *args: Any) -> None:
+        """Log at INFO on the first occurrence per price context, then DEBUG."""
+        level = logging.DEBUG if key in self._plan_charge_logged else logging.INFO
+        self._plan_charge_logged.add(key)
+        _LOGGER.log(level, msg, *args)
 
     def _classify_grant_source(
         self, context: str | None, export_start: bool = False

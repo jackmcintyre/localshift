@@ -563,11 +563,6 @@ class CoordinatorData:
     Such a grant may only commit PROACTIVE_EXPORT, for the same reason a
     plan-charge grant may only commit a charge mode. Transient; not persisted."""
 
-    mode_decision_epoch_declined: bool = False
-    """Set by the facade when it declines to spend an epoch-only grant because
-    its fresh plan selected a mode the grant may not commit. The state machine
-    refunds a declined plan-charge grant (Issue #1172). Transient."""
-
     mode_backstop_allowed: bool = False
     """Transient in-lock permission for the pre-charge execution backstop. Opened by
     ``StateMachine._apply_decision_token`` and closed in the evaluate finally block,
