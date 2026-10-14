@@ -1098,7 +1098,7 @@ views:
               | Runway slack | {{ v(state_attr(s, 'precharge_runway_slack_min'), ' min') }} |
               | Runway margin setting | {{ states('number.localshift_pre_charge_runway_margin') }} min |
               | Hard floor suppressed by solar | {{ v(state_attr(s, 'hard_floor_suppressed_by_solar')) }} |
-              | Accuracy discount factor | {{ v(state_attr(s, 'accuracy_discount_factor')) }} |
+              | Forecast accuracy, 0.5 floor (not applied) | {{ v(state_attr(s, 'accuracy_discount_factor')) }} |
 
               The backstop firing on a good-solar day is the #816/#849
               regression signature — it should stay silent when solar is real.
