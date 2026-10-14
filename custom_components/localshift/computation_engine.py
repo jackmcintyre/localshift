@@ -969,6 +969,16 @@ class ComputationEngine:
             CONF_AWAY_RESERVE: self.entry.options.get(
                 CONF_AWAY_RESERVE, DEFAULT_AWAY_RESERVE
             ),
+            # Issue #1151: SlotBuilder flags demand-window slots from THIS dict.
+            # Without these two keys the planner stayed on 15:00-21:00 whatever
+            # the configured window was, while the state machine used the
+            # configured times.
+            CONF_DEMAND_WINDOW_START: self.entry.options.get(
+                CONF_DEMAND_WINDOW_START, DEFAULT_DEMAND_WINDOW_START
+            ),
+            CONF_DEMAND_WINDOW_END: self.entry.options.get(
+                CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
+            ),
             "pricing_source": self.entry.options.get(
                 CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
             ),
