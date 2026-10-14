@@ -510,13 +510,17 @@ def test_wait_restart_passes_after_down_and_up():
 
 
 def test_wait_restart_refuses_the_old_process_log():
-    # API keeps answering during shutdown with the pre-restart log: never judge it.
+    # API keeps answering during shutdown with the pre-restart log, whose LATER
+    # lines are recent: only its first timestamp says when the process started.
+    old_log = _log_starting(STARTED - timedelta(hours=13)) + _log_starting(
+        STARTED + timedelta(seconds=5)
+    )
     clock, sleep = _fake_clock()
     reason = dc.wait_restart(
         STARTED,
         30,
         up=lambda: True,
-        fetch_log=lambda: _log_starting(STARTED - timedelta(hours=13)),
+        fetch_log=lambda: old_log,
         sleep=sleep,
         clock=clock,
     )
@@ -551,3 +555,24 @@ def test_wait_restart_unreadable_log_keeps_waiting():
         clock=clock,
     )
     assert reason is not None
+
+
+def test_wait_restart_down_then_old_process_answering_still_fails():
+    # An API blip is not a restart: the log must still show a new start.
+    ups = iter([False, False] + [True] * 100)
+    clock, sleep = _fake_clock()
+    reason = dc.wait_restart(
+        STARTED,
+        30,
+        up=lambda: next(ups),
+        fetch_log=lambda: _log_starting(STARTED - timedelta(hours=13)),
+        sleep=sleep,
+        clock=clock,
+    )
+    assert reason is not None and "API went down" in reason
+
+
+def test_restart_issued_before_midnight_checked_after_it():
+    now = datetime(2026, 10, 16, 0, 0, 10)
+    assert dc.restart_issued_at("23:59:40", now) == datetime(2026, 10, 15, 23, 59, 40)
+    assert dc.restart_issued_at("00:00:05", now) == datetime(2026, 10, 16, 0, 0, 5)

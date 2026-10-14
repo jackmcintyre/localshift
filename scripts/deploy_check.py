@@ -542,7 +542,11 @@ def fetch_live_states() -> dict[str, dict]:
 
 
 def _api_up() -> bool:
-    """True when the HA API answers 200; any error or other status is down."""
+    """True once HA reports RUNNING; any error, other status or state is down.
+
+    The HTTP server answers early in start-up, before custom integrations
+    load, so a 200 alone does not mean LocalShift's entities exist yet.
+    """
     import types
     import urllib.request
 
@@ -551,11 +555,11 @@ def _api_up() -> bool:
 
     url, token = resolve_credentials(types.SimpleNamespace(url=None, token=None))
     req = urllib.request.Request(
-        f"{url}/api/", headers={"Authorization": f"Bearer {token}"}
+        f"{url}/api/config", headers={"Authorization": f"Bearer {token}"}
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status == 200
+            return json.loads(resp.read().decode()).get("state") == "RUNNING"
     except (OSError, ValueError):
         return False
 
@@ -563,6 +567,12 @@ def _api_up() -> bool:
 def _log_restart_time(lines: list[str]) -> datetime | None:
     """The log is truncated at every restart: its first timestamp is the start."""
     return next((t for line in lines if (t := _log_time(line))), None)
+
+
+def restart_issued_at(hhmmss: str, now: datetime) -> datetime:
+    """The wall time a restart was issued; one before midnight checked after it is yesterday."""
+    started = datetime.combine(now.date(), datetime.strptime(hhmmss, "%H:%M:%S").time())
+    return started - timedelta(days=1) if started > now else started
 
 
 def wait_restart(
@@ -578,7 +588,7 @@ def wait_restart(
 
     A snapshot taken while HA is shutting down reads every entity as missing,
     and one taken just before the restart lands judges the old process. So
-    this waits for the API to stop answering, then to answer again, and then
+    this waits for HA to stop reporting RUNNING, then to report it again, and then
     requires the log's first timestamp (the new process's start) to be no
     earlier than ``started``. A restart fast enough to be missed between polls
     still passes on the log alone. Returns None when restarted, else why not.
@@ -637,10 +647,7 @@ def main(argv=None) -> int:
     ap.add_argument("--timeout", type=float, default=900.0)
     args = ap.parse_args(argv)
     if args.wait_restart:
-        started = datetime.combine(
-            datetime.now().date(),
-            datetime.strptime(args.wait_restart, "%H:%M:%S").time(),
-        )
+        started = restart_issued_at(args.wait_restart, datetime.now())
         reason = wait_restart(started, args.timeout)
         print(
             reason
