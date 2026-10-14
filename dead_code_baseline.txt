@@ -21,7 +21,6 @@ attribute    coordinator/coordinator.py  self.data.hybrid_solar_accuracy@3
 attribute    coordinator/coordinator.py  self.data.physical_response_timestamp
 attribute    engine/optimizer_facade.py  data.optimizer_safety_block_reason
 attribute    engine/optimizer_facade.py  data.optimizer_safety_block_reason@2
-attribute    engine/optimizer_facade.py  data.optimizer_soc_underprepared
 attribute    engine/optimizer_facade.py  data.primary_decision
 attribute    engine/optimizer_facade.py  data.primary_decision@2
 attribute    engine/optimizer_facade.py  data.shadow_decision
@@ -62,7 +61,6 @@ unread-field coordinator/data.py  CoordinatorData.optimal_charge_end
 unread-field coordinator/data.py  CoordinatorData.optimal_charge_start
 unread-field coordinator/data.py  CoordinatorData.optimizer_active_applied_at
 unread-field coordinator/data.py  CoordinatorData.optimizer_safety_block_reason  # written when the safety gate blocks, never surfaced
-unread-field coordinator/data.py  CoordinatorData.optimizer_soc_underprepared  # owner decided 13 Oct: delete the flag, keep the WARNING log line
 unread-field coordinator/data.py  CoordinatorData.physical_response_timestamp
 unread-field coordinator/data.py  CoordinatorData.primary_decision
 unread-field coordinator/data.py  CoordinatorData.proactive_export_active
