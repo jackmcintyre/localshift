@@ -168,7 +168,6 @@ def _build_data():
     d.price_spike = True
     d.manual_override = False
     d.decision_log = []
-    d.daily_forecast_soc_15min = []
     d.automation_ready = True
     d.active_mode = BatteryMode.PROACTIVE_EXPORT
     return d

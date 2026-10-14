@@ -118,7 +118,6 @@ def setup_coordinator_data(input_data: dict) -> CoordinatorData:
 
     # Initialize empty containers
     data.decision_log = []
-    data.daily_forecast_soc_15min = []
     data.forecast_consumption_source_counts = {}
     data.forecast_history = []
     data.target_reached_today = input_data.get("target_reached_today", False)
