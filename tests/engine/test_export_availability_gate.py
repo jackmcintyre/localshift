@@ -209,7 +209,6 @@ class TestSlotBuilderFlag:
             },
             data=data,
             all_solcast=[],
-            solar_confidence_factor=1.0,
             base_slot=slot_start,
             local_tz=ZoneInfo("Australia/Sydney"),
             dw_start_time=time(15, 0),
