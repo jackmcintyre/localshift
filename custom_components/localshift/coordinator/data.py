@@ -457,6 +457,11 @@ class CoordinatorData:
     decision_mode: BatteryMode | None = None
     """The mode that was decided (for lag tracking)."""
 
+    charge_dwell_started_at: datetime | None = None
+    """When the optimizer last committed a charge mode (None after committing a
+    non-charge one). The charge-release dwell's clock: decision_timestamp is
+    cleared once the transition's lag is recorded, seconds later (#1159)."""
+
     command_completion_timestamp: datetime | None = None
     """Issue #508 phase 1: when the last control entity command completed."""
 

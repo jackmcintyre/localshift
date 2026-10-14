@@ -1242,7 +1242,9 @@ class OptimizerFacade:
         # Demand-window active takes priority — never trap a charge into a DW.
         if getattr(data, "demand_window_active", False):
             return False
-        ts = getattr(data, "decision_timestamp", None)
+        # Not decision_timestamp: lag tracking clears that once the transition
+        # completes, which made this fail open seconds after every commit (#1159).
+        ts = getattr(data, "charge_dwell_started_at", None)
         if ts is None:
             # Fresh session / no timestamp: fail open, commit immediately.
             return False
@@ -1254,6 +1256,14 @@ class OptimizerFacade:
             return False
         quantum = getattr(optimizer_config, "precharge_runway_quantum_min", 0.0) or 0.0
         band = max(PRECHARGE_RUNWAY_HYSTERESIS_MIN, quantum)
+        _LOGGER.info(
+            "Charge dwell: %s release of %s committed at %s (%.2f of %.2f min)",
+            "holding" if elapsed < band else "allowing",
+            data.active_mode.value,
+            ts.isoformat(),
+            elapsed,
+            band,
+        )
         return elapsed < band
 
     @staticmethod
@@ -1288,6 +1298,9 @@ class OptimizerFacade:
             if decision_time is not None:
                 data.decision_timestamp = decision_time
                 data.decision_mode = new_mode
+                data.charge_dwell_started_at = (
+                    decision_time if new_mode in _CHARGE_MODES else None
+                )
                 _LOGGER.info(
                     "Decision lag tracking: mode change %s → %s at %s",
                     data.active_mode.value,

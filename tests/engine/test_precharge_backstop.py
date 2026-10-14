@@ -54,6 +54,7 @@ from custom_components.localshift.engine.optimizer_facade import (
     OptimizerFacade,
 )
 from custom_components.localshift.engine.types import OptimizerConfig, OptimizerResult
+from custom_components.localshift.state.machine import StateMachine
 
 # The 14:30 line of the evidence pack: SOC 62.2%, price 11.6 c, plan projects a 72.6%
 # DW entry against a 95% target, and the DP has a pre-DW grid charge at slot 4.
@@ -1381,6 +1382,7 @@ def _commit_charge_data(
     data.active_mode = BatteryMode.GRID_CHARGING
     data.decision_mode = BatteryMode.GRID_CHARGING
     data.decision_timestamp = committed_at
+    data.charge_dwell_started_at = committed_at
     return data
 
 
@@ -1456,6 +1458,41 @@ class TestChargeCommitDwell:
         # The commit must NOT be recorded (decision_timestamp only updates on a
         # committed mode change).
         assert data.decision_timestamp == now - timedelta(seconds=45)
+
+    def test_release_held_after_transition_completes(self) -> None:
+        """#1159: a boost committed and executed, then released 56 s later.
+
+        Live 2026-10-13 11:29:41 commit, 11:29:54 transition completed, 11:30:37
+        release on the next grant. The state machine clears decision_timestamp when
+        it records the transition's decision lag, and the dwell read that field, so
+        it failed open seconds after every real commit. Drives the real commit, the
+        real StateMachine completion and the next grant in order.
+        """
+        facade = OptimizerFacade()
+        data = _data(mode_backstop_allowed=False, mode_decision_allowed=True)
+        data.active_mode = BatteryMode.SELF_CONSUMPTION
+        config = _dwell_config(precharge_runway_quantum_min=5.0)
+
+        self._run_for_commit_dwell(facade, data, config, BatteryMode.BOOST_CHARGING)
+        assert data.active_mode == BatteryMode.BOOST_CHARGING
+        assert data.debug_mode_source == "optimizer"
+
+        state_machine = StateMachine(
+            MagicMock(),
+            MagicMock(),
+            lambda key: False,
+            lambda key, default=None: default,
+            MagicMock(),
+        )
+        state_machine._record_transition_metrics(
+            data, BatteryMode.BOOST_CHARGING, dry_run=False
+        )
+        assert data.decision_timestamp is None  # lag tracking done with it
+
+        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
+
+        assert data.active_mode == BatteryMode.BOOST_CHARGING
+        assert data.debug_plan_mode_pending == BatteryMode.SELF_CONSUMPTION.value
 
     def test_dwell_expired_allows_release(self) -> None:
         """Once the committed charge has lived past the band, the release commits."""
