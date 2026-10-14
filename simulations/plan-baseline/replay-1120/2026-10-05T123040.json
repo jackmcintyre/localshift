@@ -8,12 +8,12 @@
    "data": {
     "boost_charge_active": false,
     "boost_charge_needed": false,
-    "cheap_charge_stop_price": 0.16,
+    "cheap_charge_stop_price": 0.22,
     "debug_forecast_slot_found": true,
     "debug_mode_source": "optimizer",
     "debug_plan_mode_pending": null,
     "demand_window_active": false,
-    "effective_cheap_price": 0.13,
+    "effective_cheap_price": 0.19,
     "forecast_horizon_hours": 16.5,
     "negative_fit_window_open": false,
     "optimizer_apply_plan": {
@@ -26,12 +26,12 @@
     "optimizer_precharge_backstop_active": false,
     "planner_export_floor_pct": 10.0,
     "planner_threshold_used": 0.13,
-    "solar_can_reach_target": true,
+    "solar_can_reach_target": false,
     "solar_can_reach_target_in_dw": true
    },
    "optimizer_result_present": true,
    "result": {
-    "can_solar_reach_target": true,
+    "can_solar_reach_target": false,
     "error_message": null,
     "planner_version": "dp_v1",
     "projected_export_kwh": 2.352,
@@ -181,12 +181,12 @@
    "data": {
     "boost_charge_active": false,
     "boost_charge_needed": false,
-    "cheap_charge_stop_price": 0.17,
+    "cheap_charge_stop_price": 0.19,
     "debug_forecast_slot_found": true,
     "debug_mode_source": "optimizer",
     "debug_plan_mode_pending": null,
     "demand_window_active": false,
-    "effective_cheap_price": 0.14,
+    "effective_cheap_price": 0.16,
     "forecast_horizon_hours": 16.5,
     "negative_fit_window_open": false,
     "optimizer_apply_plan": {
@@ -199,12 +199,12 @@
     "optimizer_precharge_backstop_active": false,
     "planner_export_floor_pct": 5.0,
     "planner_threshold_used": 0.14,
-    "solar_can_reach_target": true,
+    "solar_can_reach_target": false,
     "solar_can_reach_target_in_dw": false
    },
    "optimizer_result_present": true,
    "result": {
-    "can_solar_reach_target": true,
+    "can_solar_reach_target": false,
     "error_message": null,
     "planner_version": "dp_v1",
     "projected_export_kwh": 2.902,
@@ -373,12 +373,12 @@
    "data": {
     "boost_charge_active": false,
     "boost_charge_needed": false,
-    "cheap_charge_stop_price": 0.17,
+    "cheap_charge_stop_price": 0.19,
     "debug_forecast_slot_found": true,
     "debug_mode_source": "optimizer",
     "debug_plan_mode_pending": null,
     "demand_window_active": false,
-    "effective_cheap_price": 0.14,
+    "effective_cheap_price": 0.16,
     "forecast_horizon_hours": 16.5,
     "negative_fit_window_open": false,
     "optimizer_apply_plan": {
@@ -391,7 +391,7 @@
     "optimizer_precharge_backstop_active": false,
     "planner_export_floor_pct": 5.0,
     "planner_threshold_used": 0.14,
-    "solar_can_reach_target": true,
+    "solar_can_reach_target": false,
     "solar_can_reach_target_in_dw": false
    },
    "no_grant": {
@@ -403,7 +403,7 @@
    },
    "optimizer_result_present": true,
    "result": {
-    "can_solar_reach_target": true,
+    "can_solar_reach_target": false,
     "error_message": null,
     "planner_version": "dp_v1",
     "projected_export_kwh": 3.051,
