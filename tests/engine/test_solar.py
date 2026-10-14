@@ -210,11 +210,14 @@ class TestCanSolarReachTargetFeasible:
             ),
         ]
 
+        # 60% + two pre-window slots of 2.3 kWh stored = 94.1% entering the window.
+        # Since #1185 the entry slot's own solar does not count, so the fixture
+        # starts high enough for the pre-window solar alone to reach 90%.
         inputs = OptimizerInputs(
             cycle_id="test-cycle",
             config=config,
             slots=slots,
-            initial_soc_pct=45.0,
+            initial_soc_pct=60.0,
         )
 
         # Terminal penalty index is at DW entry (index 2)
@@ -368,14 +371,14 @@ class TestCanSolarReachTargetFeasible:
             cycle_id="test-cycle",
             config=config_with_gate,
             slots=slots,
-            initial_soc_pct=45.0,
+            initial_soc_pct=60.0,
         )
 
         inputs_without_gate = OptimizerInputs(
             cycle_id="test-cycle",
             config=config_without_gate,
             slots=slots,
-            initial_soc_pct=45.0,
+            initial_soc_pct=60.0,
         )
 
         # Terminal penalty index is at DW entry (index 2)
@@ -391,6 +394,42 @@ class TestCanSolarReachTargetFeasible:
         # Both should return True since can_solar_reach_target_feasible is not affected by the gate
         assert result_with_gate is True
         assert result_without_gate is True
+
+    def test_entry_slot_own_solar_is_not_credited(self):
+        """Issue #1185: judge the SOC ENTERING the window, as #1141 did for the DP.
+
+        From 45% the two pre-window slots reach 79.1% entering the window; only the
+        entry slot's own solar (another 17 points) carries the old through-the-slot
+        simulation past the 90% target. The sensor and the urgency price input must
+        not report solar as sufficient when the battery enters the window short.
+        """
+        config = OptimizerConfig(
+            battery_capacity_kwh=13.5,
+            demand_window_target_soc_pct=90.0,
+            solar_charge_rate_kw=5.0,
+            charge_efficiency=0.92,
+            discharge_efficiency=0.95,
+            min_soc_pct=0.0,
+        )
+        slots = [
+            SlotContext(
+                slot_index=i,
+                timestamp_iso=f"2024-01-01T{13 + i // 2:02d}:{30 * (i % 2):02d}:00+00:00",
+                slot_interval_minutes=30,
+                buy_price=0.12 if i < 2 else 0.30,
+                sell_price=0.10,
+                solar_kwh=3.0,
+                consumption_kwh=0.5,
+                is_demand_window_slot=i >= 2,
+                is_demand_window_entry=i == 2,
+            )
+            for i in range(4)
+        ]
+        inputs = OptimizerInputs(
+            cycle_id="test-cycle", config=config, slots=slots, initial_soc_pct=45.0
+        )
+
+        assert can_solar_reach_target_feasible(inputs, slots, config, 2) is False
 
 
 class TestProjectedSolarSocGainPct:
