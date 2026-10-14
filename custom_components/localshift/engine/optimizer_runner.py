@@ -525,7 +525,6 @@ class OptimizerSafetyGate:
         self,
         data: Any,
         optimizer_result: OptimizerResult | None,
-        alignment: dict[str, Any] | None,
     ) -> SafetyGateResult:
         """
         Check all admission criteria for optimizer execution.
@@ -533,7 +532,6 @@ class OptimizerSafetyGate:
         Args:
             data: CoordinatorData instance
             optimizer_result: Result from DPPlanner.plan()
-            alignment: Slot alignment validation result
 
         Returns:
             SafetyGateResult with allowed status and block reason
@@ -564,17 +562,7 @@ class OptimizerSafetyGate:
         checks.append({"name": "solve_success", "passed": True})
         details["solve_success"] = True
 
-        # Check 3: Slot alignment valid
-        if alignment and not alignment.get("valid", True):
-            return SafetyGateResult(
-                allowed=False,
-                block_reason="slot_alignment_invalid",
-                details={"alignment_issues": alignment.get("issues", [])},
-            )
-        checks.append({"name": "slot_alignment_valid", "passed": True})
-        details["alignment_valid"] = alignment.get("valid", True) if alignment else None
-
-        # Check 4: Forecast freshness
+        # Check 3: Forecast freshness
         forecast_age_minutes = self._get_forecast_age_minutes(data)
         if (
             forecast_age_minutes is not None
@@ -593,7 +581,7 @@ class OptimizerSafetyGate:
 
         details["forecast_freshness_max"] = self._forecast_freshness_minutes
 
-        # Check 5: Has decisions for current slot
+        # Check 4: Has decisions for current slot
         if not optimizer_result.decisions:
             return SafetyGateResult(
                 allowed=False,
