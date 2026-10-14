@@ -277,7 +277,6 @@ def coordinator_data():
     data.boost_charge_active = False
     data.force_discharge_active = False
     data.decision_log = []
-    data.daily_forecast_soc_15min = []
     # Issue #349: Mark automation as ready for tests
     data.automation_ready = True
     return data
