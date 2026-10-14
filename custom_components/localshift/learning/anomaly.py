@@ -21,18 +21,12 @@ class WeatherAnomalyResult:
         is_anomalous: Whether the temperature is anomalous (±2σ from mean)
         weight: Weight to apply in rollback evaluation (0.3 or 1.0)
         temperature: The temperature that was evaluated
-        deviation_sigma: How many standard deviations from mean (negative = below)
-        mean_temperature: Mean of historical temperatures
-        std_temperature: Standard deviation of historical temperatures
 
     """
 
     is_anomalous: bool
     weight: float
     temperature: float
-    deviation_sigma: float
-    mean_temperature: float
-    std_temperature: float
 
 
 class WeatherAnomalyDetector:
@@ -102,9 +96,6 @@ class WeatherAnomalyDetector:
                 is_anomalous=False,
                 weight=WEATHER_ANOMALY_NORMAL_WEIGHT,
                 temperature=current_temp,
-                deviation_sigma=0.0,
-                mean_temperature=0.0,
-                std_temperature=0.0,
             )
 
         temps = list(history.values())
@@ -120,9 +111,6 @@ class WeatherAnomalyDetector:
                 is_anomalous=False,
                 weight=WEATHER_ANOMALY_NORMAL_WEIGHT,
                 temperature=current_temp,
-                deviation_sigma=0.0,
-                mean_temperature=mean_temp,
-                std_temperature=std_temp,
             )
 
         deviation = (current_temp - mean_temp) / std_temp
@@ -136,7 +124,4 @@ class WeatherAnomalyDetector:
                 else WEATHER_ANOMALY_NORMAL_WEIGHT
             ),
             temperature=current_temp,
-            deviation_sigma=deviation,
-            mean_temperature=mean_temp,
-            std_temperature=std_temp,
         )

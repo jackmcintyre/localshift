@@ -21,6 +21,13 @@ def history_fetcher():
     return HistoryFetcher(hass, entry)
 
 
+def _day_type_split(fetcher, rows, local_tz):
+    """Weekday/weekend split of `rows`, composed the way production does it."""
+    return fetcher._derive_day_type_buckets(
+        fetcher._separate_samples_by_weekday(rows, local_tz)
+    )
+
+
 class TestComputeHourlyAverages:
     """Tests for _compute_hourly_averages helper."""
 
@@ -920,7 +927,7 @@ class TestCalculateBaselineProfile:
 
 
 class TestSeparateSamplesByDayType:
-    """Tests for _separate_samples_by_day_type method."""
+    """Tests for the weekday/weekend split of statistics rows."""
 
     def test_separates_weekday_weekend(self, history_fetcher):
         """Separate samples into weekday and weekend."""
@@ -932,7 +939,7 @@ class TestSeparateSamplesByDayType:
         ]
         local_tz = timezone.utc
 
-        weekday, weekend = history_fetcher._separate_samples_by_day_type(rows, local_tz)
+        weekday, weekend = _day_type_split(history_fetcher, rows, local_tz)
 
         assert isinstance(weekday, dict)
         assert isinstance(weekend, dict)
@@ -944,7 +951,7 @@ class TestSeparateSamplesByDayType:
         rows = ["not a dict", {"start": 1704067200, "mean": 1.5}]
         local_tz = timezone.utc
 
-        weekday, weekend = history_fetcher._separate_samples_by_day_type(rows, local_tz)
+        weekday, weekend = _day_type_split(history_fetcher, rows, local_tz)
 
         assert len(weekday[0]) == 0 or len(weekday[0]) == 1
 
@@ -957,7 +964,7 @@ class TestSeparateSamplesByDayType:
         ]
         local_tz = timezone.utc
 
-        weekday, weekend = history_fetcher._separate_samples_by_day_type(rows, local_tz)
+        weekday, weekend = _day_type_split(history_fetcher, rows, local_tz)
 
         assert len(weekday[12]) == 1 or len(weekend[12]) == 1
 
@@ -968,7 +975,7 @@ class TestSeparateSamplesByDayType:
         rows = [{"start": "2024-01-01T12:00:00+00:00", "mean": 1.5}]
         local_tz = timezone.utc
 
-        weekday, weekend = history_fetcher._separate_samples_by_day_type(rows, local_tz)
+        weekday, weekend = _day_type_split(history_fetcher, rows, local_tz)
 
         assert len(weekday[12]) == 1 or len(weekend[12]) == 1
 
@@ -979,7 +986,7 @@ class TestSeparateSamplesByDayType:
         rows = [{"start": "invalid", "mean": 1.5}]
         local_tz = timezone.utc
 
-        weekday, weekend = history_fetcher._separate_samples_by_day_type(rows, local_tz)
+        weekday, weekend = _day_type_split(history_fetcher, rows, local_tz)
 
         assert all(len(v) == 0 for v in weekday.values())
 
@@ -990,7 +997,7 @@ class TestSeparateSamplesByDayType:
         rows = [{"start": 1704067200, "mean": None}]
         local_tz = timezone.utc
 
-        weekday, weekend = history_fetcher._separate_samples_by_day_type(rows, local_tz)
+        weekday, weekend = _day_type_split(history_fetcher, rows, local_tz)
 
         assert all(len(v) == 0 for v in weekday.values())
 
@@ -1001,7 +1008,7 @@ class TestSeparateSamplesByDayType:
         rows = [{"start": 1704067200, "mean": "unknown"}]
         local_tz = timezone.utc
 
-        weekday, weekend = history_fetcher._separate_samples_by_day_type(rows, local_tz)
+        weekday, weekend = _day_type_split(history_fetcher, rows, local_tz)
 
         assert all(len(v) == 0 for v in weekday.values())
 
@@ -1012,7 +1019,7 @@ class TestSeparateSamplesByDayType:
         rows = [{"start": 1704067200, "mean": "not-a-number"}]
         local_tz = timezone.utc
 
-        weekday, weekend = history_fetcher._separate_samples_by_day_type(rows, local_tz)
+        weekday, weekend = _day_type_split(history_fetcher, rows, local_tz)
 
         assert all(len(v) == 0 for v in weekday.values())
 
@@ -1146,7 +1153,7 @@ class TestAsyncGetHistoricalHourlyAveragesInsufficientData:
 
 
 class TestSeparateSamplesWeekend:
-    """Tests for weekend data handling in _separate_samples_by_day_type."""
+    """Tests for weekend data handling in the weekday/weekend split."""
 
     def test_handles_weekend_date(self, history_fetcher):
         """Handle weekend dates correctly - covers line 408."""
@@ -1155,7 +1162,7 @@ class TestSeparateSamplesWeekend:
         rows = [{"start": 1704585600, "mean": 2.0}]
         local_tz = timezone.utc
 
-        weekday, weekend = history_fetcher._separate_samples_by_day_type(rows, local_tz)
+        weekday, weekend = _day_type_split(history_fetcher, rows, local_tz)
 
         has_weekend_data = any(len(v) > 0 for v in weekend.values())
         assert has_weekend_data
@@ -1310,8 +1317,8 @@ class TestSeparateSamplesByWeekday:
     def test_derived_day_type_matches_pre_change_two_bucket_split(
         self, history_fetcher
     ):
-        """Regression guard: _separate_samples_by_day_type(rows) is unchanged
-        by rebasing it onto _separate_samples_by_weekday."""
+        """Regression guard: the weekday/weekend split derived from
+        _separate_samples_by_weekday matches the old two-bucket parser."""
         from datetime import timezone
 
         rows = [
@@ -1319,9 +1326,7 @@ class TestSeparateSamplesByWeekday:
             {"start": 1704585600, "mean": 2.0},  # Sunday
             {"start": 1704067200 + 3600, "mean": 3.0},  # Monday, hour 1
         ]
-        weekday, weekend = history_fetcher._separate_samples_by_day_type(
-            rows, timezone.utc
-        )
+        weekday, weekend = _day_type_split(history_fetcher, rows, timezone.utc)
 
         assert weekday[0] == [1.0]
         assert weekday[1] == [3.0]

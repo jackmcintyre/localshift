@@ -1921,7 +1921,6 @@ class StateMachine:
         data.physical_response_watch = PhysicalResponseWatch(
             decision_timestamp=decision,
             expected_direction=direction,
-            baseline_power_kw=data.battery_power_kw,
             target_mode=target,
             timeout_at=decision + PHYSICAL_RESPONSE_TIMEOUT,
         )

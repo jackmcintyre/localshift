@@ -11,7 +11,6 @@ def test_protocol_has_required_methods():
     from custom_components.localshift.pricing.provider import PricingProvider
 
     assert hasattr(PricingProvider, "name")
-    assert hasattr(PricingProvider, "entity_prefix")
     assert hasattr(PricingProvider, "read_forecasts")
     assert hasattr(PricingProvider, "is_spike")
 
@@ -22,7 +21,6 @@ def test_amber_provider_implements_protocol():
 
     provider = AmberProvider()
     assert provider.name == "amber"
-    assert provider.entity_prefix == "sensor.100h_"
 
 
 def test_amber_provider_read_forecasts():
@@ -167,12 +165,11 @@ def test_amber_express_provider_read_forecasts():
     assert slots[1].is_spike is True  # demand_window=True
 
 
-def test_amber_express_entity_prefix():
-    """Test AmberExpressProvider uses correct prefix."""
+def test_amber_express_name():
+    """Test AmberExpressProvider reports its provider name."""
     from custom_components.localshift.pricing.provider import AmberExpressProvider
 
     provider = AmberExpressProvider()
-    assert provider.entity_prefix == "sensor.amber_express_100h_"
     assert provider.name == "amber_express"
 
 

@@ -556,9 +556,6 @@ class TestDelegationsAndDiagnostics:
             is_anomalous=False,
             weight=1.0,
             temperature=20.0,
-            deviation_sigma=0.0,
-            mean_temperature=20.0,
-            std_temperature=1.0,
         )
         detector.detect_weather_anomaly.return_value = result
         correlation._anomaly_detector = detector

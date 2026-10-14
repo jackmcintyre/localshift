@@ -593,14 +593,14 @@ class HistoryFetcher:
     ) -> dict[int, dict[int, list[float]]]:
         """Separate statistics rows into per-day-of-week hourly buckets (Issue #679).
 
-        This is the single parser of `rows`: `_separate_samples_by_day_type`
-        derives its weekday/weekend 2-bucket split from this method's output
+        This is the single parser of `rows`: `_derive_day_type_buckets`
+        derives the weekday/weekend 2-bucket split from this method's output
         rather than re-parsing `rows` itself.
 
         Args:
             rows: List of statistics rows with 'start' and 'mean' fields
             _local_tz: Local timezone for day-of-week determination (unused,
-                kept for API compatibility with _separate_samples_by_day_type)
+                kept so call sites do not change)
 
         Returns:
             Dict {0..6: {0..23: [values]}}, Monday=0 .. Sunday=6. Every
@@ -661,28 +661,6 @@ class HistoryFetcher:
                     target[hour].extend(values)
 
         return weekday_by_hour, weekend_by_hour
-
-    def _separate_samples_by_day_type(
-        self, rows: list[dict[str, Any]], _local_tz: Any
-    ) -> tuple[dict[int, list[float]], dict[int, list[float]]]:
-        """Separate statistics rows into weekday and weekend hourly buckets.
-
-        Derived from _separate_samples_by_weekday (Issue #679): weekday is the
-        Mon-Fri (0-4) buckets merged, weekend is Sat-Sun (5-6) merged. Kept as
-        its own method (rather than inlined at every call site) because its
-        2-tuple return shape is part of the tested public surface.
-
-        Args:
-            rows: List of statistics rows with 'start' and 'mean' fields
-            _local_tz: Local timezone for day-of-week determination (unused, kept for API compatibility)
-
-        Returns:
-            Tuple of (weekday_by_hour, weekend_by_hour) where each is
-            {hour: [values]} for hours 0-23.
-
-        """
-        by_weekday = self._separate_samples_by_weekday(rows, _local_tz)
-        return self._derive_day_type_buckets(by_weekday)
 
     def _compute_daily_profiles(
         self, by_weekday: dict[int, dict[int, list[float]]]
