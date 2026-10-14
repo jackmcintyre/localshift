@@ -94,9 +94,10 @@ class TestTheReplayIgnoresWhereItRuns:
         assert rpb.LIVE_TIME_ZONE.key == "Australia/Sydney"
         capture = REPO_ROOT / NO_ZONE_SCENARIO
         document = json.loads(rpb.baseline_path(capture).read_text())
-        # Under UTC this scenario plans about 7 kWh of grid import, a state
-        # the live system cannot be in.
-        assert document["arms"]["captured"]["result"]["projected_import_kwh"] == 0.0
+        # A scenario with no zone of its own is planned in Sydney local time:
+        # under UTC the first slot would read 07:00:00+00:00 instead.
+        first_slot_time = document["arms"]["captured"]["decisions"][0][0]
+        assert first_slot_time == "2026-07-29T17:00:00+10:00"
 
 
 class TestTheBaselineNotices:
