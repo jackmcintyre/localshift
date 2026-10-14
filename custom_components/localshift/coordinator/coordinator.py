@@ -524,10 +524,27 @@ class LocalShiftCoordinator:
 
         Saves every store before the coordinator goes, to prevent data loss.
         """
+        _LOGGER.info("LocalShift coordinator stopping")
+        self.stop_listening()
+        # Save every store before the coordinator goes (Issue #1142)
+        await self._final_save("unload")
+
+        # (backlog-med-004) Clean up historical load cache on shutdown
+        if self._computation_engine is not None:
+            self._computation_engine.clear_historical_cache()
+
+        _LOGGER.info("LocalShift coordinator stopped")
+
+    def stop_listening(self) -> None:
+        """Mark the coordinator stopped and drop every listener and timer.
+
+        The part of async_stop that saves nothing. It is also the whole
+        teardown after a failed async_start (Issue #1148): a start that failed
+        part way may not have loaded every store, so it must not write them.
+        """
         # Issue #1149: first, and before anything awaits. From here on this
         # instance must not evaluate: after a reload a new coordinator is
         # commanding the same battery.
-        _LOGGER.info("LocalShift coordinator stopping")
         self._stopped = True
         if self._evaluation_dispatcher is not None:
             self._evaluation_dispatcher.stop()
@@ -545,14 +562,6 @@ class LocalShiftCoordinator:
         self._remove_battery_power_listener()
         if self._state_machine is not None:
             self._state_machine.stop_grid_charging_listener()
-        # Save every store before the coordinator goes (Issue #1142)
-        await self._final_save("unload")
-
-        # (backlog-med-004) Clean up historical load cache on shutdown
-        if self._computation_engine is not None:
-            self._computation_engine.clear_historical_cache()
-
-        _LOGGER.info("LocalShift coordinator stopped")
 
     async def _save_learning_data(self) -> None:
         """Save all learning system data to storage.

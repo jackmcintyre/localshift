@@ -2482,6 +2482,23 @@ class StateMachine:
             # Only react to the switch turning ON (reversion)
             if new_state.state != "on":
                 return
+            # Issue #1160: the event context identifies the writer.
+            old_state = event.data.get("old_state")
+            _LOGGER.info(
+                "[GRID CHARGING LISTENER] Switch turned on: context_id=%s "
+                "parent_id=%s user_id=%s old_state=%s in_transition=%s "
+                "commanded_mode=%s",
+                event.context.id,
+                event.context.parent_id,
+                event.context.user_id,
+                old_state.state if old_state is not None else None,
+                self._in_mode_transition,
+                self._commanded_mode.value,
+            )
+            # Issue #1160: mid-transition this is LocalShift's own write;
+            # _commanded_mode is only updated once every write has landed.
+            if self._in_mode_transition:
+                return
             hass.async_create_task(
                 self._reactive_correct_grid_charging(hass, entity_id)
             )
