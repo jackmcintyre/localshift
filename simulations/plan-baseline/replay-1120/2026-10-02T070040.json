@@ -43,7 +43,7 @@
      "SOC_CEILING_CONSTRAINT": 15,
      "SOLAR_SURPLUS_CAPTURE": 18
     },
-    "states_explored": 3390,
+    "states_explored": 3415,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 54
@@ -228,7 +228,7 @@
      "SOC_CEILING_CONSTRAINT": 15,
      "SOLAR_SURPLUS_CAPTURE": 18
     },
-    "states_explored": 3449,
+    "states_explored": 3461,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 54

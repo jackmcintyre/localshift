@@ -229,7 +229,7 @@
      "SOLAR_OPPORTUNITY_WAIT": 8,
      "SOLAR_SURPLUS_CAPTURE": 7
     },
-    "states_explored": 3162,
+    "states_explored": 3168,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 48
@@ -437,7 +437,7 @@
      "SOLAR_OPPORTUNITY_WAIT": 9,
      "SOLAR_SURPLUS_CAPTURE": 6
     },
-    "states_explored": 4484,
+    "states_explored": 4486,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 48
