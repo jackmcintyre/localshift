@@ -94,6 +94,7 @@ class CoordinatorData:
     solar_power_kw: float = 0.0
     load_power_kw: float = 0.0
     soc: float = 0.0
+    soc_available: bool = True  # False when the SOC entity is unavailable (#987)
     operation_mode: str = ""
     backup_reserve: float = 0.0
     # Tesla override corroboration signals (Storm Watch / Grid Event / VPP).
@@ -249,9 +250,6 @@ class CoordinatorData:
     # compute cycle that is immune to a missed midnight event (the latch's only other
     # live reset), preventing a stuck latch from silently disabling pre-charge.
     last_target_reset_date: date | None = None
-    allow_dw_entry_under_target: bool = (
-        False  # Allow DW entry when solar can reach target
-    )
     solar_absent_confidence: float = 1.0
     """Confidence to use when Solcast analysis is absent; 0.3 when stale_solar_conservative=True."""
 
@@ -273,10 +271,7 @@ class CoordinatorData:
     )
 
     # Spike analysis fields for conservative spike discharge
-    spike_max_price: float = 0.0  # Maximum price within spike window
-    spike_price_threshold: float = 0.0  # Price threshold for top X% percentile
     spike_reserve_soc: float = 0.0  # Calculated reserve SOC for spike survival
-    spike_hours_remaining: float = 0.0  # Hours until spike ends
     spike_in_conservative_mode: bool = False  # Whether conservative mode is active
 
     # Excess solar load shifting sensors (backlog-high-017)

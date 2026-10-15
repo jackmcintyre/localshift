@@ -80,11 +80,11 @@
     "next_window_required_soc_pct": null,
     "next_window_tail_start_idx": null,
     "next_window_tail_status": "under_target_mode",
-    "parity_completeness_pct": 73.3,
+    "parity_completeness_pct": 83.6,
     "parity_defaulted_fields": {
      "consumption_kwh": 0,
-     "price": 4,
-     "solar_kwh": 58
+     "price": 0,
+     "solar_kwh": 38
     },
     "peak_soc_pct": 99.43,
     "planner_version": "dp_v1",
@@ -268,11 +268,11 @@
     "next_window_required_soc_pct": null,
     "next_window_tail_start_idx": null,
     "next_window_tail_status": "no_gap",
-    "parity_completeness_pct": 73.3,
+    "parity_completeness_pct": 83.6,
     "parity_defaulted_fields": {
      "consumption_kwh": 0,
-     "price": 4,
-     "solar_kwh": 58
+     "price": 0,
+     "solar_kwh": 38
     },
     "peak_soc_pct": 97.76,
     "planner_version": "dp_v1",
@@ -479,11 +479,11 @@
     "next_window_required_soc_pct": null,
     "next_window_tail_start_idx": null,
     "next_window_tail_status": "no_gap",
-    "parity_completeness_pct": 73.3,
+    "parity_completeness_pct": 83.6,
     "parity_defaulted_fields": {
      "consumption_kwh": 0,
-     "price": 4,
-     "solar_kwh": 58
+     "price": 0,
+     "solar_kwh": 38
     },
     "peak_soc_pct": 98.61,
     "planner_version": "dp_v1",
