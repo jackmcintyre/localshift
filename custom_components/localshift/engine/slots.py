@@ -17,7 +17,7 @@ from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from ..const import BatteryMode
+from ..const import CONF_DEMAND_WINDOW_FROM_AMBER, BatteryMode
 from ..forecast.solar import get_solar_for_slot_by_interval, solcast_span
 from ..forecast.solar_accuracy import SolarAccuracyTracker
 from ..utils.export_availability import export_available_at
@@ -509,6 +509,15 @@ class SlotBuilder:
             in_demand_window = slot_time >= dw_start_time or slot_time < dw_end_time
         else:
             in_demand_window = dw_start_time <= slot_time < dw_end_time
+        # Issue #1104: with the switch on, Amber Express's per-interval flag
+        # decides. A slot without a boolean flag (base Amber, a synthetic or
+        # extended slot, beyond the feed) keeps the clock window above, so a
+        # feed problem can only add window, never remove it.
+        amber_flag = slot.get("demand_window")
+        if isinstance(amber_flag, bool) and self._config_options.get(
+            CONF_DEMAND_WINDOW_FROM_AMBER, False
+        ):
+            in_demand_window = amber_flag
         is_demand_window_entry = in_demand_window and not prev_in_demand_window
 
         ctx = SlotContext(

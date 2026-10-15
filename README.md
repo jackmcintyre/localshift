@@ -222,6 +222,7 @@ Devices & Services. Full canonical reference:
 | `switch.localshift_spike_discharge_conservative` | OFF | Conservative spike discharge with dynamic reserve |
 | `switch.localshift_dry_run` | OFF | Log decisions without sending commands |
 | `switch.localshift_demand_window_block` | ON | Block grid charging during the demand window |
+| `switch.localshift_demand_window_from_amber` | OFF | Take the demand window from Amber Express's per-slot `demand_window` flag; slots without it keep the clock window |
 | `switch.localshift_allow_dw_entry_under_target` | OFF | Allow DW entry under target when solar can reach it |
 | `switch.localshift_stale_solar_conservative` | ON | Cap solar confidence when Solcast is stale/absent |
 | `switch.localshift_notifications_enabled` | ON | Enable all notifications (transitions, summaries, manual actions, alerts) |

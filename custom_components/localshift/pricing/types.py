@@ -27,6 +27,9 @@ class ForecastSlot:
     # True before the interval settles, False once actual. None when the
     # source entry didn't carry one (e.g. synthetic/extended slots).
     estimate: bool | None = None
+    # Issue #1104: Amber Express's per-interval demand-window flag. None when
+    # the source entry did not carry a boolean one (base Amber, extended slots).
+    demand_window: bool | None = None
 
     def get(self, key: str, default: Any = None) -> Any:
         """Dict-compatible accessor for backward compatibility.

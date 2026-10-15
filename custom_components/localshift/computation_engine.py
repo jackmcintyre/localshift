@@ -20,6 +20,7 @@ from .const import (
     CONF_CHARGE_TAPER_START_PCT,
     CONF_COMPARISON_MODE,
     CONF_DEMAND_WINDOW_END,
+    CONF_DEMAND_WINDOW_FROM_AMBER,
     CONF_DEMAND_WINDOW_START,
     CONF_EXPORT_PRICE_MARGIN,
     CONF_MAX_PRECHARGE_PRICE,
@@ -60,6 +61,7 @@ from .const import (
     DEFAULT_TARGET_PENALTY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
+    SWITCH_DEMAND_WINDOW_FROM_AMBER,
     SWITCH_SPIKE_DISCHARGE_ENABLED,
     SWITCH_STALE_SOLAR_CONSERVATIVE,
 )
@@ -81,7 +83,7 @@ from .engine.optimizer_facade import (
 )
 from .engine.optimizer_runner import _find_current_slot_index
 from .engine.price_signal_engine import PriceSignalEngine
-from .engine.slot_schedule import TOTAL_SLOTS
+from .engine.slot_schedule import TOTAL_SLOTS, find_current_entry
 from .engine.soc_simulator import SocSimulator
 from .forecast import (
     AccuracyMetricsStore,
@@ -475,7 +477,19 @@ class ComputationEngine:
     ) -> None:
         """---- Step 3: demand_window_active ----"""
         dw_block_enabled = self._get_switch_state("demand_window_block")
-        data.demand_window_active = dw_block_enabled and ctx.in_demand_window
+        in_window = ctx.in_demand_window
+        # Issue #1104: same rule as the slot builder, for the interval covering
+        # now. No covering entry, or no boolean flag on it, keeps the clock.
+        if self._get_switch_state(SWITCH_DEMAND_WINDOW_FROM_AMBER):
+            current = find_current_entry(
+                data.general_forecast,
+                ctx.now_dt,
+                self.entry.options.get("ha_timezone") or str(dt_util.DEFAULT_TIME_ZONE),
+            )
+            flag = current[0].get("demand_window") if current else None
+            if isinstance(flag, bool):
+                in_window = flag
+        data.demand_window_active = dw_block_enabled and in_window
 
     def _enter_manual_override(self, data: CoordinatorData) -> bool:
         """Handle manual override: set MANUAL mode, clear stale debug fields.
@@ -957,6 +971,10 @@ class ComputationEngine:
             ),
             CONF_DEMAND_WINDOW_END: self.entry.options.get(
                 CONF_DEMAND_WINDOW_END, DEFAULT_DEMAND_WINDOW_END
+            ),
+            # Issue #1104: whether Amber Express's per-slot flag decides the window.
+            CONF_DEMAND_WINDOW_FROM_AMBER: self._get_switch_state(
+                SWITCH_DEMAND_WINDOW_FROM_AMBER
             ),
             "pricing_source": self.entry.options.get(
                 CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE

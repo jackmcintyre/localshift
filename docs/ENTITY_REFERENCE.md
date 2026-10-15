@@ -4,13 +4,13 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **68 entities** grouped under a single "LocalShift" device:
+The integration creates **69 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
 | Sensors | 31 | `sensor` |
 | Binary Sensors | 11 | `binary_sensor` |
-| Switches | 8 | `switch` |
+| Switches | 9 | `switch` |
 | Numbers | 14 | `number` |
 | Selects | 2 | `select` |
 | Buttons | 2 | `button` |
@@ -122,6 +122,7 @@ user-facing entities with no category and appear on the main device card.
 | `switch.localshift_allow_dw_entry_under_target` | `localshift_allow_dw_entry_under_target` | `switch` | config |
 | `switch.localshift_automation_enabled` | `localshift_automation_enabled` | `switch` | — |
 | `switch.localshift_demand_window_block` | `localshift_demand_window_block` | `switch` | — |
+| `switch.localshift_demand_window_from_amber` | `localshift_demand_window_from_amber` | `switch` | config |
 | `switch.localshift_dry_run` | `localshift_dry_run` | `switch` | config |
 | `switch.localshift_notifications_enabled` | `localshift_notifications_enabled` | `switch` | config |
 | `switch.localshift_spike_discharge_conservative` | `localshift_spike_discharge_conservative` | `switch` | config |
@@ -904,6 +905,7 @@ Attributes:
       predicted_soc_pct: 75.5
       grid_import_kwh: 0.0
       grid_export_kwh: 0.0
+      is_demand_window: false  # the plan treated this slot as a demand-window slot (#1104)
     - ...
   total_slots: 48
   computed_at: "2026-03-01T10:00:00+11:00"
@@ -1297,7 +1299,21 @@ State: on
 
 ---
 
-### 7. switch.localshift_notifications_enabled
+### 7. switch.localshift_demand_window_from_amber
+
+**Purpose:** Take the demand window from Amber Express's per-interval `demand_window` flag instead of the clock (issue #1104). Ausgrid's demand charge is seasonal and working-weekday only; the configured window is applied every day.
+
+**Default:** OFF
+
+**Behavior:**
+- ON: a slot whose general-price forecast entry carries a boolean `demand_window` is a demand-window slot exactly when that flag is true. Everything that keys off a demand-window slot follows it: the grid-import ban, the window entry and its target and terminal penalty, the water level, the urgency window, the hard floor and the backstops. `binary_sensor.localshift_demand_window` (Demand Block execution and the no-charge-into-window guards) follows the flag on the interval covering now. A day with no flagged slot has no window entry and no target. A slot without the flag (base Amber pricing, Express unavailable, the synthetic or extended slots, past the end of the feed) keeps the configured clock window, so a feed problem can only add window.
+- OFF: the configured clock window, every day.
+
+The plan chart (`custom:localshift-plan-timeline`) shades the slots the plan treated as demand-window slots, from `is_demand_window` on `sensor.localshift_optimizer_plan_detailed` decisions.
+
+---
+
+### 8. switch.localshift_notifications_enabled
 
 **Purpose:** Enable all LocalShift notifications (consolidated switch).
 

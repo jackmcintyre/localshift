@@ -816,6 +816,10 @@ class PlannedSlotDecision:
     """The slot's load-sized export floor (passthrough of
     ``SlotContext.export_floor_pct``, for display)."""
 
+    is_demand_window: bool = False
+    """Whether the plan treated this slot as a demand-window slot (passthrough
+    of ``SlotContext.is_demand_window_slot``, for the plan chart, #1104)."""
+
     # --- Derived compatibility flags (set from action) ---
     @property
     def grid_charge(self) -> bool:

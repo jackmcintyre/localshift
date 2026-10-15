@@ -221,6 +221,8 @@ def compute_hybrid_slot_schedule(
             - estimate: bool | None, the covering entry's Amber `estimate` flag
               (True pre-settlement, False once settled; None on synthetic or
               60-min-derived slots)
+            - demand_window: the entry's Amber Express `demand_window` flag
+              (issue #1104); None when the entry has none
         - metadata: Dict with:
             - timezone: HA timezone
             - slot_intervals: {"5min": count, "30min": count}
@@ -439,6 +441,7 @@ def _parse_single_entry(
         if is_current
         else ("5min" if duration_minutes == 5 else "30min"),
         "estimate": entry.get("estimate"),
+        "demand_window": entry.get("demand_window"),
     }
 
 
@@ -493,6 +496,7 @@ def _current_30min_slot(
             "price": price,
             "price_source": "forecast_current",
             "estimate": entry.get("estimate"),
+            "demand_window": entry.get("demand_window"),
         }
 
     anchor = _floor_to_5min(now_local)
@@ -507,6 +511,7 @@ def _current_30min_slot(
         "price": price,
         "price_source": "forecast_current",
         "estimate": entry.get("estimate"),
+        "demand_window": entry.get("demand_window"),
     }
 
 
