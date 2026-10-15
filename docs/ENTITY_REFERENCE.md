@@ -1339,7 +1339,7 @@ State: on
 
 ---
 
-### 8. switch.localshift_planner_knows_current_mode
+### 9. switch.localshift_planner_knows_current_mode
 
 **Purpose:** Tell the planner which mode the battery is in now, so that changing it in the first slot of a plan costs the switching penalty (Issue #1158).
 
