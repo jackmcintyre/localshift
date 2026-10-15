@@ -139,10 +139,13 @@ def test_switch_on_follows_amber_where_it_differs_from_the_clock():
     assert flagged == ["16:00", "16:30", "17:00", "17:30"]
 
 
-def _padded_window(state_reader, now: datetime, flag) -> list[tuple[str, bool, bool]]:
-    """Switch on, a 24 h Express feed from ``now`` floored to the half hour,
-    run through the reader's real 24 h padding as live does."""
-    start = now.replace(minute=now.minute - now.minute % 30, second=0)
+def _padded_window(
+    state_reader, now: datetime, flag, feed_start: datetime | None = None
+) -> list[tuple[str, bool, bool]]:
+    """Switch on, a 24 h Express feed from ``feed_start`` (default ``now``
+    floored to the half hour), run through the reader's real 24 h padding as
+    live does."""
+    start = feed_start or now.replace(minute=now.minute - now.minute % 30, second=0)
     feed = [
         ForecastSlot(
             start_time=start + timedelta(minutes=30 * i),
@@ -197,6 +200,23 @@ def test_reader_padding_continues_a_window_the_feed_opened(state_reader):
     )
     assert rows[-1] == ("16 18:00", True, False)
     assert [r[0] for r in rows if r[2]] == ["15 18:00", "16 15:00"]
+
+
+def test_reader_padding_of_a_stale_feed_keeps_the_clock_window(state_reader):
+    """PR #1201 review round 2: in season, Express last refreshed its forecast
+    at 2 Nov 15:00, so at 3 Nov 13:00 the feed ends at 15:00 and the reader
+    pads 22 h. That is a feed problem, not a sub-slot top-up: the padding
+    falls back to the clock, so the plan keeps the 15:00 entry and its target
+    (it dropped both: no DW slot at all)."""
+    rows = _padded_window(
+        state_reader,
+        datetime(2026, 11, 3, 13, 0, 22, tzinfo=SYDNEY),
+        _clock,
+        feed_start=datetime(2026, 11, 2, 15, 0, tzinfo=SYDNEY),
+    )
+    window = [r[0] for r in rows if r[1]]
+    assert window == [f"03 {h}:{m}" for h in range(15, 21) for m in ("00", "30")]
+    assert [r[0] for r in rows if r[2]] == ["03 15:00"]
 
 
 def test_a_slot_without_a_boolean_flag_keeps_the_clock():
