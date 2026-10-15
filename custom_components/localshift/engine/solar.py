@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from custom_components.localshift.engine.types import (
@@ -97,57 +96,6 @@ def projected_solar_soc_gain_pct(
         config=config,
     )
     return max(0.0, terminal_soc - initial_soc_pct)
-
-
-def projected_solcast_gain_pct(
-    all_solcast: list[dict[str, Any]],
-    start_time: datetime,
-    end_time: datetime,
-    battery_capacity_kwh: float,
-    avg_load_kw: float = 0.5,
-    confidence_resolver: Any | None = None,
-) -> float:
-    """Estimate net SOC gain (%) from solar in Solcast beyond the DP horizon.
-
-    Calculates sum(solar - consumption) for the window [start_time, end_time).
-    Solar comes from pv_estimate in all_solcast; consumption is estimated
-    using avg_load_kw.
-    """
-    if end_time <= start_time:
-        return 0.0
-
-    solar_kwh = 0.0
-    for period in all_solcast:
-        p_start_str = period.get("period_start")
-        if not p_start_str:
-            continue
-        try:
-            p_start = datetime.fromisoformat(str(p_start_str))
-            # Solcast periods are typically 30 mins
-            if start_time <= p_start < end_time:
-                raw_estimate = float(period.get("pv_estimate", 0))
-                raw_p10 = float(period.get("pv_estimate10", 0))
-                confidence = (
-                    confidence_resolver.get_confidence(p_start)
-                    if confidence_resolver is not None
-                    else 1.0
-                )
-
-                from custom_components.localshift.forecast.solar import (
-                    _blend_solar_estimate,
-                )
-
-                solar_kwh += (
-                    _blend_solar_estimate(raw_estimate, raw_p10, confidence) * 0.5
-                )
-        except (ValueError, TypeError):
-            continue
-
-    hours = (end_time - start_time).total_seconds() / 3600.0
-    consumption_kwh = avg_load_kw * hours
-
-    net_kwh = max(0.0, solar_kwh - consumption_kwh)
-    return (net_kwh / battery_capacity_kwh) * 100.0
 
 
 def get_forecast_accuracy(

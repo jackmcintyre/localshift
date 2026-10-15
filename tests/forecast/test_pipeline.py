@@ -683,3 +683,39 @@ def test_falls_back_to_instantaneous_when_short_zero():
     )
 
     assert all(call["current_load_kw"] == 1.4 for call in load_forecaster.calls)
+
+
+def test_fallback_boost_needed_uses_the_shared_charge_efficiency():
+    """With no DP plan, the boost check times the charge at CHARGE_EFFICIENCY (#987).
+
+    It used its own 0.9. 50% -> 95% is 6.075 kWh stored; at 3.3 kW that takes
+    2.045h at 0.9 and 2.001h at 0.92. With 2.525h to go the bar is 2.025h, so
+    0.9 said a boost was needed and the shared 0.92 says it is not.
+    """
+    data = CoordinatorData()
+    data.soc = 50.0
+    data.solcast_today = []
+    data.solcast_tomorrow = []
+    data.optimizer_decisions = []
+
+    pipeline = ForecastPipeline(
+        load_forecaster=_StubLoadForecaster(1.0),
+        price_signals=_StubPriceSignals(),
+        forecast_history_store=_StubForecastHistoryStore(),
+        get_switch_state=lambda _key: False,
+        excess_solar_signals=MagicMock(),
+    )
+
+    now_dt = datetime(2026, 2, 16, 15, 28, 30, tzinfo=UTC)
+    with patch("homeassistant.util.dt.now", return_value=now_dt):
+        pipeline.compute_solar_battery_forecast(
+            data=data,
+            now_dt=now_dt,
+            target_hour=18,
+            before_dw=True,
+            after_dw=False,
+            target_pct=95.0,
+        )
+
+    assert data.solar_battery_forecast["deficit_kwh"] == 6.08
+    assert data.solar_battery_forecast["boost_needed"] is False

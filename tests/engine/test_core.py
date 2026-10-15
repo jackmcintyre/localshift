@@ -632,43 +632,6 @@ class TestDPPlannerEdgeCoverage:
         assert result.success is False
         assert "simulated internal solver error" in (result.error_message or "")
 
-    def test_plan_with_all_solcast_and_demand_window_covers_solar_horizon_path(self):
-        """plan() enters solar-beyond-horizon credit block when all_solcast is set."""
-        # Conditions needed:
-        #   - terminal_penalty_idx set (demand window entry present)
-        #   - solar_capable=False (initial SOC too low, no slot solar)
-        #   - inputs.all_solcast non-empty
-        # This covers the projected_solcast_gain_pct blocks in _initialize_dp_tables
-        # and _get_terminal_diagnostics (issue #619 wiring).
-        planner = DPPlanner()
-
-        slots = [
-            self._slot(0, ts="2026-01-01T08:00:00+00:00"),
-            self._slot(
-                1,
-                ts="2026-01-01T08:30:00+00:00",
-                is_dw_entry=True,
-                is_dw_slot=True,
-            ),
-        ]
-        inputs = OptimizerInputs(
-            cycle_id="test-solar-horizon",
-            slots=slots,
-            initial_soc_pct=5.0,  # Too low to reach 80% target via solar alone
-            all_solcast=[
-                {
-                    "period_start": "2026-01-01T09:00:00+00:00",
-                    "pv_estimate": 1.0,
-                }
-            ],
-            config=OptimizerConfig(demand_window_target_soc_pct=80.0),
-        )
-
-        result = planner.plan(inputs)
-
-        # The planner completes — we just need the code path executed
-        assert result.success is True
-
 
 class TestDeficitAwareUrgencyWindow:
     """Test 8: _determine_urgency_window_start_idx widens with the SOC deficit.
