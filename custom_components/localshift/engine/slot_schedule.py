@@ -223,6 +223,7 @@ def compute_hybrid_slot_schedule(
               60-min-derived slots)
             - demand_window: the entry's Amber Express `demand_window` flag
               (issue #1104); None when the entry has none
+            - source_type: the entry's source_type ("extended" = reader padding)
         - metadata: Dict with:
             - timezone: HA timezone
             - slot_intervals: {"5min": count, "30min": count}
@@ -442,6 +443,7 @@ def _parse_single_entry(
         else ("5min" if duration_minutes == 5 else "30min"),
         "estimate": entry.get("estimate"),
         "demand_window": entry.get("demand_window"),
+        "source_type": entry.get("source_type"),
     }
 
 

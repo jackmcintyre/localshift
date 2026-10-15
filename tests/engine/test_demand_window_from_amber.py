@@ -139,8 +139,68 @@ def test_switch_on_follows_amber_where_it_differs_from_the_clock():
     assert flagged == ["16:00", "16:30", "17:00", "17:30"]
 
 
+def _padded_window(state_reader, now: datetime, flag) -> list[tuple[str, bool, bool]]:
+    """Switch on, a 24 h Express feed from ``now`` floored to the half hour,
+    run through the reader's real 24 h padding as live does."""
+    start = now.replace(minute=now.minute - now.minute % 30, second=0)
+    feed = [
+        ForecastSlot(
+            start_time=start + timedelta(minutes=30 * i),
+            duration=30,
+            per_kwh=0.20,
+            is_spike=False,
+            source_type="amber_express",
+            demand_window=flag(start + timedelta(minutes=30 * i)),
+        )
+        for i in range(48)
+    ]
+    padded = state_reader._extend_forecast_with_assumed_prices(feed, now, 0.20)
+    assert padded[-1].source_type == "extended"
+    builder = SlotBuilder(
+        config_options={
+            "demand_window_start": "15:00:00",
+            "demand_window_end": "21:00:00",
+            CONF_DEMAND_WINDOW_FROM_AMBER: True,
+        },
+        ha_timezone="Australia/Sydney",
+    )
+    slots, _ = builder.build_slots(_data(padded), now_dt=now)
+    return [
+        (
+            datetime
+            .fromisoformat(s.timestamp_iso)
+            .astimezone(SYDNEY)
+            .strftime("%d %H:%M"),
+            s.is_demand_window_slot,
+            s.is_demand_window_entry,
+        )
+        for s in slots
+    ]
+
+
+def test_reader_padding_does_not_open_a_window_amber_never_flagged(state_reader):
+    """PR #1201 review: live on 15 Oct Express's feed ended ~22 s short of
+    now + 24 h, the reader padded one 30-minute slot at 16 Oct 15:00, and that
+    unflagged slot fell back to the clock: a DW entry and a 95% target at the
+    end of the horizon every afternoon, with every Express flag false."""
+    rows = _padded_window(
+        state_reader, datetime(2026, 10, 15, 15, 0, 22, tzinfo=SYDNEY), lambda ts: False
+    )
+    assert rows[-1][0] == "16 15:00"
+    assert [r for r in rows if r[1] or r[2]] == []
+
+
+def test_reader_padding_continues_a_window_the_feed_opened(state_reader):
+    """In season the padding past a feed that ends mid-window stays in it."""
+    rows = _padded_window(
+        state_reader, datetime(2026, 10, 15, 18, 0, 22, tzinfo=SYDNEY), _clock
+    )
+    assert rows[-1] == ("16 18:00", True, False)
+    assert [r[0] for r in rows if r[2]] == ["15 18:00", "16 15:00"]
+
+
 def test_a_slot_without_a_boolean_flag_keeps_the_clock():
-    """Field absent, base Amber, an extended slot: the feed can only add
+    """Field absent, base Amber, a synthetic slot: the feed can only add
     window, never remove it."""
     cutoff = NOW + timedelta(hours=5)  # 17:00: flags stop mid-window
     rows = _window(True, lambda ts: False if ts < cutoff else None)

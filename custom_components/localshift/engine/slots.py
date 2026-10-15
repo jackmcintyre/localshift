@@ -510,14 +510,16 @@ class SlotBuilder:
         else:
             in_demand_window = dw_start_time <= slot_time < dw_end_time
         # Issue #1104: with the switch on, Amber Express's per-interval flag
-        # decides. A slot without a boolean flag (base Amber, a synthetic or
-        # extended slot, beyond the feed) keeps the clock window above, so a
-        # feed problem can only add window, never remove it.
+        # decides. A slot without a boolean flag (base Amber, a synthetic
+        # slot) keeps the clock window above. The reader's padding past the
+        # feed ("extended", usually one slot when Express falls seconds short
+        # of 24 h) may continue a window but never open one.
         amber_flag = slot.get("demand_window")
-        if isinstance(amber_flag, bool) and self._config_options.get(
-            CONF_DEMAND_WINDOW_FROM_AMBER, False
-        ):
-            in_demand_window = amber_flag
+        if self._config_options.get(CONF_DEMAND_WINDOW_FROM_AMBER, False):
+            if isinstance(amber_flag, bool):
+                in_demand_window = amber_flag
+            elif slot.get("source_type") == "extended":
+                in_demand_window = in_demand_window and prev_in_demand_window
         is_demand_window_entry = in_demand_window and not prev_in_demand_window
 
         ctx = SlotContext(
