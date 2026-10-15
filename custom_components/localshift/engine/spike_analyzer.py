@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from datetime import datetime, time
 
@@ -54,10 +55,7 @@ class SpikeAnalyzer:
         # Hardcoded defaults (Issue #214)
         spike_percentile = DEFAULT_SPIKE_PRICE_PERCENTILE
 
-        data.spike_max_price = 0.0
-        data.spike_price_threshold = 0.0
         data.spike_reserve_soc = 0.0
-        data.spike_hours_remaining = 0.0
         data.spike_in_conservative_mode = False
 
         if not conservative_enabled:
@@ -74,9 +72,8 @@ class SpikeAnalyzer:
         if spike_end is None or not spike_prices:
             return
 
-        data.spike_max_price = max_price
-        data.spike_hours_remaining = (spike_end - now_dt).total_seconds() / 3600
-        data.spike_price_threshold = self._calculate_spike_price_threshold(
+        hours_remaining = (spike_end - now_dt).total_seconds() / 3600
+        price_threshold = self._calculate_spike_price_threshold(
             spike_prices, spike_percentile
         )
         data.spike_reserve_soc = self.calculate_spike_reserve_soc(
@@ -86,10 +83,10 @@ class SpikeAnalyzer:
 
         _LOGGER.info(
             "Spike analysis: max_price=%.2f, threshold=%.2f, reserve=%.1f%%, hours_remaining=%.1f",
-            data.spike_max_price,
-            data.spike_price_threshold,
+            max_price,
+            price_threshold,
             data.spike_reserve_soc,
-            data.spike_hours_remaining,
+            hours_remaining,
         )
 
     def calculate_spike_reserve_soc(
@@ -137,7 +134,21 @@ class SpikeAnalyzer:
         else:
             required_hours = spike_duration_hours
 
-        expected_load_kw = data.load_power_kw if data.load_power_kw > 0 else 0.5
+        expected_load_kw = _expected_load_kw(data, required_hours)
         reserve_kwh = expected_load_kw * required_hours
         reserve_soc = (reserve_kwh / BATTERY_CAPACITY_KWH) * 100
         return min(reserve_soc, 100.0)
+
+
+def _expected_load_kw(data: CoordinatorData, hours: float) -> float:
+    """Mean forecast load over the next ``hours`` of 15-minute bins (#987).
+
+    Without a forecast: the recent-load median, the live reading, then 0.5 kW.
+    """
+    bins = data.load_forecast_slots[: max(1, math.ceil(hours * 4))]
+    if bins:
+        return sum(bins) / len(bins)
+    for load_kw in (data.recent_load_short_kw, data.load_power_kw):
+        if load_kw > 0:
+            return load_kw
+    return 0.5

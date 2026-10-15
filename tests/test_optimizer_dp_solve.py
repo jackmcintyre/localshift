@@ -47,7 +47,6 @@ from custom_components.localshift.engine.reason_codes import (
 )
 from custom_components.localshift.engine.solar import (
     projected_solar_soc_gain_pct,
-    projected_solcast_gain_pct,
 )
 from custom_components.localshift.engine.transitions import (
     _transition_hold_deficit,
@@ -2736,25 +2735,6 @@ def test_simulate_max_soc_with_demand_bounds():
         10.0, slots, config, demand_bounds={"entry_idx": 2, "end_idx": 3}
     )
     assert max_soc > 10.0
-
-
-def test_projected_solcast_gain_pct():
-    """Lines 1672-1689: _projected_solcast_gain_pct with valid solcast data."""
-    from datetime import datetime
-
-    all_solcast = [
-        {"period_start": "2026-01-03T10:00:00", "pv_estimate": 4.0},
-        {"period_start": "2026-01-03T10:30:00", "pv_estimate": 5.0},
-    ]
-
-    start_time = datetime.fromisoformat("2026-01-03T09:00:00")
-    end_time = datetime.fromisoformat("2026-01-03T11:00:00")
-
-    result = projected_solcast_gain_pct(
-        all_solcast, start_time, end_time, battery_capacity_kwh=13.5
-    )
-
-    assert result > 0.0
 
 
 def test_futile_cycling_battery_at_floor():

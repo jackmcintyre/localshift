@@ -14,5 +14,4 @@
 # site of the same attribute). Sorted; no line numbers on purpose. Notes
 # survive --update.
 
-unread-field coordinator/data.py  CoordinatorData.allow_dw_entry_under_target  # written every cycle 'for forecast_computer'; the planner reads config.allow_dw_entry_under_target instead
 variable     engine/types.py  NegativeFitAvoidanceContext.risk_window_start_idx

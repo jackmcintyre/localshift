@@ -1214,11 +1214,13 @@ State: on
 
 **Purpose:** On/off for automatic spike export (Issue #1120): exporting the current interval on a genuine price spike, and starting that export without the 2-minute debounce.
 
-**Default:** ON
+**Default:** OFF. Turn it on deliberately once you trust it: spike export has not yet run on a real spike.
+
+**Upgrading:** the release that made OFF the default turns this switch OFF once on existing installs, whatever it was before (they had it ON, the old default). That runs as a config entry migration (1.1 -> 1.2) and logs a warning; after it, the switch keeps whatever you set across restarts.
 
 **Example Data:**
 ```
-State: on
+State: off
 ```
 
 **Behavior:**
@@ -1501,7 +1503,7 @@ Added in Issue #382 to replace manual control buttons with a single select entit
 | `self_consumption` | Default — battery powers house, grid used as needed |
 | `grid_charging` | Force charging from grid at 3.3kW (backup mode) |
 | `boost_charging` | Force charging at 5kW (autonomous + reserve=100%) |
-| `spike_discharge` | Force discharging to export during price spikes |
+| `spike_discharge` | Force discharging to export (manual only: automatic operation never selects it, and it has no price-aware exit) |
 | `proactive_export` | Exporting battery before negative FIT periods |
 
 **Behavior:**

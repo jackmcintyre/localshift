@@ -34,6 +34,21 @@ def _normalize_slot_time(slot_start: datetime) -> datetime:
     return dt_util.as_local(slot_start)
 
 
+def solcast_span(
+    solcast_forecasts: list[dict[str, Any]],
+) -> tuple[datetime, datetime] | None:
+    """(first period start, last 30-minute period end), or None without entries."""
+    starts = [
+        dt_util.as_local(start)
+        for entry in solcast_forecasts
+        if isinstance(entry, dict)
+        and (
+            start := _parse_forecast_dt(entry.get("period_start") or entry.get("start"))
+        )
+    ]
+    return (min(starts), max(starts) + timedelta(minutes=30)) if starts else None
+
+
 def _blend_solar_estimate(
     pv_estimate: float,
     pv_estimate10: float,
