@@ -461,7 +461,7 @@ def _arm(instant: str, arm: str, optimization_mode: str = "self_consumption") ->
     """A 2026-10-12 capture through the real engine under one arm.
 
     ``base`` is the base branch (the admission code removed), ``branch`` is the
-    switch at its default ON, ``switch_off`` is the switch turned OFF through
+    switch ON as captured live, ``switch_off`` is the switch turned OFF through
     the same switch-state resolver production uses.
     """
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -599,9 +599,10 @@ class TestKillSwitch:
         config = _build_optimizer_config(SimpleNamespace(), options)
         assert config.spike_export_enabled is expected
 
-    def test_default_is_on(self):
-        """Read, not chosen here: the rule ships enabled because the switch
-        already defaulted ON. Changing either default is an owner decision."""
+    def test_default_is_off(self):
+        """Owner decision, 15 Oct: the rule ships switched OFF (#1120). The
+        dataclass default stays ON so planner tests exercise the rule;
+        production always sets it from the switch."""
         from types import SimpleNamespace
 
         from custom_components.localshift.const import (
@@ -612,6 +613,7 @@ class TestKillSwitch:
             _build_optimizer_config,
         )
 
-        assert SWITCH_DEFAULTS[SWITCH_SPIKE_DISCHARGE_ENABLED] is True
+        assert SWITCH_DEFAULTS[SWITCH_SPIKE_DISCHARGE_ENABLED] is False
         assert OptimizerConfig().spike_export_enabled is True
-        assert _build_optimizer_config(SimpleNamespace(), {}).spike_export_enabled
+        config = _build_optimizer_config(SimpleNamespace(), {})
+        assert config.spike_export_enabled is False
