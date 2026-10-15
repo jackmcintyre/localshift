@@ -6,6 +6,7 @@ from datetime import datetime
 from statistics import median
 from typing import Any
 
+from custom_components.localshift.engine.constraints import cheap_threshold_for_slot
 from custom_components.localshift.engine.types import (
     OptimizerConfig,
     PlannerAction,
@@ -128,6 +129,37 @@ def get_solar_opportunity_penalty_factor(
     return min(1.0, total_surplus / config.battery_capacity_kwh)
 
 
+def _cheaper_charge_ahead(
+    config: OptimizerConfig,
+    future_idx: int,
+    future_price: float,
+    charge_slot_price: float,
+    terminal_penalty_idx: int | None,
+) -> bool:
+    """A cheaper feasible charge window: a useful period that stops the drain.
+
+    Charging is allowed there (price <= the gate's per-slot cheap threshold — Issue
+    #800, so post-demand-window slots use the un-inflated base; price-led, every slot)
+    and it is meaningfully cheaper than now, so energy can wait for the later charge.
+    """
+    if future_price >= charge_slot_price - 0.02:
+        return False
+    return config.price_led_charging or future_price <= cheap_threshold_for_slot(
+        config, future_idx, terminal_penalty_idx
+    )
+
+
+def _futile_drain_ceiling(config: OptimizerConfig, charge_slot_price: float) -> float:
+    """Load priced below this, served from the charge, counts as futile drain.
+
+    Legacy: all of it. Price-led (#1104 follow-up): only load cheaper than the charge
+    cost after round-trip losses — serving a dearer evening is the point of the charge.
+    """
+    if not config.price_led_charging:
+        return float("inf")
+    return charge_slot_price / (config.charge_efficiency * config.discharge_efficiency)
+
+
 def get_futile_cycling_penalty_factor(
     action: PlannerAction,
     slot_idx: int,
@@ -170,11 +202,8 @@ def get_futile_cycling_penalty_factor(
     min_soc = config.discharge_floor_pct
     discharge_eff = config.discharge_efficiency
 
-    from custom_components.localshift.engine.constraints import (
-        cheap_threshold_for_slot,
-    )
-
     charge_slot_price = slots[slot_idx].buy_price
+    futile_below = _futile_drain_ceiling(config, charge_slot_price)
     for future_idx in range(slot_idx + 1, len(slots)):
         future_slot = slots[future_idx]
         # A "useful period" is where solar surplus, demand window, or a cheaper
@@ -183,16 +212,12 @@ def get_futile_cycling_penalty_factor(
             break
         if future_slot.is_demand_window_slot:
             break
-        # A cheaper feasible charge window: charging is allowed (price <= the gate's
-        # per-slot cheap threshold — Issue #800, so post-demand-window slots use the
-        # un-inflated base) and meaningfully cheaper than now — energy can be stored
-        # for the later cheap charge.
-        future_threshold = cheap_threshold_for_slot(
-            config, future_idx, terminal_penalty_idx
-        )
-        if (
-            future_slot.buy_price <= future_threshold
-            and future_slot.buy_price < charge_slot_price - 0.02
+        if _cheaper_charge_ahead(
+            config,
+            future_idx,
+            future_slot.buy_price,
+            charge_slot_price,
+            terminal_penalty_idx,
         ):
             break
 
@@ -212,7 +237,10 @@ def get_futile_cycling_penalty_factor(
 
         # Update simulated SOC
         soc -= (battery_used / discharge_eff / capacity_kwh) * 100.0
-        total_drained += battery_used
+        # Price-led (#1104 follow-up): serving load dearer than the charge cost after
+        # round-trip losses is the point of the charge, not futile. Drain into load at
+        # or below it still counts, which is what keeps #800 cycling penalised.
+        total_drained += battery_used * (future_slot.buy_price < futile_below)
 
         if soc <= min_soc:
             break

@@ -204,7 +204,13 @@ def feasible_actions(
 
     _solar_covers_deficit = False
     _global_solar_covers = False
-    if config.optimization_mode == "self_consumption" and slots is not None:
+    # Price-led (#1104 follow-up): with no deadline this gate would simulate solar to the
+    # horizon's end, so tomorrow's midday solar "covers" tonight and strips every charge.
+    if (
+        config.optimization_mode == "self_consumption"
+        and slots is not None
+        and not config.price_led_charging
+    ):
         _global_solar_covers = check_global_solar_sufficiency(
             soc_pct, slot_idx, slots, config, terminal_penalty_idx
         )
@@ -218,8 +224,11 @@ def feasible_actions(
             cheap_threshold = cheap_threshold_for_slot(
                 config, slot_idx, terminal_penalty_idx
             )
-            price_is_cheap = slot.buy_price <= cheap_threshold
-            price_is_very_cheap = (
+            # Price-led: every slot is offered; the DP's costs and the cycle hurdle decide.
+            price_is_cheap = (
+                config.price_led_charging or slot.buy_price <= cheap_threshold
+            )
+            price_is_very_cheap = config.price_led_charging or (
                 slot.buy_price <= cheap_threshold * VERY_CHEAP_PRICE_FACTOR
             )
 

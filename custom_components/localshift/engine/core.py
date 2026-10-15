@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
+from custom_components.localshift.const import PRICE_LED_MIN_CYCLE_SAVING
 from custom_components.localshift.engine.constraints import (
     check_global_solar_sufficiency,
     compute_max_feasible_terminal_soc,
@@ -352,8 +353,13 @@ def _min_cycle_saving_blocks(
         and action in _GRID_CHARGE_ACTIONS
     ):
         return False
+    hurdle = config.min_cycle_saving
+    if config.price_led_charging:
+        # HOLD's cost includes charging later, so with every slot admitted the $0.25
+        # bar reads "beats a later charge by 25c" and defers to a dearer slot.
+        hurdle = min(hurdle, PRICE_LED_MIN_CYCLE_SAVING)
     saving = hold_total_cost - total_cost
-    return 0.0 < saving < config.min_cycle_saving * charge_kwh
+    return 0.0 < saving < hurdle * charge_kwh
 
 
 def _min_hold_saving_blocks(
@@ -1021,6 +1027,13 @@ class DPPlanner:
         # demand window" without re-deriving the window. Must be assigned, not merely
         # local: the backstop reads it off the config after the plan returns.
         config.terminal_penalty_idx = terminal_penalty_idx
+        # #1104 follow-up: off-season with Amber's flag, nothing funds a charge for the
+        # dear evening, so admission follows the DP's own economics (see the field).
+        config.price_led_charging = (
+            config.demand_window_from_amber
+            and terminal_penalty_idx is None
+            and not any(s.is_demand_window_slot for s in slots)
+        )
 
         # Issue #800 follow-up: the urgency-inflated effective_cheap_price is only valid
         # near the demand window. Record where the urgency window begins so the cheap-price

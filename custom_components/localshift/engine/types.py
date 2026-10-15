@@ -391,6 +391,16 @@ class OptimizerConfig:
     and the rebuy price it was judged against, for the summary sensor and the
     state machine's debounce (issue #1120)."""
 
+    demand_window_from_amber: bool = False
+    """``switch.localshift_demand_window_from_amber`` (#1104 / #1201)."""
+
+    price_led_charging: bool = False
+    """Solver-derived (set by ``DPPlanner._solve``): the switch is on and no slot in the
+    horizon is a demand-window slot, so there is no deadline or target to fund a charge.
+    The cheap-price gate, the deadline-only solar-sufficiency gate and the drain-to-load
+    futile-cycling rule then give way to the DP's own economics, behind a lower cycle
+    hurdle (``PRICE_LED_MIN_CYCLE_SAVING``). Study: scripts/study_1104_offseason.py."""
+
     spike_funding_slots: frozenset[int] | None = None
     """Solver-derived (set by ``DPPlanner.plan``): slots whose grid charge is admitted to
     the feasible set so it can fund a later expensive interval outside the demand window.

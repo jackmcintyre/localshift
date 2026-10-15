@@ -328,6 +328,9 @@ DEFAULT_TARGET_PENALTY = 0.03  # $/%-point demand window urgency (#885: raised 0
 DEFAULT_MIN_CYCLE_SAVING = (
     0.25  # $/kWh minimum saving over holding to justify cycling the battery
 )
+# #1104 follow-up: the cycle hurdle when no demand window is in view (switch on).
+# $0.25 there makes the planner defer each cheap charge to a dearer later slot.
+PRICE_LED_MIN_CYCLE_SAVING: Final[float] = 0.05
 DEFAULT_MIN_HOLD_SAVING = (
     0.0  # $/kWh minimum saving to justify HOLD_STRICT; 0 disables (kill switch)
 )
