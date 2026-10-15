@@ -4,13 +4,13 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **69 entities** grouped under a single "LocalShift" device:
+The integration creates **70 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
 | Sensors | 31 | `sensor` |
 | Binary Sensors | 11 | `binary_sensor` |
-| Switches | 9 | `switch` |
+| Switches | 10 | `switch` |
 | Numbers | 14 | `number` |
 | Selects | 2 | `select` |
 | Buttons | 2 | `button` |
