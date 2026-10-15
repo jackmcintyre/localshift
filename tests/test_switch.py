@@ -225,10 +225,10 @@ class TestSwitchKeys:
         assert SWITCH_DEMAND_WINDOW_BLOCK in SWITCH_KEYS
 
     def test_switch_keys_count(self):
-        """Test there are 9 switch keys."""
+        """Test there are 10 switch keys."""
         # enable_learning retired with the learning layer; demand_window_from_amber
-        # added for #1104.
-        assert len(SWITCH_KEYS) == 9
+        # added for #1104 and planner_knows_current_mode for #1158.
+        assert len(SWITCH_KEYS) == 10
 
 
 class TestAsyncSetupEntry:

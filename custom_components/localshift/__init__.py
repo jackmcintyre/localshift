@@ -11,12 +11,36 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import PLATFORMS
+from .const import PLATFORMS, SWITCH_SPIKE_DISCHARGE_ENABLED
 from .coordinator import LocalShiftCoordinator
+from .switch import SWITCH_STATE_PREFIX
 
 _LOGGER = logging.getLogger(__name__)
 
 type LocalShiftConfigEntry = ConfigEntry[LocalShiftCoordinator]
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Bring an entry written by an older release up to date.
+
+    1.1 -> 1.2 (issue #1120): spike export ships switched OFF. Entries from
+    before this release stored switch.localshift_spike_discharge_enabled ON
+    (its old default), so it is turned OFF here, once; Home Assistant stores
+    the new minor version and never runs this again, so the owner's own
+    choice after that persists across restarts.
+    """
+    if entry.version > 1:
+        return False
+    if entry.minor_version < 2:
+        option_key = f"{SWITCH_STATE_PREFIX}{SWITCH_SPIKE_DISCHARGE_ENABLED}"
+        hass.config_entries.async_update_entry(
+            entry, options={**entry.options, option_key: False}, minor_version=2
+        )
+        _LOGGER.warning(
+            "Spike export starts OFF in this release (issue #1120): "
+            "switch.localshift_spike_discharge_enabled turned off once"
+        )
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: LocalShiftConfigEntry) -> bool:

@@ -82,7 +82,8 @@ Changes take effect on the next recompute cycle.
   calculation, and 3.3 kW-vs-5 kW boost-charge detection
 - **Solar export hold** — holds the battery when surplus solar can cover the
   demand-window deficit, maximising feed-in revenue
-- **Price spike discharge** — exports during Amber price spikes
+- **Price spike export** — exports the current interval on a genuine Amber price
+  spike (off by default: `switch.localshift_spike_discharge_enabled`)
 - **Demand window blocking** — prevents grid charging during peak periods (configurable)
 - **Anti-cycling gate** — a minimum-cycle-saving feasibility gate that blocks marginal
   overnight arbitrage while preserving genuine pre-charge and spike capture
@@ -218,7 +219,7 @@ Devices & Services. Full canonical reference:
 | Entity ID | Default | Description |
 |---|---|---|
 | `switch.localshift_automation_enabled` | ON | Master toggle for all automation |
-| `switch.localshift_spike_discharge_enabled` | ON | Allow automatic export on a genuine price spike (OFF: no spike export, every export start keeps the 2-minute debounce) |
+| `switch.localshift_spike_discharge_enabled` | OFF | Allow automatic export on a genuine price spike (OFF: no spike export, every export start keeps the 2-minute debounce) |
 | `switch.localshift_spike_discharge_conservative` | OFF | Conservative spike discharge with dynamic reserve |
 | `switch.localshift_dry_run` | OFF | Log decisions without sending commands |
 | `switch.localshift_demand_window_block` | ON | Block grid charging during the demand window |
