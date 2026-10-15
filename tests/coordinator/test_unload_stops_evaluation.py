@@ -217,6 +217,44 @@ class TestUnloadStopsEvaluation(_Base):
         compute.assert_not_called()
         assert controller.mock_calls == []
 
+    async def test_unload_aborts_the_transition_in_flight_without_waiting(
+        self, coordinator, timers
+    ):
+        """Issue #1152: the transition holding the lock at unload is cancelled.
+
+        The unload returns while the transition is still paused, and the old
+        instance writes nothing after that. Whatever it left half-applied, the
+        new instance's health check corrects.
+        """
+        await self._start(coordinator)
+        hass, entry = coordinator.hass, coordinator.entry
+        entry.runtime_data = coordinator
+        hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
+        machine = coordinator._state_machine
+        paused, resume = asyncio.Event(), asyncio.Event()
+        late_write = AsyncMock()
+
+        async def _transition(_data, _engine):
+            paused.set()
+            await resume.wait()  # the 10 s reserve settle, say
+            await late_write()  # the post-acceptance reserve re-write
+
+        machine._evaluate_core = _transition
+        with patch.object(coordinator._computation_engine, "compute_derived_values"):
+            in_flight = asyncio.ensure_future(coordinator._evaluate_state_machine())
+            await asyncio.wait_for(paused.wait(), timeout=5)
+
+            # Never resumed before this returns: the unload does not wait.
+            unloaded = await asyncio.wait_for(
+                async_unload_entry(hass, entry), timeout=5
+            )
+            resume.set()
+            await asyncio.wait({in_flight}, timeout=5)
+
+        assert unloaded is True
+        assert in_flight.cancelled()
+        late_write.assert_not_awaited()
+
     async def test_solcast_retry_that_wakes_after_unload_ends_the_chain(
         self, coordinator, timers, caplog
     ):

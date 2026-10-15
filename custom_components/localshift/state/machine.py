@@ -130,6 +130,8 @@ class StateMachine:
         self._evaluate_lock = asyncio.Lock()
         # Issue #1149: set on unload, see stop().
         self._stopped = False
+        # Issue #1152: the task holding the evaluation lock, cancelled by stop().
+        self._evaluation_task: asyncio.Task[Any] | None = None
         self._in_mode_transition: bool = False
         self._manual_override_set_at: datetime | None = None
         # Track dynamic reserve for PROACTIVE_EXPORT mode
@@ -1059,6 +1061,7 @@ class StateMachine:
             # to decide whether it may re-select active_mode this tick.
             self._apply_decision_token(data)
 
+            self._evaluation_task = asyncio.current_task()
             try:
                 # Inside the try: compute_derived_values runs the optimizer facade,
                 # and an exception from any post-facade step used to escape with
@@ -1082,6 +1085,7 @@ class StateMachine:
                 data.mode_decision_plan_charge_only = False
                 data.mode_decision_export_start_only = False
                 data.mode_backstop_allowed = False
+                self._evaluation_task = None
                 if notify_func is not None:
                     notify_func()
 
@@ -2468,10 +2472,15 @@ class StateMachine:
         """Refuse all further work on this instance (Issue #1149).
 
         Called on unload, after which a new coordinator and state machine
-        command the same battery. A transition already in flight is not
-        interrupted; anything that has not started yet does not start.
+        command the same battery. Anything that has not started yet does not
+        start, and an evaluation already in flight is cancelled at its next
+        await, so it issues no further write (Issue #1152). That can leave a
+        transition half-applied; the new instance's health check corrects it.
+        Unload does not wait for the cancelled evaluation to unwind.
         """
         self._stopped = True
+        if self._evaluation_task is not None:
+            self._evaluation_task.cancel()
 
     def start_grid_charging_listener(self, hass: Any) -> None:
         """Register a state-change listener on the grid_charging switch.
