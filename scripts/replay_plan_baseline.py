@@ -388,6 +388,9 @@ def _price_slot(entry: dict[str, Any]) -> ForecastSlot:
         is_spike=is_spike,
         source_type="test",
         estimate=entry.get("estimate"),
+        # Captures taken from Express's simple `forecast` attribute carry no
+        # flag (None): the planner then keeps its clock window (#1104).
+        demand_window=entry.get("demand_window"),
     )
 
 

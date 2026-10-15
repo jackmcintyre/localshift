@@ -16,7 +16,7 @@
  * Install (no HACS needed):
  *   1. Copy this file to <ha-config>/www/localshift/localshift-cards.js
  *   2. Settings → Dashboards → Resources → Add:
- *        URL:  /local/localshift/localshift-cards.js?v=2.0.0
+ *        URL:  /local/localshift/localshift-cards.js?v=2.1.0
  *        Type: JavaScript module
  *      (bump the ?v= query when updating, or browsers keep the old module)
  *
@@ -25,14 +25,14 @@
  *   entities:
  *     soc: sensor.my_home_percentage_charged   # Tesla/Teslemetry
  *     plan: sensor.localshift_optimizer_plan_detailed
- *   dw_start: "15:00"   # demand window (peak) start, local time
- *   dw_end: "21:00"
+ *   dw_start: "15:00"   # demand window (peak) start, local time; used only
+ *   dw_end: "21:00"     # when the plan's decisions carry no is_demand_window
  *
  * Note: deploy.sh copies this file with the integration, but HA only serves
  * /local/ from <ha-config>/www — copy it there (step 1) when updating.
  */
 
-const LS_VERSION = "2.0.0";
+const LS_VERSION = "2.1.0";
 
 /** Default to full section width in the sections-view grid. */
 const LS_FULL_WIDTH = {
@@ -219,7 +219,22 @@ class LocalShiftPlanTimelineCard extends HTMLElement {
       .filter((d) => Number.isFinite(d.t));
   }
 
-  _dwIntervals(t0, t1) {
+  _dwIntervals(t0, t1, decisions) {
+    // #1104: shade the slots the plan treated as demand-window slots. The
+    // clock window is only the fallback for a plan that predates the flag.
+    if (decisions.some((d) => typeof d.is_demand_window === "boolean")) {
+      const out = [];
+      for (const d of decisions) {
+        if (!d.is_demand_window) continue;
+        const a = Math.max(d.t, t0);
+        const b = Math.min(d.t + (d.slot_interval_minutes || 5) * 60e3, t1);
+        if (b <= a) continue;
+        const last = out[out.length - 1];
+        if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+        else out.push([a, b]);
+      }
+      return out;
+    }
     const out = [];
     for (let dayOff = -1; dayOff <= 1; dayOff++) {
       const base = new Date();
@@ -289,7 +304,7 @@ class LocalShiftPlanTimelineCard extends HTMLElement {
     }
 
     // demand window (peak) regions
-    for (const [a, b] of this._dwIntervals(t0, t1)) {
+    for (const [a, b] of this._dwIntervals(t0, t1, decisions)) {
       svg += `<rect x="${x(a)}" y="${plotTop}" width="${x(b) - x(a)}" height="${laneBot - plotTop}" fill="url(#lsHatch)" stroke="rgba(251,146,60,0.55)" stroke-width="1" rx="3"/>`;
       svg += `<text x="${(x(a) + x(b)) / 2}" y="${plotTop + 12}" text-anchor="middle" class="ls-dw-label">PEAK</text>`;
     }

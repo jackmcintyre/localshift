@@ -2077,6 +2077,7 @@ class DPPlanner:
                 buy_price=slot.buy_price,
                 sell_price=slot.sell_price,
                 export_floor_pct=slot.export_floor_pct,
+                is_demand_window=slot.is_demand_window_slot,
             )
             decisions.append(decision)
 

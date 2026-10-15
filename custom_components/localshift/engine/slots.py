@@ -17,7 +17,7 @@ from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from ..const import BatteryMode
+from ..const import CONF_DEMAND_WINDOW_FROM_AMBER, BatteryMode
 from ..forecast.solar import get_solar_for_slot_by_interval, solcast_span
 from ..forecast.solar_accuracy import SolarAccuracyTracker
 from ..utils.export_availability import export_available_at
@@ -415,6 +415,7 @@ class SlotBuilder:
         }
         prev_in_demand_window = False
         solar_span = solcast_span(all_solcast)
+        pad_top_up = sum(s.get("source_type") == "extended" for s in hybrid_slots) < 2
 
         for i, slot in enumerate(hybrid_slots):
             ctx, slot_counts, in_demand_window = self._process_single_slot(
@@ -430,6 +431,7 @@ class SlotBuilder:
                 feed_in_forecast=feed_in_forecast,
                 resolver=resolver,
                 solar_span=solar_span,
+                pad_top_up=pad_top_up,
             )
             contexts.append(ctx)
             for key in counts:
@@ -452,6 +454,7 @@ class SlotBuilder:
         feed_in_forecast: list[dict[str, Any]] | None = None,
         resolver: Any | None = None,
         solar_span: tuple[datetime, datetime] | None = None,
+        pad_top_up: bool = True,
     ) -> tuple[SlotContext, dict[str, int], bool]:
         """Process a single slot, returning (context, counts, in_demand_window)."""
         slot_start: datetime = slot["start"]
@@ -509,6 +512,17 @@ class SlotBuilder:
             in_demand_window = slot_time >= dw_start_time or slot_time < dw_end_time
         else:
             in_demand_window = dw_start_time <= slot_time < dw_end_time
+        # Issue #1104: with the switch on, Amber Express's per-interval flag
+        # decides. A slot without a boolean flag (base Amber, a synthetic
+        # slot) keeps the clock window above, as does the reader's padding of a
+        # stale or short feed. Its one-slot top-up (Express falls seconds
+        # short of 24 h) may continue a window but never open one.
+        amber_flag = slot.get("demand_window")
+        if self._config_options.get(CONF_DEMAND_WINDOW_FROM_AMBER, False):
+            if isinstance(amber_flag, bool):
+                in_demand_window = amber_flag
+            elif pad_top_up and slot.get("source_type") == "extended":
+                in_demand_window = in_demand_window and prev_in_demand_window
         is_demand_window_entry = in_demand_window and not prev_in_demand_window
 
         ctx = SlotContext(
