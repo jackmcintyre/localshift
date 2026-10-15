@@ -214,9 +214,9 @@ class SnapshotGenerator:
         battery_power = self.state("sensor.my_home_battery_power")
         grid_power = self.state("sensor.my_home_grid_power")
         solar_power = self.state("sensor.my_home_solar_power")
-        buy_price = self.state("sensor.100h_general_price")
-        sell_price = self.state("sensor.100h_feed_in_price")
-        price_spike = self.state("binary_sensor.100h_price_spike")
+        buy_price = self.state("sensor.amber_express_100h_general_price")
+        sell_price = self.state("sensor.amber_express_100h_feed_in_price")
+        price_spike = self.state("binary_sensor.amber_express_100h_price_spike")
         demand_window = self.state("binary_sensor.localshift_demand_window")
 
         return f"""

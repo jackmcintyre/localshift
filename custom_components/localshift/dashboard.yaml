@@ -11,8 +11,8 @@
 # Dashboard primarily uses entities from the localshift custom component.
 # Also references entities from two other integrations — ADJUST THESE TO
 # MATCH YOUR SETUP (search & replace):
-#   - my_home_*  entities from the Tesla Powerwall integration (Teslemetry)
-#   - 100h_*     entities from the Amber Electric YAML package
+#   - my_home_*             entities from the Tesla Powerwall integration (Teslemetry)
+#   - amber_express_100h_*  entities from the Amber Express integration
 #
 # No HACS cards required. Everything here is a native Home Assistant card
 # except one: custom:localshift-plan-timeline. Core HA can only plot the past
@@ -141,12 +141,12 @@ views:
             icon: mdi:battery
 
           - type: tile
-            entity: sensor.100h_general_price
+            entity: sensor.amber_express_100h_general_price
             name: Buy now
             icon: mdi:cash-minus
 
           - type: tile
-            entity: sensor.100h_feed_in_price
+            entity: sensor.amber_express_100h_feed_in_price
             name: Sell now
             icon: mdi:cash-plus
 
@@ -682,11 +682,11 @@ views:
 
               Load Power: {{ states('sensor.my_home_load_power') }} kW
 
-              Buy Price: ${{ states('sensor.100h_general_price') }}/kWh
+              Buy Price: ${{ states('sensor.amber_express_100h_general_price') }}/kWh
 
-              Sell Price: ${{ states('sensor.100h_feed_in_price') }}/kWh
+              Sell Price: ${{ states('sensor.amber_express_100h_feed_in_price') }}/kWh
 
-              Price Spike: {{ states('binary_sensor.100h_price_spike') }}
+              Price Spike: {{ states('binary_sensor.amber_express_100h_price_spike') }}
 
               Demand Window: {{ states('binary_sensor.localshift_demand_window') }}
 
@@ -1112,7 +1112,7 @@ views:
               | Net cost delta | ${{ '%.4f' | format(state_attr(s, 'spike_funding_net_cost_delta') | float(0)) }} |
               | Price spike coming | {{ states('binary_sensor.localshift_price_spike_coming') }} |
               | Expensive price coming | {{ states('binary_sensor.localshift_price_expensive_coming') }} |
-              | Amber spike flag | {{ states('binary_sensor.100h_price_spike') }} |
+              | Amber spike flag | {{ states('binary_sensor.amber_express_100h_price_spike') }} |
 
               **Solar confidence**
 
