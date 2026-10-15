@@ -27,6 +27,7 @@ from .const import (
     CONF_MIN_HOLD_SAVING,
     CONF_MINIMUM_TARGET_SOC,
     CONF_OPTIMIZATION_MODE,
+    CONF_PLANNER_KNOWS_CURRENT_MODE,
     CONF_PRECHARGE_RUNWAY_MARGIN_MIN,
     CONF_PRICING_DATA_SOURCE,
     CONF_SPIKE_EXPORT_ENABLED,
@@ -60,6 +61,7 @@ from .const import (
     DEFAULT_TARGET_PENALTY,
     DEFAULT_WEATHER_LEARNING_ENABLED,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET,
+    SWITCH_PLANNER_KNOWS_CURRENT_MODE,
     SWITCH_SPIKE_DISCHARGE_ENABLED,
     SWITCH_STALE_SOLAR_CONSERVATIVE,
 )
@@ -893,6 +895,10 @@ class ComputationEngine:
             # switch says.
             CONF_SPIKE_EXPORT_ENABLED: self._get_switch_state(
                 SWITCH_SPIKE_DISCHARGE_ENABLED
+            ),
+            # Issue #1158: whether the planner is told the commanded mode.
+            CONF_PLANNER_KNOWS_CURRENT_MODE: self._get_switch_state(
+                SWITCH_PLANNER_KNOWS_CURRENT_MODE
             ),
             CONF_OPTIMIZATION_MODE: self.entry.options.get(
                 CONF_OPTIMIZATION_MODE, DEFAULT_OPTIMIZATION_MODE

@@ -4,13 +4,13 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **68 entities** grouped under a single "LocalShift" device:
+The integration creates **69 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
 | Sensors | 31 | `sensor` |
 | Binary Sensors | 11 | `binary_sensor` |
-| Switches | 8 | `switch` |
+| Switches | 9 | `switch` |
 | Numbers | 14 | `number` |
 | Selects | 2 | `select` |
 | Buttons | 2 | `button` |
@@ -124,6 +124,7 @@ user-facing entities with no category and appear on the main device card.
 | `switch.localshift_demand_window_block` | `localshift_demand_window_block` | `switch` | — |
 | `switch.localshift_dry_run` | `localshift_dry_run` | `switch` | config |
 | `switch.localshift_notifications_enabled` | `localshift_notifications_enabled` | `switch` | config |
+| `switch.localshift_planner_knows_current_mode` | `localshift_planner_knows_current_mode` | `switch` | config |
 | `switch.localshift_spike_discharge_conservative` | `localshift_spike_discharge_conservative` | `switch` | config |
 | `switch.localshift_spike_discharge_enabled` | `localshift_spike_discharge_enabled` | `switch` | config |
 | `switch.localshift_stale_solar_conservative` | `localshift_stale_solar_conservative` | `switch` | config |
@@ -1319,6 +1320,25 @@ State: on
 **Behavior:**
 - ON: All notification types are sent
 - OFF: All notifications are silenced (useful if you automate on other entities and don't want notification spam)
+
+---
+
+### 8. switch.localshift_planner_knows_current_mode
+
+**Purpose:** Tell the planner which mode the battery is in now, so that changing it in the first slot of a plan costs the switching penalty (Issue #1158).
+
+**Default:** OFF (on a fresh install, and on an existing install that has no stored state for it)
+
+**Example Data:**
+```
+State: off
+```
+
+**Behavior:**
+- OFF: the planner plans as if the battery had no current mode. The slot-0 switching penalty never applies, which is how every plan was made before this switch existed. `number.localshift_switching_penalty` and `number.localshift_switching_penalty_per_kwh` then do nothing on the plan the battery follows.
+- ON: the mode LocalShift last committed is mapped to a planner action (self consumption to hold, grid charging to grid charge, boost charging to boost charge, proactive export and spike discharge to export) and passed to the planner. A plan whose first slot is a different action pays the switching penalty for that slot. Manual and demand-block modes have no planner action, so no penalty applies while in them.
+- Flipping the switch re-runs the planner like any other LocalShift switch.
+- The replay comparison of plans with it on and off is attached to the PR that added it; read that before turning it on.
 
 ---
 

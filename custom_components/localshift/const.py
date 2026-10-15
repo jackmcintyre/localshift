@@ -235,6 +235,8 @@ CONF_EXPORT_PRICE_MARGIN = "export_price_margin"
 # Not an options-flow setting: the key under which the state of
 # switch.localshift_spike_discharge_enabled reaches the planner (issue #1120).
 CONF_SPIKE_EXPORT_ENABLED = "spike_export_enabled"
+# Likewise for switch.localshift_planner_knows_current_mode (issue #1158).
+CONF_PLANNER_KNOWS_CURRENT_MODE = "planner_knows_current_mode"
 CONF_OPTIMIZATION_MODE = "optimization_mode"
 CONF_SWITCHING_PENALTY = "switching_penalty"
 CONF_SWITCHING_PENALTY_PER_KWH = "switching_penalty_per_kwh"
@@ -469,6 +471,7 @@ SWITCH_DRY_RUN = "dry_run"
 SWITCH_DEMAND_WINDOW_BLOCK = "demand_window_block"
 SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET = "allow_dw_entry_under_target"
 SWITCH_STALE_SOLAR_CONSERVATIVE = "stale_solar_conservative"
+SWITCH_PLANNER_KNOWS_CURRENT_MODE = "planner_knows_current_mode"
 
 # Consolidated notification switch (Issue #214)
 SWITCH_NOTIFICATIONS_ENABLED = "notifications_enabled"
@@ -483,6 +486,8 @@ SWITCH_DEFAULTS = {
     SWITCH_DEMAND_WINDOW_BLOCK: True,
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: False,
     SWITCH_STALE_SOLAR_CONSERVATIVE: True,
+    # Issue #1158: off until Jack decides on the replay comparison.
+    SWITCH_PLANNER_KNOWS_CURRENT_MODE: False,
     SWITCH_NOTIFICATIONS_ENABLED: True,  # Consolidated notification toggle
 }
 
@@ -494,6 +499,7 @@ SWITCH_ICONS = {
     SWITCH_DEMAND_WINDOW_BLOCK: "mdi:clock-alert-outline",
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "mdi:transfer-down",
     SWITCH_STALE_SOLAR_CONSERVATIVE: "mdi:weather-sunny-off",
+    SWITCH_PLANNER_KNOWS_CURRENT_MODE: "mdi:swap-horizontal-circle",
     SWITCH_NOTIFICATIONS_ENABLED: "mdi:bell",
 }
 
@@ -505,6 +511,7 @@ SWITCH_NAMES = {
     SWITCH_DEMAND_WINDOW_BLOCK: "Demand Window Block",
     SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET: "Allow DW Entry Under Target",
     SWITCH_STALE_SOLAR_CONSERVATIVE: "Stale Solar Conservative",
+    SWITCH_PLANNER_KNOWS_CURRENT_MODE: "Planner Knows Current Mode",
     SWITCH_NOTIFICATIONS_ENABLED: "Notifications Enabled",
 }
 
