@@ -327,6 +327,16 @@ LOCALSHIFT_ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "expected_type": bool,
         "staleness_minutes": None,
     },
+    "switch.localshift_demand_window_from_amber": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": None,
+    },
+    "switch.localshift_planner_knows_current_mode": {
+        "category": EntityCategory.REQUIRED,
+        "expected_type": bool,
+        "staleness_minutes": None,
+    },
     "switch.localshift_notifications_enabled": {
         "category": EntityCategory.REQUIRED,
         "expected_type": bool,

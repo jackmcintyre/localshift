@@ -9,6 +9,11 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from ..const import (
+    CONF_PLANNER_KNOWS_CURRENT_MODE,
+    SWITCH_DEFAULTS,
+    SWITCH_PLANNER_KNOWS_CURRENT_MODE,
+)
 from ..const import BatteryMode as _BatteryMode
 from ..coordinator.data import CoordinatorData
 from ..forecast.solar import get_solar_for_slot_by_interval
@@ -24,6 +29,7 @@ from .optimizer_runner import (
     _serialize_decision,
     _serialize_result,
 )
+from .outcomes import LEGACY_MODE_TO_ACTION
 from .slots import SlotBuilder
 from .types import OptimizerInputs, PlannerAction
 
@@ -64,6 +70,24 @@ _CHARGE_MODE_VALUES = frozenset(m.value for m in _CHARGE_MODES)
 # start. Matches the coordinator's 30-second startup grace (#551). Past it, an
 # invalid SOC warns on every skipped plan as before.
 _STARTUP_SOC_GRACE = timedelta(seconds=30)
+
+
+def _current_action(
+    data: CoordinatorData, config_options: dict[str, Any]
+) -> PlannerAction | None:
+    """The commanded mode as a planner action, for the slot-0 switching penalty.
+
+    Issue #1158. Only while switch.localshift_planner_knows_current_mode is on;
+    off (the default), the planner is told nothing and slot 0 carries no
+    switching penalty, as before. A mode with no planner action (manual,
+    demand block) is None too.
+    """
+    if not config_options.get(
+        CONF_PLANNER_KNOWS_CURRENT_MODE,
+        SWITCH_DEFAULTS[SWITCH_PLANNER_KNOWS_CURRENT_MODE],
+    ):
+        return None
+    return LEGACY_MODE_TO_ACTION.get(data.active_mode)
 
 
 class OptimizerFacade:
@@ -315,11 +339,14 @@ class OptimizerFacade:
                 return
 
             cycle_id = uuid.uuid4().hex[:12]
+            # Read before _assign_active_mode below replaces the commanded mode.
+            current_action = _current_action(data, config_options)
             inputs = OptimizerInputs(
                 cycle_id=cycle_id,
                 initial_soc_pct=initial_soc,
                 slots=slots,
                 config=optimizer_config,
+                current_action=current_action,
                 all_solcast=slot_metadata.all_solcast,
                 solcast_analysis_today=getattr(data, "solcast_analysis_today", None),
                 solcast_analysis_tomorrow=getattr(
@@ -362,7 +389,9 @@ class OptimizerFacade:
             self._log_precharge_decision(data, result, initial_soc, optimizer_config)
 
             # Run shadow optimizer for comparison if enabled
-            self._run_shadow_comparison(data, now_dt, config_options, slot_metadata)
+            self._run_shadow_comparison(
+                data, now_dt, config_options, slot_metadata, current_action
+            )
 
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning(INLINE_OPTIMIZER_FAILED_MSG, exc, exc_info=True)
@@ -1346,6 +1375,7 @@ class OptimizerFacade:
         now_dt: Any,
         config_options: dict[str, Any],
         slot_metadata: Any,
+        current_action: PlannerAction | None = None,
     ) -> None:
         """Run shadow optimizer and compare decisions if comparison mode enabled."""
         comparison_mode = config_options.get("comparison_mode", "disabled")
@@ -1400,6 +1430,7 @@ class OptimizerFacade:
                 initial_soc_pct=initial_soc,
                 slots=shadow_slots,
                 config=optimizer_config,
+                current_action=current_action,
                 all_solcast=slot_metadata.all_solcast,
                 solcast_analysis_today=getattr(data, "solcast_analysis_today", None),
                 solcast_analysis_tomorrow=getattr(

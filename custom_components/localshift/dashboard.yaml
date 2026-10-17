@@ -23,7 +23,7 @@
 #   1. Copy custom_components/localshift/www/localshift-cards.js
 #      to <ha-config>/www/localshift/localshift-cards.js
 #   2. Settings -> Dashboards -> Resources -> Add resource:
-#        URL:  /local/localshift/localshift-cards.js?v=2.0.0
+#        URL:  /local/localshift/localshift-cards.js?v=2.1.0
 #        Type: JavaScript module
 #      (bump the ?v= query on update, or browsers keep the old module cached)
 #

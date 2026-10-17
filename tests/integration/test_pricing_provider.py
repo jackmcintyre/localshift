@@ -60,6 +60,7 @@ class TestPricingProviderIntegration:
                     "duration": 30,
                     "per_kwh": 2.50,
                     "demand_window": True,
+                    "spike_status": "spike",
                 },
             ]
         }
@@ -71,7 +72,7 @@ class TestPricingProviderIntegration:
         assert slots[0].per_kwh == 0.20
         assert slots[0].is_spike is False
         assert slots[1].per_kwh == 2.50
-        assert slots[1].is_spike is True
+        assert slots[1].is_spike is True  # spike_status, not demand_window (#1104)
         assert slots[0].source_type == "amber_express"
 
     def test_both_providers_normalize_to_same_format(self):
@@ -156,8 +157,8 @@ class TestPricingProviderIntegration:
         assert slots[0].is_spike is True
         assert slots[1].is_spike is False
 
-    def test_amber_express_provider_detects_demand_window_spike(self):
-        """Amber Express provider uses demand_window as spike indicator."""
+    def test_amber_express_provider_detects_spike_from_spike_status(self):
+        """Amber Express spikes come from spike_status, not demand_window (#1104)."""
         provider = create_provider(PRICING_SOURCE_AMBER_EXPRESS)
 
         hass = MagicMock()
@@ -168,13 +169,15 @@ class TestPricingProviderIntegration:
                     "start_time": "2026-03-16T14:00:00+10:30",
                     "duration": 30,
                     "per_kwh": 3.50,
-                    "demand_window": True,
+                    "spike_status": "spike",
+                    "demand_window": False,
                 },
                 {
                     "start_time": "2026-03-16T15:00:00+10:30",
                     "duration": 30,
                     "per_kwh": 0.15,
-                    "demand_window": False,
+                    "spike_status": "none",
+                    "demand_window": True,
                 },
             ]
         }

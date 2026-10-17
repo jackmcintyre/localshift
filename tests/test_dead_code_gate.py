@@ -451,7 +451,7 @@ def test_framework_module_hooks_are_called_by_home_assistant(
         assert matched
         assert {f.file for f in matched} <= gate.entry_modules(layout.package)
         checked += 1
-    assert checked == 2
+    assert checked == 3
 
 
 def test_framework_blocks_hold_only_the_two_allowed_shapes(whitelist) -> None:

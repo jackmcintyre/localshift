@@ -67,14 +67,22 @@ class _ProviderMixin:
         duration = raw.get("duration")
         if duration is None:
             duration = self._infer_duration_minutes(raw)
+        demand_window = raw.get("demand_window")
         return ForecastSlot(
             start_time=self._parse_timestamp(raw["start_time"]),
             duration=int(duration),
             per_kwh=float(raw["per_kwh"]),
-            is_spike=self.is_spike(raw),  # type: ignore[attr-defined]
+            is_spike=self.is_spike(raw),
             source_type=self.name,  # type: ignore[attr-defined]
             estimate=raw.get("estimate"),
+            demand_window=demand_window if isinstance(demand_window, bool) else None,
         )
+
+    def is_spike(self, forecast_entry: dict[str, Any]) -> bool:
+        """Check if entry is a spike. Amber and Amber Express both send
+        spike_status (none/potential/spike); Express's demand_window flag is the
+        tariff's demand-charge period, not a spike (#1104)."""
+        return forecast_entry.get("spike_status") == "spike"
 
     def _infer_duration_minutes(self, raw: dict[str, Any]) -> int:
         """Infer slot duration from start_time/end_time timestamps.
@@ -140,10 +148,6 @@ class AmberProvider(_ProviderMixin):
                 continue
         return slots
 
-    def is_spike(self, forecast_entry: dict[str, Any]) -> bool:
-        """Check if entry represents a spike (Amber uses spike_status)."""
-        return forecast_entry.get("spike_status") == "spike"
-
 
 class AmberExpressProvider(_ProviderMixin):
     """Amber Express pricing provider."""
@@ -204,7 +208,3 @@ class AmberExpressProvider(_ProviderMixin):
                 _LOGGER.warning("Skipping malformed forecast slot: %s", e)
                 continue
         return slots
-
-    def is_spike(self, forecast_entry: dict[str, Any]) -> bool:
-        """Check if entry is a spike (Express uses demand_window)."""
-        return forecast_entry.get("demand_window") is True

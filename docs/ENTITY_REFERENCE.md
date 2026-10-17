@@ -4,13 +4,13 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **68 entities** grouped under a single "LocalShift" device:
+The integration creates **70 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
 | Sensors | 31 | `sensor` |
 | Binary Sensors | 11 | `binary_sensor` |
-| Switches | 8 | `switch` |
+| Switches | 10 | `switch` |
 | Numbers | 14 | `number` |
 | Selects | 2 | `select` |
 | Buttons | 2 | `button` |
@@ -122,8 +122,10 @@ user-facing entities with no category and appear on the main device card.
 | `switch.localshift_allow_dw_entry_under_target` | `localshift_allow_dw_entry_under_target` | `switch` | config |
 | `switch.localshift_automation_enabled` | `localshift_automation_enabled` | `switch` | — |
 | `switch.localshift_demand_window_block` | `localshift_demand_window_block` | `switch` | — |
+| `switch.localshift_demand_window_from_amber` | `localshift_demand_window_from_amber` | `switch` | config |
 | `switch.localshift_dry_run` | `localshift_dry_run` | `switch` | config |
 | `switch.localshift_notifications_enabled` | `localshift_notifications_enabled` | `switch` | config |
+| `switch.localshift_planner_knows_current_mode` | `localshift_planner_knows_current_mode` | `switch` | config |
 | `switch.localshift_spike_discharge_conservative` | `localshift_spike_discharge_conservative` | `switch` | config |
 | `switch.localshift_spike_discharge_enabled` | `localshift_spike_discharge_enabled` | `switch` | config |
 | `switch.localshift_stale_solar_conservative` | `localshift_stale_solar_conservative` | `switch` | config |
@@ -904,6 +906,7 @@ Attributes:
       predicted_soc_pct: 75.5
       grid_import_kwh: 0.0
       grid_export_kwh: 0.0
+      is_demand_window: false  # the plan treated this slot as a demand-window slot (#1104)
     - ...
   total_slots: 48
   computed_at: "2026-03-01T10:00:00+11:00"
@@ -1213,11 +1216,13 @@ State: on
 
 **Purpose:** On/off for automatic spike export (Issue #1120): exporting the current interval on a genuine price spike, and starting that export without the 2-minute debounce.
 
-**Default:** ON
+**Default:** OFF. Turn it on deliberately once you trust it: spike export has not yet run on a real spike.
+
+**Upgrading:** the release that made OFF the default turns this switch OFF once on existing installs, whatever it was before (they had it ON, the old default). That runs as a config entry migration (1.1 -> 1.2) and logs a warning; after it, the switch keeps whatever you set across restarts.
 
 **Example Data:**
 ```
-State: on
+State: off
 ```
 
 **Behavior:**
@@ -1297,7 +1302,21 @@ State: on
 
 ---
 
-### 7. switch.localshift_notifications_enabled
+### 7. switch.localshift_demand_window_from_amber
+
+**Purpose:** Take the demand window from Amber Express's per-interval `demand_window` flag instead of the clock (issue #1104). Ausgrid's demand charge is seasonal and working-weekday only; the configured window is applied every day.
+
+**Default:** OFF
+
+**Behavior:**
+- ON: a slot whose general-price forecast entry carries a boolean `demand_window` is a demand-window slot exactly when that flag is true. Everything that keys off a demand-window slot follows it: the grid-import ban, the window entry and its target and terminal penalty, the water level, the urgency window, the hard floor and the backstops. `binary_sensor.localshift_demand_window` (Demand Block execution and the no-charge-into-window guards) follows the flag on the interval covering now. A day with no flagged slot has no window entry and no target. A slot without the flag (base Amber pricing, Express unavailable, the synthetic slot 0) keeps the configured clock window. The exception is the 30-minute padding the state reader appends to reach 24 hours (`source_type: extended`, usually one slot because Express's feed ends seconds short of 24 hours): it may continue a window the feed opened, but it never opens one, so it cannot put a window entry and a 95% target at the end of the horizon on a day Express flagged nothing. Execution (`binary_sensor.localshift_demand_window`) still uses the clock for any unflagged interval covering now.
+- OFF: the configured clock window, every day.
+
+The plan chart (`custom:localshift-plan-timeline`) shades the slots the plan treated as demand-window slots, from `is_demand_window` on `sensor.localshift_optimizer_plan_detailed` decisions.
+
+---
+
+### 8. switch.localshift_notifications_enabled
 
 **Purpose:** Enable all LocalShift notifications (consolidated switch).
 
@@ -1317,6 +1336,25 @@ State: on
 **Behavior:**
 - ON: All notification types are sent
 - OFF: All notifications are silenced (useful if you automate on other entities and don't want notification spam)
+
+---
+
+### 9. switch.localshift_planner_knows_current_mode
+
+**Purpose:** Tell the planner which mode the battery is in now, so that changing it in the first slot of a plan costs the switching penalty (Issue #1158).
+
+**Default:** OFF (on a fresh install, and on an existing install that has no stored state for it)
+
+**Example Data:**
+```
+State: off
+```
+
+**Behavior:**
+- OFF: the planner plans as if the battery had no current mode. The slot-0 switching penalty never applies, which is how every plan was made before this switch existed. `number.localshift_switching_penalty` and `number.localshift_switching_penalty_per_kwh` then do nothing on the plan the battery follows.
+- ON: the mode LocalShift last committed is mapped to a planner action (self consumption to hold, grid charging to grid charge, boost charging to boost charge, proactive export and spike discharge to export) and passed to the planner. A plan whose first slot is a different action pays the switching penalty for that slot. Manual and demand-block modes have no planner action, so no penalty applies while in them.
+- Flipping the switch re-runs the planner like any other LocalShift switch.
+- The replay comparison of plans with it on and off is attached to the PR that added it; read that before turning it on.
 
 ---
 
@@ -1481,7 +1519,7 @@ Added in Issue #382 to replace manual control buttons with a single select entit
 | `self_consumption` | Default — battery powers house, grid used as needed |
 | `grid_charging` | Force charging from grid at 3.3kW (backup mode) |
 | `boost_charging` | Force charging at 5kW (autonomous + reserve=100%) |
-| `spike_discharge` | Force discharging to export during price spikes |
+| `spike_discharge` | Force discharging to export (manual only: automatic operation never selects it, and it has no price-aware exit) |
 | `proactive_export` | Exporting battery before negative FIT periods |
 
 **Behavior:**

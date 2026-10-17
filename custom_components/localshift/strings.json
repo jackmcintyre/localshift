@@ -283,6 +283,14 @@
         "name": "Stale Solar Conservative",
         "description": "When Solcast data is stale or absent, cap solar confidence to force pre-charging. Prevents missed pre-charge on low-accuracy forecast days."
       },
+      "demand_window_from_amber": {
+        "name": "Demand Window From Amber",
+        "description": "Treat a slot as a demand-window slot only when Amber Express flags it (demand_window). Slots without the flag keep the configured clock window."
+      },
+      "planner_knows_current_mode": {
+        "name": "Planner Knows Current Mode",
+        "description": "Tell the planner which mode the battery is in now, so changing it in the first slot of a plan costs the switching penalty. Off by default."
+      },
       "notifications_enabled": {
         "name": "Notifications Enabled",
         "description": "Enable all notifications (mode transitions, daily summaries, manual actions, alerts). Turn off to silence all notifications."

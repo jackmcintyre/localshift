@@ -143,12 +143,14 @@ def test_amber_express_provider_read_forecasts():
                 "end_time": "2026-03-16T12:30:00+11:00",
                 "per_kwh": 0.20,
                 "demand_window": False,
+                "spike_status": "none",
             },
             {
                 "start_time": "2026-03-16T12:30:01+11:00",
                 "end_time": "2026-03-16T13:00:00+11:00",
                 "per_kwh": 2.50,
                 "demand_window": True,
+                "spike_status": "spike",
             },
         ]
     }
@@ -160,9 +162,11 @@ def test_amber_express_provider_read_forecasts():
     assert slots[0].per_kwh == 0.20
     assert slots[0].duration == 30  # inferred from timestamps
     assert slots[0].is_spike is False
+    assert slots[0].demand_window is False
     assert slots[1].per_kwh == 2.50
     assert slots[1].duration == 30  # inferred from timestamps
-    assert slots[1].is_spike is True  # demand_window=True
+    assert slots[1].is_spike is True  # spike_status="spike"
+    assert slots[1].demand_window is True
 
 
 def test_amber_express_name():
@@ -181,7 +185,7 @@ def test_amber_express_v2_reads_detailed_forecast_from_main_entity():
     ``detailedForecast`` attribute. When the legacy detailed entity is absent,
     the provider must read ``detailedForecast`` off the main price entity and
     normalize those slots (start_time / per_kwh / duration, is_spike from
-    demand_window) exactly as it did the legacy ``forecasts``.
+    spike_status) exactly as it did the legacy ``forecasts``.
     """
     from unittest.mock import MagicMock
 
@@ -204,12 +208,14 @@ def test_amber_express_v2_reads_detailed_forecast_from_main_entity():
                 "end_time": "2026-03-16T12:30:00+11:00",
                 "per_kwh": 0.20,
                 "demand_window": False,
+                "spike_status": "none",
             },
             {
                 "start_time": "2026-03-16T12:30:01+11:00",
                 "end_time": "2026-03-16T13:00:00+11:00",
                 "per_kwh": 2.50,
                 "demand_window": True,
+                "spike_status": "spike",
             },
         ],
     }
@@ -224,7 +230,7 @@ def test_amber_express_v2_reads_detailed_forecast_from_main_entity():
     assert slots[0].is_spike is False
     assert slots[1].per_kwh == 2.50
     assert slots[1].duration == 30
-    assert slots[1].is_spike is True  # demand_window=True
+    assert slots[1].is_spike is True  # spike_status="spike"
 
 
 def test_amber_express_simple_forecast_only_yields_empty():
@@ -271,11 +277,11 @@ def test_amber_express_provider_returns_empty_when_no_forecasts():
 
 
 def test_amber_express_is_spike_true():
-    """Test AmberExpressProvider.is_spike True when demand_window=True."""
+    """Test AmberExpressProvider.is_spike True when spike_status is "spike"."""
     from custom_components.localshift.pricing.provider import AmberExpressProvider
 
     provider = AmberExpressProvider()
-    assert provider.is_spike({"demand_window": True}) is True
+    assert provider.is_spike({"spike_status": "spike", "demand_window": False})
 
 
 def test_amber_express_auto_corrects_non_express_entity_id():
@@ -323,12 +329,52 @@ def test_amber_express_auto_corrects_non_express_entity_id():
 
 
 def test_amber_express_is_spike_false():
-    """Test AmberExpressProvider.is_spike False when demand_window not set."""
+    """Test AmberExpressProvider.is_spike False unless spike_status is "spike"."""
     from custom_components.localshift.pricing.provider import AmberExpressProvider
 
     provider = AmberExpressProvider()
-    assert provider.is_spike({"demand_window": False}) is False
+    assert provider.is_spike({"spike_status": "potential"}) is False
+    assert provider.is_spike({"spike_status": "none"}) is False
     assert provider.is_spike({}) is False
+
+
+def test_amber_express_demand_window_is_not_a_spike():
+    """Issue #1104: Express's demand_window flag is the tariff's demand-charge
+    period. In season (Ausgrid from 1 November) every 15:00-21:00 working-day
+    interval carries demand_window=True with spike_status "none"; none of
+    them is a price spike."""
+    from custom_components.localshift.pricing.provider import AmberExpressProvider
+
+    provider = AmberExpressProvider()
+    raw = {
+        "start_time": "2026-11-02T15:00:01+11:00",
+        "duration": 30,
+        "per_kwh": 0.31,
+        "spike_status": "none",
+        "demand_window": True,
+    }
+    assert provider.is_spike(raw) is False
+    slot = provider._normalize_slot(raw)
+    assert slot.is_spike is False
+    assert slot.demand_window is True
+
+
+def test_normalize_slot_demand_window_only_when_boolean():
+    """A missing or non-boolean flag reads as None, so the planner keeps its
+    clock window for that slot (#1104)."""
+    from custom_components.localshift.pricing.provider import AmberProvider
+
+    provider = AmberProvider()
+    base = {"start_time": "2026-11-02T15:00:01+11:00", "duration": 30, "per_kwh": 0.3}
+    assert provider._normalize_slot(base).demand_window is None
+    assert (
+        provider._normalize_slot({**base, "demand_window": "true"}).demand_window
+        is None
+    )
+    assert (
+        provider._normalize_slot({**base, "demand_window": False}).demand_window
+        is False
+    )
 
 
 def test_amber_express_provider_skips_malformed():

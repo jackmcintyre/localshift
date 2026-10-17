@@ -79,10 +79,10 @@ machine uses it to tell a genuine spike from an ordinary export.
 THE KILL SWITCH
 ---------------
 ``switch.localshift_spike_discharge_enabled`` turns the whole rule on and off
-(``OptimizerConfig.spike_export_enabled``; default ON). OFF means no verdict is
-computed: no slot is admitted, and because the debounce exemption is derived
-from the verdict, no export start skips the debounce either, in ``arbitrage``
-as well as ``self_consumption``. That is the planner and state machine exactly
+(``OptimizerConfig.spike_export_enabled``; the switch ships OFF, issue #1120).
+OFF means no verdict is computed: no slot is admitted, and because the debounce
+exemption is derived from the verdict, no export start skips the debounce
+either, in ``arbitrage`` as well as ``self_consumption``. That is the planner and state machine exactly
 as they were before this module existed. The published verdict then carries
 only ``enabled: False`` and the entity that disabled it.
 """

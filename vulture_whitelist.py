@@ -48,9 +48,11 @@ Rules (review findings #1074, #1077):
 
 # framework: homeassistant.config_entries
 # why: HA imports the integration and each platform module and calls these
-#      module-level hooks by name when a config entry is set up or unloaded.
+#      module-level hooks by name when a config entry is set up, unloaded or,
+#      when its stored version is older than the flow's, migrated.
 async_setup_entry
 async_unload_entry
+async_migrate_entry
 
 # framework: homeassistant.helpers.entity.Entity
 # why: Entity properties and lifecycle hooks; the entity platform reads and
@@ -160,6 +162,18 @@ _reset_tail_failure_log
 #      tripwire asserts it is not None, which is what catches the inline
 #      optimizer being silently disabled behind the facade's broad except.
 CoordinatorData.optimizer_result
+
+# file: config_flow/__init__.py
+# kind: variable
+# site: custom_components/localshift/config_flow/__init__.py
+# evidence: class LocalShiftConfigFlow(ConfigFlow, domain=DOMAIN):
+# site: custom_components/localshift/__init__.py
+# evidence: async def async_migrate_entry(
+# why: Home Assistant reads ConfigFlow.MINOR_VERSION when it loads an entry
+#      and calls async_migrate_entry when the stored minor version is older
+#      (issue #1120: 1.1 -> 1.2 turns spike export off once). New entries are
+#      created at this version. The reader is inside Home Assistant.
+LocalShiftConfigFlow.MINOR_VERSION
 
 # file: learning/correlation.py
 # kind: attribute
