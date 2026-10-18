@@ -626,6 +626,16 @@ class BatteryController:
         recipe = TransitionRecipe(
             name="force_discharge",
             steps=(
+                # Issue #1215: grid charging off first, before the reserve
+                # moves, so a reverted switch cannot grid-charge mid-recipe.
+                TransitionStep(
+                    action=lambda: self._service_client.set_grid_charging_allowed(
+                        False
+                    ),
+                    failure_message=(
+                        "Aborting force discharge mode: Failed to disable grid charging"
+                    ),
+                ),
                 TransitionStep(
                     action=lambda: self._service_client.set_export_mode(
                         TESLEMETRY_EXPORT_BATTERY_OK
@@ -655,6 +665,7 @@ class BatteryController:
                 operation_mode="autonomous",
                 backup_reserve=minimum_target,
                 export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
+                grid_charging_allowed=False,
                 timeout=timeout,
             ),
             on_validation_failure=_log_validation_failure,
@@ -770,6 +781,16 @@ class BatteryController:
         recipe = TransitionRecipe(
             name="proactive_export",
             steps=(
+                # Issue #1215: grid charging off first, before the reserve
+                # moves, so a reverted switch cannot grid-charge mid-recipe.
+                TransitionStep(
+                    action=lambda: self._service_client.set_grid_charging_allowed(
+                        False
+                    ),
+                    failure_message=(
+                        "Aborting proactive export: Failed to disable grid charging"
+                    ),
+                ),
                 TransitionStep(
                     action=lambda: self._service_client.set_export_mode(
                         TESLEMETRY_EXPORT_BATTERY_OK
@@ -795,6 +816,7 @@ class BatteryController:
                 operation_mode="autonomous",
                 backup_reserve=reserve,
                 export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
+                grid_charging_allowed=False,
                 timeout=timeout,
             ),
             on_validation_failure=_log_validation_failure,
