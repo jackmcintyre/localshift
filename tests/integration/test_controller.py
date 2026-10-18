@@ -153,13 +153,34 @@ async def test_recipe_turns_grid_charging_off_before_the_reserve(
     assert powerwall.index_of(GRID_CHARGING, "off") < powerwall.index_of(BACKUP_RESERVE)
 
 
+def _switch_write_never_takes(powerwall: FakePowerwall) -> None:
+    """The grid-charging switch ignores every write (a Teslemetry hiccup)."""
+
+    async def _switch_ignored(domain, service, data, blocking=False):
+        if domain != "switch":
+            await FakePowerwall._call(powerwall, domain, service, data, blocking)
+
+    powerwall.hass.services.async_call.side_effect = _switch_ignored
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("mock_battery_sleep")
-@pytest.mark.parametrize(("mode", "run_recipe", "reserve"), EXPORT_RECIPES)
-async def test_recipe_expects_grid_charging_off(
-    coordinator_data, mode, run_recipe, reserve
+@pytest.mark.parametrize(
+    ("mode", "run_recipe", "reserve", "validated"),
+    [
+        pytest.param(*EXPORT_RECIPES[0].values, False, id="proactive_export"),
+        # Best-effort in spike discharge: validating it would fail the
+        # transition and hand the battery back to the previous mode.
+        pytest.param(*EXPORT_RECIPES[1].values, None, id="spike_discharge"),
+    ],
+)
+async def test_recipe_grid_charging_expectation(
+    coordinator_data, mode, run_recipe, reserve, validated
 ):
-    """The recipe validates grid charging off, as the health check does."""
+    """Proactive export validates grid charging off; spike discharge does not.
+
+    The health check expects it off in both, so it keeps retrying the write.
+    """
     powerwall = _exporting_powerwall(reserve=reserve)
     controller = _controller(powerwall)
     health_expectation = _machine(controller, MagicMock())._get_expected_state_for_mode(
@@ -173,27 +194,49 @@ async def test_recipe_expects_grid_charging_off(
     ) as validate:
         assert await run_recipe(controller, _data(coordinator_data)) is True
 
-    assert validate.await_args.kwargs["expected_grid_charging_allowed"] is False
+    assert validate.await_args.kwargs["expected_grid_charging_allowed"] is validated
     assert health_expectation[3] is False
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("mock_battery_sleep")
-@pytest.mark.parametrize(("mode", "run_recipe", "reserve"), EXPORT_RECIPES)
-async def test_recipe_fails_when_grid_charging_will_not_turn_off(
-    coordinator_data, mode, run_recipe, reserve
+async def test_proactive_export_aborts_when_grid_charging_will_not_turn_off(
+    coordinator_data,
 ):
-    """A grid-charging write that never takes aborts before any other write."""
-    powerwall = _exporting_powerwall(reserve=reserve)
+    """Strict, like self-consumption: no other write after a failed one."""
+    powerwall = _exporting_powerwall(reserve=45)
+    _switch_write_never_takes(powerwall)
 
-    async def _switch_ignored(domain, service, data, blocking=False):
-        if domain != "switch":
-            await FakePowerwall._call(powerwall, domain, service, data, blocking)
-
-    powerwall.hass.services.async_call.side_effect = _switch_ignored
-
-    assert await run_recipe(_controller(powerwall), _data(coordinator_data)) is False
+    controller = _controller(powerwall)
+    assert await controller.set_proactive_export(_data(coordinator_data)) is False
     assert powerwall.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("mock_battery_sleep")
+async def test_spike_discharge_exports_when_grid_charging_will_not_turn_off(
+    coordinator_data, caplog
+):
+    """Best-effort: a Teslemetry hiccup must not cost spike-export revenue."""
+    powerwall = _exporting_powerwall(reserve=80)
+    _switch_write_never_takes(powerwall)
+
+    controller = _controller(powerwall)
+    with caplog.at_level("WARNING"):
+        assert await controller.set_force_discharge(_data(coordinator_data)) is True
+
+    assert [entity_id for _, entity_id, _ in powerwall.writes] == [
+        EXPORT_MODE,
+        BACKUP_RESERVE,
+        OPERATION_MODE,
+    ]
+    assert powerwall.states_by_id[BACKUP_RESERVE] == str(MINIMUM_TARGET_SOC)
+    assert any(
+        record.levelname == "WARNING"
+        and "grid charging" in record.getMessage()
+        and "spike discharge" in record.getMessage().lower()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
