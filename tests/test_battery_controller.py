@@ -403,7 +403,7 @@ class TestSetForceDischarge:
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_BATTERY_OK
             elif "allow_charging_from_grid" in entity_id:
-                state.state = "on"
+                state.state = "off"  # #1215: the recipe turns it off
             return state
 
         mock_hass.states.get = mock_get_state
@@ -568,7 +568,7 @@ class TestSetProactiveExport:
             elif "allow_export" in entity_id:
                 state.state = TESLEMETRY_EXPORT_BATTERY_OK
             elif "allow_charging_from_grid" in entity_id:
-                state.state = "on"
+                state.state = "off"  # #1215: the recipe turns it off
             return state
 
         mock_hass.states.get = mock_get_state

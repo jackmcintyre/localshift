@@ -62,6 +62,8 @@ class TransitionStep:
 
     action: Callable[[], Awaitable[bool]]
     failure_message: str
+    # False: a failed step logs a warning and the recipe carries on (#1215).
+    required: bool = True
 
 
 @dataclass(frozen=True)
@@ -135,6 +137,9 @@ class BatteryController:
         """
         for step in recipe.steps:
             if not await step.action():
+                if not step.required:
+                    _LOGGER.warning(step.failure_message)
+                    continue
                 _LOGGER.error(step.failure_message)
                 return False
 
@@ -626,6 +631,20 @@ class BatteryController:
         recipe = TransitionRecipe(
             name="force_discharge",
             steps=(
+                # Issue #1215: grid charging off first, before the reserve
+                # moves, so a reverted switch cannot grid-charge mid-recipe.
+                # Best-effort here: a failed write must not cost the spike
+                # export, and the health check keeps retrying it.
+                TransitionStep(
+                    action=lambda: self._service_client.set_grid_charging_allowed(
+                        False
+                    ),
+                    failure_message=(
+                        "Spike discharge: failed to disable grid charging; "
+                        "continuing with the export"
+                    ),
+                    required=False,
+                ),
                 TransitionStep(
                     action=lambda: self._service_client.set_export_mode(
                         TESLEMETRY_EXPORT_BATTERY_OK
@@ -655,6 +674,8 @@ class BatteryController:
                 operation_mode="autonomous",
                 backup_reserve=minimum_target,
                 export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
+                # Not validated: the grid-charging step is best-effort, and a
+                # failed validation would hand the battery back to the old mode.
                 timeout=timeout,
             ),
             on_validation_failure=_log_validation_failure,
@@ -770,6 +791,16 @@ class BatteryController:
         recipe = TransitionRecipe(
             name="proactive_export",
             steps=(
+                # Issue #1215: grid charging off first, before the reserve
+                # moves, so a reverted switch cannot grid-charge mid-recipe.
+                TransitionStep(
+                    action=lambda: self._service_client.set_grid_charging_allowed(
+                        False
+                    ),
+                    failure_message=(
+                        "Aborting proactive export: Failed to disable grid charging"
+                    ),
+                ),
                 TransitionStep(
                     action=lambda: self._service_client.set_export_mode(
                         TESLEMETRY_EXPORT_BATTERY_OK
@@ -795,6 +826,7 @@ class BatteryController:
                 operation_mode="autonomous",
                 backup_reserve=reserve,
                 export_mode=TESLEMETRY_EXPORT_BATTERY_OK,
+                grid_charging_allowed=False,
                 timeout=timeout,
             ),
             on_validation_failure=_log_validation_failure,
