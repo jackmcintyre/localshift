@@ -30,6 +30,16 @@ _LOGGER = logging.getLogger(__name__)
 # Branding prefix for all notifications
 NOTIFICATION_PREFIX = "LocalShift: "
 
+# Issue #394/#1217: modes whose commanded state has grid charging off, so a
+# grid-charging-only reversion there is Tesla's cloud sync, not real drift.
+_GRID_CHARGING_OFF_MODES = frozenset({
+    BatteryMode.SELF_CONSUMPTION,
+    BatteryMode.DEMAND_BLOCK,
+    BatteryMode.PROACTIVE_EXPORT,
+    BatteryMode.SPIKE_DISCHARGE,
+    BatteryMode.HOLD,
+})
+
 
 class NotificationService:
     """Handles sending notifications for mode transitions and summaries."""
@@ -356,7 +366,7 @@ class NotificationService:
         # Tesla's cloud resets allow_charging_from_grid to True every ~60 minutes.
         # This is expected behavior - the health check corrects it within seconds.
         # Only suppress if:
-        # 1. Mode is SELF_CONSUMPTION or DEMAND_BLOCK (where grid_charging should be False)
+        # 1. Mode is one where grid_charging should be False (_GRID_CHARGING_OFF_MODES)
         # 2. ONLY grid_charging_allowed mismatched (not operation_mode or backup_reserve)
         if mismatch_details is not None and self._is_tesla_grid_charging_sync(
             mode, mismatch_details
@@ -382,8 +392,8 @@ class NotificationService:
         """Check if this is Tesla's periodic grid_charging reset (Issue #394).
 
         Tesla's cloud resets allow_charging_from_grid to True approximately every
-        60 minutes. This is expected behavior in SELF_CONSUMPTION and DEMAND_BLOCK
-        modes where grid_charging should be False.
+        60 minutes. This is expected behavior in every non-charge mode
+        (_GRID_CHARGING_OFF_MODES), where grid_charging should be False.
 
         Args:
             mode: The commanded mode
@@ -393,8 +403,10 @@ class NotificationService:
             True if this is just Tesla's grid_charging sync (should suppress notification)
 
         """
-        # Only suppress for modes where grid_charging should be False
-        if mode not in (BatteryMode.SELF_CONSUMPTION, BatteryMode.DEMAND_BLOCK):
+        # Only suppress for modes where grid_charging should be False.
+        # Issue #1217: every non-charge mode, not only self consumption and
+        # demand block.
+        if mode not in _GRID_CHARGING_OFF_MODES:
             return False
 
         # Check if ONLY grid_charging_allowed mismatched
