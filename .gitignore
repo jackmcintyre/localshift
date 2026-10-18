@@ -80,5 +80,4 @@ simulations/replay-nodw/*.json
 # Deploy build stamp (scripts/write_build_stamp.sh). Written into the deployed
 # copy at deploy time; a committed value would name the wrong commit as soon
 # as the next one landed.
-custom_components/localshift/build.json
-custom_components/localshift/build.json.tmp
+custom_components/localshift/BUILD/

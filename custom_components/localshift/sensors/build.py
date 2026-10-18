@@ -1,7 +1,7 @@
 """Build sensor: which commit this copy of LocalShift was deployed from.
 
-The deploy writes ``build.json`` into the integration folder after copying it
-(``scripts/write_build_stamp.sh``). It is not in git: a committed value would
+The deploy writes ``BUILD/build.json`` into the integration folder after
+copying it (``scripts/write_build_stamp.sh``). It is not in git: a committed value would
 be wrong the moment the next commit landed. The file is read once, off the
 event loop, when the sensor is added; it can only change with a new deploy,
 and a new deploy needs a restart or reload to load anyway.
@@ -24,7 +24,8 @@ if TYPE_CHECKING:
 
     from ..coordinator import LocalShiftCoordinator
 
-BUILD_FILE = Path(__file__).resolve().parent.parent / "build.json"
+# In its own folder so a deployer can exclude BUILD/ when comparing or syncing.
+BUILD_FILE = Path(__file__).resolve().parent.parent / "BUILD" / "build.json"
 UNKNOWN = "unknown"
 SHORT_SHA_LENGTH = 7
 

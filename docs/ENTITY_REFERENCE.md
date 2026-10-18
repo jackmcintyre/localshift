@@ -1026,8 +1026,8 @@ Attributes:
 **Purpose:** Which commit the running copy of LocalShift was deployed from, so
 the running code can be compared with `main`.
 
-The deploy writes `custom_components/localshift/build.json` into the deployed
-copy (`scripts/write_build_stamp.sh`, run by `deploy.sh`); the sensor reads it
+The deploy writes `custom_components/localshift/BUILD/build.json` into the
+deployed copy (`scripts/write_build_stamp.sh`, run by `deploy.sh`); the sensor reads it
 once at setup, off the event loop. The file is not in git. A copy deployed
 without it, or with a damaged one, reports `unknown`. A new stamp shows after
 the integration reloads or Home Assistant restarts. See

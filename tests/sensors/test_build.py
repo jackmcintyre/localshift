@@ -1,6 +1,6 @@
 """Tests for the build sensor: which commit this copy of LocalShift came from.
 
-The deploy writes ``build.json`` next to the integration's code; the sensor
+The deploy writes ``BUILD/build.json`` next to the integration's code; the sensor
 reads it once when it is added and reports the commit. A missing or damaged
 file must read as "unknown" rather than fail setup.
 """
@@ -37,8 +37,9 @@ def _write(path: Path, payload: object) -> Path:
 class TestReadBuildInfo:
     def test_build_file_lives_in_the_integration_folder(self):
         assert BUILD_FILE.name == "build.json"
-        assert BUILD_FILE.parent.name == "localshift"
-        assert (BUILD_FILE.parent / "manifest.json").exists()
+        assert BUILD_FILE.parent.name == "BUILD"
+        assert BUILD_FILE.parent.parent.name == "localshift"
+        assert (BUILD_FILE.parent.parent / "manifest.json").exists()
 
     def test_missing_file_reads_unknown(self, tmp_path):
         info = read_build_info(tmp_path / "build.json")
@@ -186,7 +187,7 @@ def repo(tmp_path):
 
 def _stamp(repo: Path, dest: Path) -> BuildInfo:
     subprocess.run(["bash", str(STAMP_SCRIPT), str(repo), str(dest)], check=True)
-    return read_build_info(dest / "build.json")
+    return read_build_info(dest / "BUILD" / "build.json")
 
 
 class TestWriteBuildStamp:
