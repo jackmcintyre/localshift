@@ -772,6 +772,21 @@ class OptimizerFacade:
                     data, new_mode, True, mode_source="precharge_backstop_release"
                 )
                 return
+            # Issue #1159: no charge start in the price-boundary gap. Report the
+            # grant unspent so the state machine refunds it.
+            if (
+                decision_allowed
+                and data.mode_decision_charge_start_gated
+                and new_mode in _CHARGE_MODES
+                and data.active_mode not in _CHARGE_MODES
+            ):
+                _LOGGER.info(
+                    "Charge start deferred: %s waits out the price-boundary gap",
+                    new_mode.value,
+                )
+                data.debug_plan_mode_pending = new_mode.value
+                data.mode_decision_unspent = True
+                return
             # Ordinary optimizer commit path. Apply a dwell band to release of a
             # committed charge: the slot-0 sawtooth that flapped charge_forced 11x
             # in 124 min on 2026-07-30 is suppressed here without touching the

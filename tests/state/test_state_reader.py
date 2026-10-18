@@ -667,6 +667,35 @@ class TestReadAllExternalState:
         assert coordinator_data.demand_window_amber is False
 
 
+class TestPriceEstimateFlag:
+    """Issue #1159: Amber's ``estimate`` attribute on the general price entity."""
+
+    @pytest.mark.parametrize(
+        ("attributes", "expected"),
+        [
+            ({"estimate": True}, True),
+            ({"estimate": False}, False),
+            ({}, None),
+            ({"estimate": "true"}, None),
+        ],
+        ids=["estimate", "confirmed", "no-attribute", "not-a-bool"],
+    )
+    def test_estimate_flag_is_read_from_the_price_entity(
+        self, state_reader, mock_hass, coordinator_data, attributes, expected
+    ):
+        def mock_get_state(entity_id):
+            state = MagicMock()
+            state.state = "0.25" if "price" in entity_id else "0"
+            state.attributes = attributes if "general_price" in entity_id else {}
+            return state
+
+        mock_hass.states.get = mock_get_state
+
+        state_reader.read_all_external_state(coordinator_data)
+
+        assert coordinator_data.price_estimate is expected
+
+
 class TestPriceAvailability:
     """Tests for price availability tracking (Issue #330)."""
 
