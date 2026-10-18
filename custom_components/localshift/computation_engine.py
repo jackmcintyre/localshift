@@ -986,8 +986,11 @@ class ComputationEngine:
             "pricing_source": self.entry.data.get(
                 CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
             ),
-            "comparison_mode": self.entry.options.get(
-                CONF_COMPARISON_MODE, DEFAULT_COMPARISON_MODE
+            # Issue #1214: the options flow stores comparison_mode in entry.data
+            # (StateReader reads it there); entry.options covers older installs.
+            "comparison_mode": self.entry.data.get(
+                CONF_COMPARISON_MODE,
+                self.entry.options.get(CONF_COMPARISON_MODE, DEFAULT_COMPARISON_MODE),
             ),
             # ha_timezone override: if present in entry.options (e.g. injected by tests
             # via config_overrides), use it to avoid relying on dt_util.DEFAULT_TIME_ZONE.
