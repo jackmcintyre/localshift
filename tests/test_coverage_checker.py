@@ -4,6 +4,7 @@ Tests the Python coverage checking logic used by the TDD pre-commit hook.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ import pytest
 from scripts.coverage_checker import (
     CoverageCheckResult,
     CoverageFailure,
+    UnstagedEditsError,
     _format_line_ranges,
     check_changed_line_coverage,
     find_test_file,
@@ -443,6 +445,19 @@ class TestCheckChangedLineCoverage:
         assert result.passed is False
         assert result.failures[0].uncovered_lines == [1, 4, 5]
 
+    def test_unparseable_file_absent_from_coverage_fails_closed(self, tmp_path: Path):
+        # Review fix: with no coverage data and no parse there is no way to
+        # tell which changed lines are executable, so all of them count.
+        src = tmp_path / MOD
+        src.parent.mkdir(parents=True)
+        src.write_text("def f(:\n    return 1\n")
+        result = check_changed_line_coverage(
+            {"files": {}}, {MOD: {1, 2}}, root=tmp_path
+        )
+        assert result.passed is False
+        assert result.failures[0].uncovered_lines == [1, 2]
+        assert result.failures[0].changed_executable == 2
+
     def test_threshold_is_95_percent_of_changed_lines(self, tmp_path: Path):
         executed = list(range(1, 20))  # 19 covered
         data = _cov(executed=executed, missing=[20])
@@ -467,17 +482,31 @@ class TestStagedChangedLines:
         _git(repo, "add", MOD)
         assert staged_changed_lines([MOD], root=repo) == {MOD: {7, 8, 9, 10}}
 
-    def test_unstaged_edits_use_working_tree_line_numbers(self, repo: Path):
-        # Coverage is measured on the working tree, so when a staged file also
-        # has unstaged edits the lines must be numbered as in the working tree.
+    def test_staged_file_with_unstaged_edits_is_refused(self, repo: Path):
+        # Review fix: coverage runs on the working tree, so a staged file that
+        # also has unstaged edits cannot be measured as committed. Refuse it.
         src = repo / MOD
         src.write_text(BASE_SOURCE + "\n\ndef added(b):\n    return b * 2\n")
         _git(repo, "add", MOD)
-        src.write_text("# unstaged header\n" + src.read_text())
-        assert staged_changed_lines([MOD], root=repo) == {MOD: {1, 8, 9, 10, 11}}
+        src.write_text(BASE_SOURCE)  # staged-then-removed lines
+        with pytest.raises(UnstagedEditsError) as excinfo:
+            staged_changed_lines([MOD], root=repo)
+        assert excinfo.value.paths == [MOD]
+        assert f"stage or stash the remaining edits in {MOD}" in str(excinfo.value)
+
+    def test_rename_counts_only_the_edited_lines(self, repo: Path):
+        # Review fix: a git mv must not make every line of the moved module
+        # count as changed, only the lines actually edited.
+        moved = "custom_components/localshift/moved.py"
+        _git(repo, "mv", MOD, moved)
+        dst = repo / moved
+        dst.write_text(dst.read_text() + "\n\ndef added(b):\n    return b * 2\n")
+        _git(repo, "add", moved)
+        assert staged_changed_lines([moved], root=repo) == {moved: {7, 8, 9, 10}}
 
 
 HOOK = Path(__file__).resolve().parents[1] / ".githooks" / "scripts" / "check-tdd.sh"
+CHECKER = Path(__file__).resolve().parents[1] / "scripts" / "coverage_checker.py"
 
 
 class TestHookEndToEnd:
@@ -487,7 +516,62 @@ class TestHookEndToEnd:
         hook = hook_dir / "check-tdd.sh"
         hook.write_text(HOOK.read_text())
         hook.chmod(0o755)
+        (repo / "scripts").mkdir()
+        (repo / "scripts" / "coverage_checker.py").write_text(CHECKER.read_text())
         return hook
+
+    def _run_hook(self, repo: Path, hook: Path) -> subprocess.CompletedProcess:
+        """Run the hook with `uv run` shimmed to this interpreter."""
+        shim_dir = repo.parent / f"{repo.name}-bin"
+        shim_dir.mkdir()
+        shim = shim_dir / "uv"
+        shim.write_text(
+            "#!/bin/bash\n"
+            '[ "$1" = run ] && shift\n'
+            '[ "$1" = python ] && shift\n'
+            f'exec "{sys.executable}" "$@"\n'
+        )
+        shim.chmod(0o755)
+        env = {**os.environ, "PATH": f"{shim_dir}{os.pathsep}{os.environ['PATH']}"}
+        return subprocess.run(
+            [str(hook)], cwd=repo, capture_output=True, text=True, check=False, env=env
+        )
+
+    def test_rename_with_uncovered_edit_fails(self, repo: Path):
+        # Review fix: --diff-filter=ACM dropped renames, so a git mv plus an
+        # uncovered edit skipped both the test-file and the coverage checks.
+        hook = self._setup_hook(repo)
+        moved = "custom_components/localshift/moved.py"
+        _git(repo, "mv", MOD, moved)
+        dst = repo / moved
+        dst.write_text(dst.read_text() + "\n\ndef added(b):\n    return b * 2\n")
+        test = repo / "tests" / "test_moved.py"
+        test.parent.mkdir()
+        test.write_text(
+            "from custom_components.localshift.moved import covered\n\n\n"
+            "def test_covered():\n    assert covered(1) == 2\n"
+        )
+        _git(repo, "add", moved, "tests/test_moved.py")
+        proc = self._run_hook(repo, hook)
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 1, out
+        assert "No production code changes" not in out
+        assert "CHANGED-LINE COVERAGE BELOW" in out
+        # Only the edited lines count: `def added` runs on import, its body
+        # does not.
+        assert "(1/2)" in out
+        assert "Uncovered changed lines: L10" in out
+
+    def test_staged_file_with_unstaged_edits_is_refused(self, repo: Path):
+        hook = self._setup_hook(repo)
+        src = repo / MOD
+        src.write_text(BASE_SOURCE + "\n\ndef added(b):\n    return b * 2\n")
+        _git(repo, "add", MOD)
+        src.write_text(BASE_SOURCE)
+        proc = self._run_hook(repo, hook)
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 1, out
+        assert f"stage or stash the remaining edits in {MOD}" in out
 
     def test_docs_only_commit_skips(self, repo: Path):
         hook = self._setup_hook(repo)

@@ -300,8 +300,10 @@ How the hook measures it:
    exercised by many test files, not just their mapped one.
 3. Commits that touch no files under `custom_components/localshift/` skip all of this.
 
-If a staged file also has unstaged edits, coverage is measured on the working
-tree, so the unstaged edits in that file are checked too.
+Coverage is measured on the working tree, so a staged source file that also has
+unstaged edits is refused: stage or stash the remaining edits in that file, then
+commit again. Renamed files are checked like modified ones, and only the lines
+edited in them count as changed.
 
 When coverage fails, the pre-commit hook shows:
 - **Specific file** with uncovered changed lines

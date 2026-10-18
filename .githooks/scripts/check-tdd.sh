@@ -18,7 +18,7 @@ check_xdist_available() {
     return $?
 }
 
-STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '^custom_components/localshift/.*\.py$' || true)
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR | grep '^custom_components/localshift/.*\.py$' || true)
 
 if [ -z "$STAGED_FILES" ]; then
     echo "✅ No production code changes detected"
@@ -34,6 +34,14 @@ for FILE in $STAGED_FILES; do
         continue
     fi
     
+    # Coverage is measured on the working tree, so it must match the index.
+    if ! git diff --quiet -- "$FILE"; then
+        echo "❌ ERROR: $FILE has unstaged edits, so its coverage would be"
+        echo "   measured on code this commit does not contain."
+        echo "   stage or stash the remaining edits in $FILE"
+        exit 1
+    fi
+
     CHANGES_REQUIRE_TESTS=true
     SOURCE_FILE_PATHS+=("$FILE")
     

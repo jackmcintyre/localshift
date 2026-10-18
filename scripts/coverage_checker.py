@@ -252,6 +252,16 @@ def parse_added_lines(diff_text: str) -> dict[str, set[int]]:
     return added
 
 
+class UnstagedEditsError(Exception):
+    """A staged source file also has unstaged edits, so it cannot be measured."""
+
+    def __init__(self, paths: list[str]):
+        self.paths = paths
+        super().__init__(
+            "\n".join(f"stage or stash the remaining edits in {path}" for path in paths)
+        )
+
+
 def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args], cwd=root, capture_output=True, text=True, check=check
@@ -261,29 +271,35 @@ def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
 def staged_changed_lines(
     files: list[str], root: Path = Path(".")
 ) -> dict[str, set[int]]:
-    """Lines each staged file adds or modifies, numbered as in the working tree.
+    """Lines each staged file adds or modifies, as numbered in the index.
 
-    Coverage is measured on the working tree. For a file with no unstaged edits
-    the staged diff numbers lines the same way; for one that has unstaged edits
-    the working tree is diffed against HEAD instead, so the numbers line up with
-    the coverage data (those unstaged lines are then checked too).
+    Coverage is measured on the working tree, so the numbers only match the
+    coverage data when the working tree holds exactly what is staged. A staged
+    file that also has unstaged edits is refused (``UnstagedEditsError``):
+    measuring it would credit lines the commit does not contain.
+
+    Renames are detected, so a moved module counts only the lines edited in it.
     """
-    diff_opts = [
+    dirty = [
+        path
+        for path in files
+        if _git(root, "diff", "--quiet", "--", path, check=False).returncode != 0
+    ]
+    if dirty:
+        raise UnstagedEditsError(dirty)
+    diff = _git(
+        root,
+        "diff",
+        "--cached",
+        "-M",
         "-U0",
         "--no-color",
         "--no-ext-diff",
         "--src-prefix=a/",
         "--dst-prefix=b/",
-    ]
-    changed: dict[str, set[int]] = {}
-    for path in files:
-        has_unstaged = _git(root, "diff", "--quiet", "--", path, check=False)
-        if has_unstaged.returncode == 0:
-            diff = _git(root, "diff", "--cached", *diff_opts, "--", path).stdout
-        else:
-            diff = _git(root, "diff", "HEAD", *diff_opts, "--", path).stdout
-        changed[path] = parse_added_lines(diff).get(path, set())
-    return changed
+    ).stdout
+    added = parse_added_lines(diff)
+    return {path: added.get(path, set()) for path in files}
 
 
 def _exclude_regex(root: Path) -> str | None:
@@ -322,7 +338,8 @@ def check_changed_line_coverage(
     A changed continuation line counts as the statement it belongs to. Lines
     that are not executable (blank, comment, docstring, excluded) do not count.
     A file missing from the coverage data was never imported by the tests, so
-    its changed statements all count as uncovered.
+    its changed statements all count as uncovered (every changed line, if the
+    file cannot be parsed either).
     """
     failures = []
     files = coverage_data.get("files", {})
@@ -337,9 +354,14 @@ def check_changed_line_coverage(
             executed = set(files[file_path].get("executed_lines", []))
             missing = set(files[file_path].get("missing_lines", []))
             statements = executed | missing
-        else:
+        elif parser is not None:
             executed = set()
-            statements = set(parser.statements) if parser is not None else set()
+            statements = set(parser.statements)
+        else:
+            # Neither imported nor parseable: no way to tell which changed
+            # lines are executable, so fail closed and count all of them.
+            executed = set()
+            statements = set(lines)
 
         executable = lines & statements
         if not executable:
@@ -403,7 +425,13 @@ def main():
     if changed_mode:
         with open(json_path) as f:
             data = json.load(f)
-        changed = staged_changed_lines(staged_files)
+        try:
+            changed = staged_changed_lines(staged_files)
+        except UnstagedEditsError as err:
+            print("❌ Staged files also have unstaged edits; coverage would be")
+            print("   measured on code this commit does not contain.")
+            print(str(err))
+            sys.exit(1)
         result = check_changed_line_coverage(data, changed)
         print(format_changed_lines_report(result))
     else:
