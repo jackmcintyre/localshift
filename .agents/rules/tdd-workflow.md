@@ -167,8 +167,8 @@ uv run pytest -k "pattern" -v
 **Before every commit, the following is automatically checked:**
 
 1. **Test file exists** when code file is modified
-2. **Coverage threshold** (95%) is met
-3. **Tests pass** for modified code
+2. **Tests pass** for modified code
+3. **Coverage threshold** (95%) is met for the **changed lines** of each modified file
 
 **If checks fail, commit is blocked:**
 ```bash
@@ -287,37 +287,47 @@ If test passes before implementation:
 
 ### Coverage Below 95%
 
-**Coverage is checked PER MODIFIED FILE, not project-wide.**
+**Coverage is checked on the CHANGED LINES of each modified file** (issue #1212),
+not on the whole file and not project-wide. At least 95% of the executable lines
+the commit adds or modifies must be run by the tests. Blank lines, comments,
+docstrings and `pragma: no cover` lines do not count; an edited continuation
+line counts as the statement it belongs to.
+
+How the hook measures it:
+1. Runs the name-mapped test file(s) with coverage and checks the changed lines.
+2. If that falls short, re-runs the **full suite** (`-n 2`, a few minutes) and
+   checks again, because large modules such as `engine/optimizer_facade.py` are
+   exercised by many test files, not just their mapped one.
+3. Commits that touch no files under `custom_components/localshift/` skip all of this.
+
+Coverage is measured on the working tree, so a staged source file that also has
+unstaged edits is refused: stage or stash the remaining edits in that file, then
+commit again. Renamed files are checked like modified ones, and only the lines
+edited in them count as changed.
 
 When coverage fails, the pre-commit hook shows:
-- **Specific file** with low coverage
-- **Exact coverage percentage** vs 95% requirement  
-- **Uncovered line ranges** (e.g., L45-52, L78-85)
+- **Specific file** with uncovered changed lines
+- **Changed-line coverage** vs the 95% requirement
+- **Uncovered changed line ranges** (e.g., L45-52, L78)
 - **Test file location** for that source file
-- **One-liner command** to re-run with details
 
 Example failure output:
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ❌ COVERAGE FAILURES - 1 file(s) below 95% threshold                 │
-├──────────────────────────────────────────────────────────────────────┤
-│ File: custom_components/localshift/optimizer.py                      │
-│ Coverage: 78.3% (need 95%)                                           │
-│ Uncovered: L45-52, L78-85                                            │
-│ Test file: tests/test_optimizer.py                                   │
-├──────────────────────────────────────────────────────────────────────┤
-│ Run this to see detailed coverage:                                   │
-│   uv run pytest tests/test_optimizer.py                              │
-│     --cov=custom_components.localshift.optimizer \                   │
-│     --cov-report=term-missing -v                                     │
-└──────────────────────────────────────────────────────────────────────┘
+❌ CHANGED-LINE COVERAGE BELOW 95% in 1 file(s)
+
+  File: custom_components/localshift/optimizer.py
+    60.0% of changed executable lines covered (3/5)
+    Uncovered changed lines: L45-46
+    Test file: tests/test_optimizer.py
+
+Write tests that execute those lines, then commit again.
+TDD Workflow: .agents/rules/tdd-workflow.md
 ```
 
 **Remediation steps:**
 1. Open the test file shown
-2. Write tests targeting the uncovered line ranges
-3. Re-run the command shown at the bottom
-4. Re-attempt commit when coverage ≥ 95%
+2. Write tests that execute the uncovered changed lines
+3. Re-attempt the commit
 
 **For detailed HTML coverage report:**
 ```bash

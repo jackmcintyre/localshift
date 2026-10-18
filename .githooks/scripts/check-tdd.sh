@@ -1,6 +1,9 @@
 #!/bin/bash
 # TDD enforcement pre-commit hook
-# Verifies test files exist for modified code and coverage meets 95% threshold per file
+# Verifies a test file exists for each modified module, the tests pass, and at
+# least 95% of the executable lines the commit adds or modifies are covered
+# (issue #1212). Changed lines are measured with the mapped tests first, then
+# with the full suite (-n 2) if the mapped tests alone fall short.
 
 set -e
 
@@ -15,7 +18,7 @@ check_xdist_available() {
     return $?
 }
 
-STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '^custom_components/localshift/.*\.py$' || true)
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR | grep '^custom_components/localshift/.*\.py$' || true)
 
 if [ -z "$STAGED_FILES" ]; then
     echo "✅ No production code changes detected"
@@ -31,6 +34,14 @@ for FILE in $STAGED_FILES; do
         continue
     fi
     
+    # Coverage is measured on the working tree, so it must match the index.
+    if ! git diff --quiet -- "$FILE"; then
+        echo "❌ ERROR: $FILE has unstaged edits, so its coverage would be"
+        echo "   measured on code this commit does not contain."
+        echo "   stage or stash the remaining edits in $FILE"
+        exit 1
+    fi
+
     CHANGES_REQUIRE_TESTS=true
     SOURCE_FILE_PATHS+=("$FILE")
     
@@ -94,80 +105,68 @@ for FILE in "${SOURCE_FILE_PATHS[@]}"; do
     COV_FLAGS="$COV_FLAGS --cov=$MODULE"
 done
 
-PARALLEL_FLAG=""
-if [ "${LOCALSHIFT_PRECOMMIT_USE_XDIST:-0}" = "1" ] && check_xdist_available; then
-    PARALLEL_FLAG="-n logical"
-    echo "🚀 Using parallel execution (pytest-xdist)"
-else
-    echo "🚶 Using serial execution"
+# Parallelism is capped at 2 workers: uncapped fan-out has exhausted memory.
+FULL_SUITE_PARALLEL=""
+if check_xdist_available; then
+    FULL_SUITE_PARALLEL="-n 2"
+fi
+MAPPED_PARALLEL=""
+if [ "${LOCALSHIFT_PRECOMMIT_USE_XDIST:-0}" = "1" ]; then
+    MAPPED_PARALLEL="$FULL_SUITE_PARALLEL"
 fi
 
-TEST_FILES="${TEST_FILE_PATHS[*]}"
 COVERAGE_JSON="$PROJECT_ROOT/.coverage-tdd.json"
+trap 'rm -f "$COVERAGE_JSON"' EXIT
 
-echo ""
-echo "🔍 Running tests with coverage for modified files..."
-
-if [ -n "$COV_FLAGS" ]; then
+# run_with_coverage <label> <pytest args...>: run tests, write $COVERAGE_JSON,
+# exit the hook if any test fails.
+run_with_coverage() {
+    local label="$1"
+    shift
     set +e
     env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX \
-        uv run python -m pytest $TEST_FILES $COV_FLAGS \
-        $PARALLEL_FLAG \
-        --cov-report=json:"$COVERAGE_JSON" \
-        --cov-report=term-missing \
-        -v --tb=short 2>&1
-    PYTEST_EXIT=$?
+        uv run python -m pytest "$@" $COV_FLAGS \
+        --cov-report=json:"$COVERAGE_JSON" --cov-report= \
+        -q --tb=short 2>&1
+    local status=$?
     set -e
-    if [ "$PYTEST_EXIT" -ne 0 ]; then
+    if [ "$status" -ne 0 ]; then
         echo ""
-        echo "❌ ERROR: Tests failed (exit $PYTEST_EXIT)"
+        echo "❌ ERROR: Tests failed in $label (exit $status)"
         echo ""
         echo "All tests must pass before commit (TDD GREEN phase)"
         echo "See: .agents/rules/tdd-workflow.md"
-        rm -f "$COVERAGE_JSON"
         exit 1
     fi
-    
-    echo ""
-    echo "📊 Checking per-file coverage (95% threshold)..."
-    
-    if [ -f "$COVERAGE_CHECKER" ]; then
-        if ! uv run python "$COVERAGE_CHECKER" "$COVERAGE_JSON" "${SOURCE_FILE_PATHS[@]}"; then
-            rm -f "$COVERAGE_JSON"
-            exit 1
-        fi
-    else
-        echo "⚠️  coverage_checker.py not found, falling back to --cov-fail-under"
-        set +e
-        env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX \
-            uv run python -m pytest $TEST_FILES $COV_FLAGS \
-            --cov-fail-under=95 \
-            -q 2>&1
-        PYTEST_EXIT=$?
-        set -e
-        if [ "$PYTEST_EXIT" -ne 0 ]; then
-            echo ""
-            echo "❌ ERROR: Coverage below 95% (exit $PYTEST_EXIT)"
-            rm -f "$COVERAGE_JSON"
-            exit 1
-        fi
-    fi
-    
-    rm -f "$COVERAGE_JSON"
-    echo ""
-    echo "✅ All tests pass with 95%+ coverage per file"
+}
+
+# check_changed_lines: 95% of the executable lines this commit adds or
+# modifies must be covered (issue #1212). Whole-file coverage is not checked.
+check_changed_lines() {
+    uv run python "$COVERAGE_CHECKER" --changed-lines "$COVERAGE_JSON" \
+        "${SOURCE_FILE_PATHS[@]}"
+}
+
+STARTED=$(date +%s)
+echo ""
+echo "🔍 Running mapped tests with coverage..."
+run_with_coverage "mapped tests" "${TEST_FILE_PATHS[@]}" $MAPPED_PARALLEL
+
+echo ""
+echo "📊 Checking coverage of changed lines (95% threshold)..."
+if CHECK_OUTPUT=$(check_changed_lines); then
+    echo "$CHECK_OUTPUT"
 else
-    if ! uv run pytest $TEST_FILES $PARALLEL_FLAG -v --tb=short 2>&1; then
-        echo ""
-        echo "❌ ERROR: Tests failed"
-        echo ""
-        echo "All tests must pass before commit (TDD GREEN phase)"
-        echo "See: .agents/rules/tdd-workflow.md"
+    # Large modules are exercised by many test files, not just the mapped
+    # one, so measure again with the whole suite before failing.
+    echo "↪  Mapped tests leave changed lines uncovered; re-measuring with"
+    echo "   the full suite ${FULL_SUITE_PARALLEL:-(serial)} (takes a few minutes)..."
+    run_with_coverage "full suite" $FULL_SUITE_PARALLEL
+    echo ""
+    if ! check_changed_lines; then
         exit 1
     fi
-    echo ""
-    echo "✅ All tests pass"
 fi
 
 echo ""
-echo "✅ TDD compliance checks passed"
+echo "✅ TDD compliance checks passed ($(( $(date +%s) - STARTED ))s)"

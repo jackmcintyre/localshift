@@ -7,7 +7,7 @@
 | Worktree required | `git worktree add worktrees/issue-{N} -b issue/{N}` |
 | Branch protected | NEVER commit to `main` or `test` directly |
 | TDD required | Write failing test first, then implement |
-| Coverage ≥95% | `uv run pytest --cov=custom_components/localshift --cov-report=term-missing` |
+| Coverage ≥95% of changed lines | Enforced by the pre-commit hook (`.githooks/scripts/check-tdd.sh`); see `.agents/rules/tdd-workflow.md` |
 
 ## Project Context
 
