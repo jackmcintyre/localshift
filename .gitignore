@@ -76,3 +76,9 @@ simulations/replay/*.json
 # solar-deficit day is kept because recorder retention would lose it.
 simulations/replay-nodw/*.json
 !simulations/replay-nodw/2026-09-07.json
+
+# Deploy build stamp (scripts/write_build_stamp.sh). Written into the deployed
+# copy at deploy time; a committed value would name the wrong commit as soon
+# as the next one landed.
+custom_components/localshift/build.json
+custom_components/localshift/build.json.tmp

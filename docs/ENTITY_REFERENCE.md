@@ -4,11 +4,11 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **70 entities** grouped under a single "LocalShift" device:
+The integration creates **71 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 31 | `sensor` |
+| Sensors | 32 | `sensor` |
 | Binary Sensors | 11 | `binary_sensor` |
 | Switches | 10 | `switch` |
 | Numbers | 14 | `number` |
@@ -89,6 +89,7 @@ user-facing entities with no category and appear on the main device card.
 | `select.localshift_battery_mode` | `localshift_battery_mode` | `select` | — |
 | `select.localshift_optimization_mode` | `localshift_optimization_mode` | `select` | — |
 | `sensor.localshift_automation_ready` | `localshift_automation_ready` | `sensor` | diagnostic |
+| `sensor.localshift_build` | `localshift_build` | `sensor` | diagnostic |
 | `sensor.localshift_cloud_event` | `localshift_cloud_event` | `sensor` | — |
 | `sensor.localshift_comparison_result` | `localshift_comparison_result` | `sensor` | — |
 | `sensor.localshift_cost_electricity_net` | `localshift_cost_electricity_net` | `sensor` | — |
@@ -1017,6 +1018,41 @@ Attributes:
 ```
 
 **Icon:** `mdi:currency-usd`
+
+---
+
+### 29. sensor.localshift_build
+
+**Purpose:** Which commit the running copy of LocalShift was deployed from, so
+the running code can be compared with `main`.
+
+The deploy writes `custom_components/localshift/build.json` into the deployed
+copy (`scripts/write_build_stamp.sh`, run by `deploy.sh`); the sensor reads it
+once at setup, off the event loop. The file is not in git. A copy deployed
+without it, or with a damaged one, reports `unknown`. A new stamp shows after
+the integration reloads or Home Assistant restarts. See
+`docs/DEVELOPER_GUIDE.md`, "Build stamp".
+
+**State:** Short commit sha (7 characters), or `unknown`.
+
+**Attributes:**
+
+| Attribute | Meaning |
+|-----------|---------|
+| `commit` | Full commit sha, or `unknown` |
+| `build_time` | When the deploy wrote the stamp (UTC, ISO-8601), or null |
+| `dirty` | `true` if the checkout had uncommitted changes under `custom_components/localshift`, so the running code is not exactly `commit`; null when unknown |
+
+**Example Data:**
+```
+State: 0123456
+Attributes:
+  commit: 0123456789abcdef0123456789abcdef01234567
+  build_time: 2026-10-18T01:02:03Z
+  dirty: false
+```
+
+**Icon:** `mdi:source-commit`
 
 ---
 
