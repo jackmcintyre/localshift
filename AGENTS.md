@@ -14,8 +14,15 @@
 - **Domain**: Home Assistant integration for Tesla Powerwall
 - **Code**: `custom_components/localshift/`
 - **Tests**: `tests/`
-- **Deploy**: Use skill `deploy-and-validate` when work is complete to deploy and validate
+- **Deploy**: Deploys are done only by the HA host's pull deployer, which ships every merge to `main`. Agents never run `deploy.sh`, `rollback.sh` or restart HA.
 - **Python**: 3.13+, type hints required
+- **Where development runs**: a shared dev host, with deploys moving to the HA host's pull deployer (in progress). Worktrees live under `worktrees/` in the repo. Tools marked *optional* below may not be installed in your environment; skip them if absent.
+
+## House rules that affect deploys
+
+- **HA restarts**: Jack restarts HA; the coordinator pre-checks. Merged changes go live at the next restart; never restart HA yourself.
+- **No HA restart during the nightly backup window.**
+- **The move to the HA host's pull deployer is in progress.** Until it ships `main` merges, a merged change waits for it; do not work around that by deploying by hand.
 
 ## Optimizer Changes (CRITICAL)
 
@@ -39,37 +46,36 @@ When modifying DP optimizer, you MUST consult `docs/PLANNING_MODEL.md` first:
 
 ## Navigation
 
-Use the right tool for the task:
+Use the right tool for the task. SymDex, OpenViking and hass-cli are optional: use them if available, otherwise fall back to `grep` and reading files.
 
-**SymDex** - Precise code navigation:
+**SymDex** *(optional, if available)* - Precise code navigation:
 - `symdex_search_symbols("function")` - find symbol/class by exact name
 - `symdex_get_file_outline("file.py")` - file structure
 - `symdex_search_text("text")` - exact content search
 - Use when: you know the name, need structure, or want fast lookups
 
-**OpenViking** - Semantic code understanding:
+**OpenViking** *(optional, if available)* - Semantic code understanding:
 - `ov search "query"` - semantic search across codebase
 - `ov read viking://resources/localshift/path/to/file` - read file content
 - `ov abstract viking://...` - get directory summary
 - Use when: exploring how/why code works, finding patterns, conceptual queries
-- Start if not running: `~/.local/bin/ov-start`
 
-**@homeassistant subagent** - HA gateway (CLI for reads, MCP for writes):
-- Automatically uses hass-cli for entity state, history, lists
-- Automatically uses MCP for turn on/off, set values, call services
-- Use: `@homeassistant check battery state` or `@homeassistant turn on automation`
-- Skill: `homeassistant` (merged CLI+MCP)
+**@homeassistant subagent** - HA gateway, read-only:
+- Reads entity state, history and lists (via hass-cli if available)
+- Agents are read-only against HA: no turning things on/off, setting values or calling services
+- Use: `@homeassistant check battery state`
+- Skill: `homeassistant`
 
 **Quick decision guide:**
 
 | You need... | Use |
 |--------------|-----|
-| Find function `foo` by name | SymDex |
-| Understand how auth works | OpenViking |
-| See file structure | SymDex |
-| Find code related to "grid charging" | OpenViking |
-| Navigate to line N | SymDex |
-| Any HA operation | `@homeassistant` subagent |
+| Find function `foo` by name | SymDex if available, else `grep` |
+| Understand how auth works | OpenViking if available, else `grep` + read |
+| See file structure | SymDex if available |
+| Find code related to "grid charging" | OpenViking if available, else `grep` |
+| Navigate to line N | SymDex if available |
+| Any HA read | `@homeassistant` subagent |
 
 ## Additional Tools
 

@@ -23,8 +23,8 @@ Usage
   scripts/ha_data_sweep.py --stdout           # print report, no files
   scripts/ha_data_sweep.py --keep-db          # keep the DB copy for ad-hoc SQL
 
-Config dir resolution: --config flag > HA_CONFIG env >
-/Volumes/appdata/Home-Assistant-Container (this host's default).
+Config dir resolution: --config flag > HA_CONFIG env. There is no
+host default: with neither set, the script exits with a message.
 """
 from __future__ import annotations
 
@@ -41,7 +41,6 @@ from pathlib import Path
 AEST = timezone(timedelta(hours=10))
 
 DB_NAME = "home-assistant_v2.db"
-DEFAULT_CONFIG = "/Volumes/appdata/Home-Assistant-Container"
 
 ENTITIES: dict[str, str] = {
     "general_price": "sensor.amber_express_100h_general_price",
@@ -553,14 +552,21 @@ def day_starts(series: list[tuple[float, float]], tz: timezone) -> list[tuple[st
     return sorted(seen.items(), key=lambda kv: kv[1])
 
 
+def resolve_config_dir(cli_value: str | None, env=os.environ) -> str:
+    """HA config dir from --config, else HA_CONFIG; exit if neither is set."""
+    config_dir = cli_value or env.get("HA_CONFIG")
+    if not config_dir:
+        raise SystemExit(
+            "ha_data_sweep: no HA config dir. Pass --config /path/to/ha/config "
+            "or set HA_CONFIG."
+        )
+    return config_dir
+
+
 def run_sweep(args) -> str:
     import time as _time
 
-    config_dir = (
-        args.config
-        or os.environ.get("HA_CONFIG")
-        or DEFAULT_CONFIG
-    )
+    config_dir = resolve_config_dir(args.config)
     since = _time.time() - args.days * 86400
 
     # Transient DB copy lives under out-dir (gitignored tmp/): the system
@@ -646,8 +652,8 @@ def main():
     )
     ap.add_argument("--days", type=int, default=7,
                     help="window length in days (default: 7)")
-    ap.add_argument("--config", help=f"HA config dir (default: HA_CONFIG env "
-                                     f"or {DEFAULT_CONFIG})")
+    ap.add_argument("--config", help="HA config dir (default: HA_CONFIG env; "
+                                     "required if that is unset)")
     ap.add_argument("--out-dir", default="tmp",
                     help="output directory (default: ./tmp)")
     ap.add_argument("--stdout", action="store_true",
