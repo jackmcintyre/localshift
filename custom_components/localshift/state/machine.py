@@ -2312,11 +2312,13 @@ class StateMachine:
                 )
                 return
 
-            # Log the mismatch with detailed diagnostics
+            # Log the mismatch with detailed diagnostics. Issue #1209: the
+            # transition stamp is in-memory and only set by a real mode
+            # transition, so None means none since restart, not never.
             last_transition_str = (
                 self._last_successful_transition.strftime("%H:%M:%S")
                 if self._last_successful_transition
-                else "never"
+                else "none since restart"
             )
             last_correction_str = (
                 self._last_health_correction.strftime("%H:%M:%S")
