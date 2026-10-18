@@ -225,7 +225,7 @@ class StateMachine:
         self._export_start_epoch: int = 0
         # Issue #1159: the token before this evaluation's grant, restored when the
         # facade defers a charge start; the flag only tags the next grant.
-        self._pre_grant: tuple[str | None, str | None] = (None, None)
+        self._pre_grant: tuple[Any, ...] = (None, None, None)
         self._start_gate_refunded: bool = False
         self._MIN_CORRECTION_INTERVAL = timedelta(
             minutes=STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES
@@ -1144,7 +1144,11 @@ class StateMachine:
         same_base = decision_allowed and context == self._last_evaluated_base
         export_start_only = same_base and export_epoch_moved
         plan_charge_only = same_base and (plan_epoch_moved or not export_epoch_moved)
-        self._pre_grant = (self._last_evaluated_fingerprint, self._last_evaluated_base)
+        self._pre_grant = (
+            self._last_evaluated_fingerprint,
+            self._last_evaluated_base,
+            self._pending_retry_mode,
+        )
         if decision_allowed:
             # Issue #510 slice 1 (measurement only): attribute the grant BEFORE
             # _last_evaluated_base is overwritten below — by transition time the
@@ -1175,8 +1179,13 @@ class StateMachine:
             and self._last_grant_source not in _START_GATE_EXEMPT_SOURCES
             and self._in_price_boundary_gap(data)
         )
-        if decision_allowed and self._start_gate_refunded:
-            self._start_gate_refunded = False
+        # Only the evaluation straight after a refund is its retry.
+        refunded, self._start_gate_refunded = self._start_gate_refunded, False
+        if (
+            decision_allowed
+            and refunded
+            and self._last_grant_source not in _START_GATE_EXEMPT_SOURCES
+        ):
             self._last_grant_source = "charge_start_gate"
         self._plan_charge_grant_mode = (
             data.debug_plan_mode_pending if plan_epoch_moved else None
@@ -1212,7 +1221,11 @@ class StateMachine:
             return
         data.mode_decision_unspent = False
         data.mode_decision_allowed = False
-        self._last_evaluated_fingerprint, self._last_evaluated_base = self._pre_grant
+        (
+            self._last_evaluated_fingerprint,
+            self._last_evaluated_base,
+            self._pending_retry_mode,
+        ) = self._pre_grant
         self._start_gate_refunded = True
 
     def _refund_unspent_plan_charge(self, data: CoordinatorData) -> None:
@@ -2475,6 +2488,7 @@ class StateMachine:
         """
         _LOGGER.info("Decision fingerprint invalidated: %s", reason)
         self._last_evaluated_fingerprint = None
+        self._start_gate_refunded = False
         # Cleared with it, or the next grant would be misattributed to the plan
         # ("same base as last time") and restricted to charge modes only.
         self._last_evaluated_base = None

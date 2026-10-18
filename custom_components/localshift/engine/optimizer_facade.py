@@ -780,11 +780,14 @@ class OptimizerFacade:
                 and new_mode in _CHARGE_MODES
                 and data.active_mode not in _CHARGE_MODES
             ):
-                _LOGGER.info(
+                first = data.debug_mode_source != "charge_start_gate"
+                _LOGGER.log(
+                    logging.INFO if first else logging.DEBUG,
                     "Charge start deferred: %s waits out the price-boundary gap",
                     new_mode.value,
                 )
                 data.debug_plan_mode_pending = new_mode.value
+                data.debug_mode_source = "charge_start_gate"
                 data.mode_decision_unspent = True
                 return
             # Ordinary optimizer commit path. Apply a dwell band to release of a

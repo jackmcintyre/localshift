@@ -326,3 +326,80 @@ def test_backtest_shapes_do_not_flap(state_machine, data, shape) -> None:
     ]
 
     assert not [mode for mode in committed if mode in _CHARGE]
+
+
+class TestDeferralBookkeeping:
+    """Review follow-ups on #1226: logging, retry tag, telemetry tag, source."""
+
+    def test_deferral_logs_info_once_per_gap(self, state_machine, data, caplog):
+        engine = FacadeEngine()
+        _settle(state_machine, data, engine)
+        caplog.set_level("DEBUG", logger="custom_components.localshift")
+
+        def deferrals(level: str) -> int:
+            return sum(
+                1
+                for r in caplog.records
+                if r.levelname == level and "Charge start deferred" in r.message
+            )
+
+        _tick(state_machine, data, engine, -20, BOOST, 0.15, False)
+        _tick(state_machine, data, engine, 2, BOOST, 0.15, True)
+        assert (deferrals("INFO"), deferrals("DEBUG")) == (1, 1)
+
+        _tick(state_machine, data, engine, 30, SELF, 0.30, False)
+        _tick(state_machine, data, engine, 302, BOOST, 0.15, True)
+        assert (deferrals("INFO"), deferrals("DEBUG")) == (2, 1)
+
+    def test_deferral_shows_on_the_mode_source(self, state_machine, data) -> None:
+        engine = FacadeEngine()
+        _settle(state_machine, data, engine)
+
+        _tick(state_machine, data, engine, 2, BOOST, 0.15, True)
+        assert data.debug_mode_source == "charge_start_gate"
+        _tick(state_machine, data, engine, 24, BOOST, 0.15, False)
+        assert data.debug_mode_source == "optimizer"
+
+    def test_deferred_grant_keeps_the_retry_tag(self, state_machine, data) -> None:
+        engine = FacadeEngine()
+        _settle(state_machine, data, engine)
+        state_machine._pending_retry_mode = GRID
+        seen = []
+
+        async def core(data, engine) -> None:
+            # What the transition logic sees once the token is handed back.
+            seen.append(state_machine._pending_retry_mode)
+
+        with patch.object(state_machine, "_evaluate_core", core):
+            _tick(state_machine, data, engine, 2, BOOST, 0.15, True)
+
+        assert seen == [GRID]
+
+    def test_tag_does_not_outlive_a_retry_that_never_came(
+        self, state_machine, data
+    ) -> None:
+        """Price A, B (deferred), back to A: no grant, so the tag is dropped."""
+        engine = FacadeEngine()
+        _settle(state_machine, data, engine)
+
+        assert _tick(state_machine, data, engine, 2, BOOST, 0.15, True) == SELF
+        # At target, so the pending charge raises no plan-charge grant either.
+        data.soc = 100.0
+        assert _tick(state_machine, data, engine, 25, SELF, 0.20, False) == SELF
+        data.soc = 50.0
+        assert _tick(state_machine, data, engine, 150, GRID, 0.12, False) == GRID
+
+        assert "charge_start_gate" not in data.boundary_lag_history
+        assert [e["to_mode"] for e in data.boundary_lag_history["price"]] == [
+            GRID.value
+        ]
+
+    def test_invalidation_drops_the_tag(self, state_machine, data) -> None:
+        engine = FacadeEngine()
+        _settle(state_machine, data, engine)
+
+        assert _tick(state_machine, data, engine, 2, BOOST, 0.15, True) == SELF
+        state_machine.invalidate_decision_fingerprint("test")
+        assert _tick(state_machine, data, engine, 150, GRID, 0.15, False) == GRID
+
+        assert "charge_start_gate" not in data.boundary_lag_history
