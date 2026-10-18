@@ -17,8 +17,9 @@
 # REPO_DIR, i.e. the deployed code is not exactly that commit. A REPO_DIR that
 # is not a git checkout stamps commit "unknown".
 #
-# Every deploy path must run this after copying the folder (deploy.sh does);
-# BUILD/ is gitignored, so a copy that skips this reports "unknown".
+# The HA host's pull deployer runs this after every ship and rollback (and the
+# emergency-only deploy.sh after its copy). BUILD/ is gitignored, so a copy
+# that skips this reports "unknown". Paths come only from the two arguments.
 
 set -euo pipefail
 

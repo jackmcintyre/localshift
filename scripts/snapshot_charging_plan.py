@@ -16,7 +16,7 @@ Options:
 Environment Variables:
     HA_URL              Home Assistant URL
     HA_TOKEN            Home Assistant long-lived access token
-    HA_LONG_LIVED_TOKEN Alternative token variable (used by deploy.sh)
+    HA_LONG_LIVED_TOKEN Alternative token variable
 
 Output:
     Creates a markdown file named charging_plan_snapshot_YYYY-MM-DD.md
@@ -46,8 +46,7 @@ Examples:
     # Override URL and token
     python snapshot_charging_plan.py --url http://localhost:8123 --token your_token
 
-    # Using with deploy.sh environment
-    ./deploy.sh --reserve
+    # Write into the repo's snapshots folder
     python scripts/snapshot_charging_plan.py --output snapshots/
 """
 

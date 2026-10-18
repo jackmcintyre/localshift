@@ -1,5 +1,12 @@
 #!/bin/bash
-# deploy.sh - Deploy LocalShift to Home Assistant
+# deploy.sh - Deploy LocalShift to Home Assistant (EMERGENCY USE BY A HUMAN ONLY)
+#
+# LocalShift is deployed by the HA host's pull deployer, which ships every
+# merge to main. This script is not a deploy path: it is kept only so a human
+# can copy the integration by hand in an emergency, and it refuses to run
+# unless given --i-am-not-the-deployer (in any position). Agents never run it.
+#
+#   ./deploy.sh --i-am-not-the-deployer [options below]
 #
 # This script deploys the LocalShift integration to a Home Assistant instance.
 # It deploys the current worktree state (no git pull/branch operations).
@@ -32,6 +39,32 @@
 # Deploy will FAIL if you don't have an active reservation.
 
 set -e
+
+# Refuse unless a human says this is not the deployer. Runs before anything
+# else reads or writes, and strips the flag so the parser below never sees it.
+NOT_THE_DEPLOYER=false
+PASSED_ARGS=()
+for arg in "$@"; do
+    if [ "$arg" = "--i-am-not-the-deployer" ]; then
+        NOT_THE_DEPLOYER=true
+    else
+        PASSED_ARGS+=("$arg")
+    fi
+done
+if [ "$NOT_THE_DEPLOYER" != true ]; then
+    cat >&2 <<'EOF'
+deploy.sh: refusing to run.
+
+LocalShift is deployed by the HA host's pull deployer, which ships every merge
+to main. To deploy a change, merge its PR; it goes live at the next HA restart
+once the pull deployer has shipped it.
+
+This script is kept only for a human in an emergency. If that is you, re-run
+it with --i-am-not-the-deployer. Agents never run it.
+EOF
+    exit 2
+fi
+set -- ${PASSED_ARGS[@]+"${PASSED_ARGS[@]}"}
 
 # Configuration (override with environment variables)
 HA_CONFIG="${HA_CONFIG:-/homeassistant}"
@@ -244,8 +277,8 @@ check_reservation() {
             log_error "Since: $RES_INFO_TIMESTAMP"
             echo ""
             log_info "Options:"
-            log_info "  - Wait for them to release: ./deploy.sh --release"
-            log_info "  - Force override: ./deploy.sh --force"
+            log_info "  - Wait for them to release: ./deploy.sh --i-am-not-the-deployer --release"
+            log_info "  - Force override: ./deploy.sh --i-am-not-the-deployer --force"
             exit 1
         else
             log_warning "Found expired/stale reservation - removing"
@@ -260,11 +293,11 @@ check_reservation() {
     log_info "This prevents multiple agents from overwriting each other's work."
     echo ""
     log_info "Required workflow:"
-    log_info "  1. Reserve: ./deploy.sh --reserve"
-    log_info "  2. Deploy:  ./deploy.sh"
-    log_info "  3. Release: ./deploy.sh --release (when done)"
+    log_info "  1. Reserve: ./deploy.sh --i-am-not-the-deployer --reserve"
+    log_info "  2. Deploy:  ./deploy.sh --i-am-not-the-deployer"
+    log_info "  3. Release: ./deploy.sh --i-am-not-the-deployer --release (when done)"
     echo ""
-    log_info "To override (emergency): ./deploy.sh --force"
+    log_info "To override (emergency): ./deploy.sh --i-am-not-the-deployer --force"
     exit 1
 }
 
@@ -306,13 +339,13 @@ if [ "$WATCH_MODE" = true ]; then
     # Setup trap to release reservation on exit (Ctrl+C or unexpected termination)
     cleanup_on_exit() {
         log_info "Releasing reservation on exit..."
-        "$SCRIPT_DIR/deploy.sh" --release --no-reload > /dev/null 2>&1 || true
+        "$SCRIPT_DIR/deploy.sh" --i-am-not-the-deployer --release --no-reload > /dev/null 2>&1 || true
     }
     trap cleanup_on_exit INT TERM EXIT
     
     # Initial deploy
     log_deploy "Performing initial deployment..."
-    "$SCRIPT_DIR/deploy.sh" --no-reload
+    "$SCRIPT_DIR/deploy.sh" --i-am-not-the-deployer --no-reload
     
     # Track local commit for git polling
     LAST_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "")
@@ -368,7 +401,7 @@ if [ "$WATCH_MODE" = true ]; then
         log_deploy "Redeploying..."
         
         # Redeploy
-        "$SCRIPT_DIR/deploy.sh" --no-reload
+        "$SCRIPT_DIR/deploy.sh" --i-am-not-the-deployer --no-reload
         
         # Reload integration via API
         if [ -n "$HA_TOKEN" ]; then
@@ -436,11 +469,11 @@ if [ "$STATUS_MODE" = true ]; then
         echo "  Branch: $RES_INFO_BRANCH"
         echo "  Since: $RES_INFO_TIMESTAMP"
         echo ""
-        log_info "To release: ./deploy.sh --release"
+        log_info "To release: ./deploy.sh --i-am-not-the-deployer --release"
     else
         log_info "HA Instance: NOT RESERVED"
         echo ""
-        log_info "To reserve: ./deploy.sh --reserve"
+        log_info "To reserve: ./deploy.sh --i-am-not-the-deployer --reserve"
     fi
     exit 0
 fi
