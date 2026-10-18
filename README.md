@@ -344,7 +344,7 @@ If entities show as "missing or not currently available":
 | [`docs/FORECAST_DRIVEN_CONTROL.md`](docs/FORECAST_DRIVEN_CONTROL.md) | "The forecast IS the plan" — single source of truth |
 | [`docs/ENTITY_REFERENCE.md`](docs/ENTITY_REFERENCE.md) | Complete entity catalog |
 | [`docs/LEARNING_SYSTEM.md`](docs/LEARNING_SYSTEM.md) | The retired learning layer: what it was, why it went, what would bring it back |
-| [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md) | Setup, project structure, extension patterns |
+| [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md) | Setup, project structure, extension patterns, how the maintainer's instance is deployed |
 | [`VISION.md`](VISION.md) | Mission, goals, constraints, success metrics |
 
 ## License

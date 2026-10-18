@@ -403,21 +403,38 @@ uv run ruff check custom_components/localshift
 
 ### Deployment
 
-When running locally with Home Assistant:
+LocalShift is deployed only by the HA host's pull deployer, which ships every
+merge to `main`. There is no other deploy path, and agents never deploy.
 
-```bash
-# Deploy to HA custom_components
-./deploy.sh --reserve && ./deploy.sh
+1. A reviewed PR merges to `main`.
+2. The pull deployer waits for its gates: `scripts/deploy_check.py --preflight`
+   (run inside the HA container; it refuses inside the demand window, near a
+   grid-charge slot or the pre-charge backstop), a hold period, and the
+   reservation. It never ships during the nightly backup window.
+3. It backs up the live copy, syncs `custom_components/localshift`, clears
+   `__pycache__`, and runs `scripts/write_build_stamp.sh` (below).
+4. The new code loads at the next HA restart, which Jack does.
+5. After the restart the deployer runs `scripts/deploy_check.py --before B
+   --after A --expect-recompile --component-dir DIR`. A failed check restores
+   the previous files automatically and asks for another restart.
 
-# Dry run
-./deploy.sh --dry-run
-```
+So approving a PR means "live at the next HA restart once the pull deployer has
+shipped it". Code can sit on disk before that restart, and any HA restart (an
+update, a crash) loads whatever has been shipped.
 
-The `deploy.sh` script copies files to HA and reloads the integration.
+**The scripts the deployer runs are an interface.** Keep the arguments and exit
+codes of `deploy_check.py` (0 pass, 1 fail, 2 usage, 3 not settled yet) and
+`write_build_stamp.sh REPO_DIR DEST_DIR` stable, and take every path and
+credential from an argument or the environment (`--component-dir`,
+`HA_URL`/`HA_TOKEN`). Never add a machine-specific default.
+
+`deploy.sh` is kept only for a human in an emergency. It refuses to run unless
+given `--i-am-not-the-deployer`.
 
 #### Build stamp (which commit is running)
 
-After copying, `deploy.sh` runs `scripts/write_build_stamp.sh REPO_DIR DEST_DIR`,
+After every ship and every rollback, the pull deployer runs
+`scripts/write_build_stamp.sh REPO_DIR DEST_DIR`,
 which writes `custom_components/localshift/BUILD/build.json` into the deployed
 copy:
 
@@ -430,8 +447,8 @@ copy:
 `main` without git on the Home Assistant host. `dirty` is true when the
 checkout had uncommitted changes under `custom_components/localshift`.
 
-- **Any other deploy path must run the same script** after copying the folder
-  (including a pull-based deployer). A copy without the file reports `unknown`.
+- **Anything that copies the folder must run the same script** afterwards (the
+  emergency `deploy.sh` does). A copy without the file reports `unknown`.
 - `commit` is required (full sha); `build_time` and `dirty` are optional and
   extra keys are ignored. `BUILD/` is its own folder so a deployer can exclude
   it when syncing or comparing the deployed copy with the checkout.

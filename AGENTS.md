@@ -14,7 +14,7 @@
 - **Domain**: Home Assistant integration for Tesla Powerwall
 - **Code**: `custom_components/localshift/`
 - **Tests**: `tests/`
-- **Deploy**: Deploys are done only by the HA host's pull deployer, which ships every merge to `main`. Agents never run `deploy.sh`, `rollback.sh` or restart HA.
+- **Deploy**: Deploys are done only by the HA host's pull deployer, which ships every merge to `main`. There is no other deploy path. Agents never run `deploy.sh` (kept for a human in an emergency; it refuses without `--i-am-not-the-deployer`), `rollback.sh` or restart HA.
 - **Python**: 3.13+, type hints required
 - **Where development runs**: a shared dev host, with deploys moving to the HA host's pull deployer (in progress). Worktrees live under `worktrees/` in the repo. Tools marked *optional* below may not be installed in your environment; skip them if absent.
 
