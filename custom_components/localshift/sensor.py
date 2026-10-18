@@ -2,6 +2,7 @@
 
 from .sensors import (
     AutomationReadySensor,
+    BuildSensor,
     CheapChargeStopPriceSensor,
     CloudEventSensor,
     ComparisonResultSensor,
@@ -71,6 +72,8 @@ __all__ = [
     "SolcastConfidenceTodaySensor",
     "SolcastConfidenceTomorrowSensor",
     "ForecastAccuracyComparisonSensor",
+    # Deployed commit (live == main check)
+    "BuildSensor",
 ]
 
 
@@ -125,6 +128,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         SolcastConfidenceTodaySensor(coordinator, entry),
         SolcastConfidenceTomorrowSensor(coordinator, entry),
         ForecastAccuracyComparisonSensor(coordinator, entry),
+        # Which commit is running (read from the deploy's build.json)
+        BuildSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)

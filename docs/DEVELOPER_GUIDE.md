@@ -415,6 +415,31 @@ When running locally with Home Assistant:
 
 The `deploy.sh` script copies files to HA and reloads the integration.
 
+#### Build stamp (which commit is running)
+
+After copying, `deploy.sh` runs `scripts/write_build_stamp.sh REPO_DIR DEST_DIR`,
+which writes `custom_components/localshift/BUILD/build.json` into the deployed
+copy:
+
+```json
+{"commit": "<full sha>", "build_time": "<UTC ISO-8601>", "dirty": false}
+```
+
+`sensor.localshift_build` reads it once at setup (state: short sha; attributes
+`commit`, `build_time`, `dirty`), so the running commit can be compared with
+`main` without git on the Home Assistant host. `dirty` is true when the
+checkout had uncommitted changes under `custom_components/localshift`.
+
+- **Any other deploy path must run the same script** after copying the folder
+  (including a pull-based deployer). A copy without the file reports `unknown`.
+- `commit` is required (full sha); `build_time` and `dirty` are optional and
+  extra keys are ignored. `BUILD/` is its own folder so a deployer can exclude
+  it when syncing or comparing the deployed copy with the checkout.
+- `BUILD/` is gitignored: a committed value would name the wrong commit as
+  soon as the next one landed.
+- The sensor reads the file only at setup, so a new stamp shows after the
+  integration reloads or Home Assistant restarts.
+
 ## Testing
 
 Tests are in `tests/` directory:

@@ -410,6 +410,7 @@ if [ "$DRY_RUN" = true ]; then
     echo "Would perform the following:"
     echo "  1. Backup: $DEST_DIR -> $HA_CONFIG/backups/${COMPONENT_NAME}.backup.<timestamp>"
     echo "  2. Copy: $SOURCE_DIR -> $DEST_DIR (current worktree state)"
+    echo "     and write $DEST_DIR/BUILD/build.json (commit $(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown))"
     echo "  3. Cleanup backups older than 7 days"
     if [ "$NO_RELOAD" = false ] && [ -n "$HA_TOKEN" ]; then
         echo "  4. Reload integration via API: $HA_URL"
@@ -524,6 +525,15 @@ log_info "Copying files from worktree to HA config..."
 mkdir -p "$HA_CONFIG/custom_components"
 cp -r "$SOURCE_DIR" "$HA_CONFIG/custom_components/"
 log_success "Files copied successfully"
+
+# Stamp the commit this copy came from (sensor.localshift_build reads it).
+# Best-effort: a failed stamp leaves the sensor reporting "unknown", never a
+# failed deploy. Any other deploy path must run the same script.
+if bash "$SCRIPT_DIR/scripts/write_build_stamp.sh" "$SCRIPT_DIR" "$DEST_DIR"; then
+    log_info "Build stamp: $(cat "$DEST_DIR/BUILD/build.json")"
+else
+    log_warning "Could not write build stamp - sensor.localshift_build will read unknown"
+fi
 
 # Set appropriate permissions
 log_info "Setting permissions..."
