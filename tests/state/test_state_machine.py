@@ -1189,6 +1189,33 @@ class TestHealthCheck:
             mock_battery_controller.set_self_consumption.call_count == first_call_count
         )
 
+    @pytest.mark.asyncio
+    async def test_mismatch_log_says_none_since_restart_before_first_transition(
+        self, state_machine, coordinator_data, mock_battery_controller, caplog
+    ):
+        """Issue #1209: no transition since restart reads "none since restart".
+
+        _last_successful_transition is in-memory and only set by a real mode
+        transition, so after a restart it is None until the first one. "never"
+        read like a failure.
+        """
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._last_successful_transition = None
+        state_machine._last_health_correction = None
+        coordinator_data.operation_mode = "self_consumption"
+        coordinator_data.backup_reserve = 10
+        coordinator_data.grid_services_active = False
+        coordinator_data.storm_watch_active = False
+        mock_battery_controller.verify_current_state = AsyncMock(return_value=False)
+        mock_battery_controller._get_entity_id.return_value = "switch.grid_charging"
+        mock_battery_controller._read_bool.return_value = False
+
+        with caplog.at_level(logging.WARNING):
+            await state_machine._perform_health_check(coordinator_data)
+
+        assert "Last successful transition: none since restart" in caplog.text
+        assert "Last successful transition: never" not in caplog.text
+
 
 class TestProactiveExportReserveStep:
     """Issue #1081: PROACTIVE_EXPORT must re-step its reserve while it stays selected.
