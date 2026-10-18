@@ -982,7 +982,8 @@ class ComputationEngine:
             CONF_DEMAND_WINDOW_FROM_AMBER: self._get_switch_state(
                 SWITCH_DEMAND_WINDOW_FROM_AMBER
             ),
-            "pricing_source": self.entry.options.get(
+            # Issue #1210: the config flow stores the source in entry.data.
+            "pricing_source": self.entry.data.get(
                 CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
             ),
             "comparison_mode": self.entry.options.get(

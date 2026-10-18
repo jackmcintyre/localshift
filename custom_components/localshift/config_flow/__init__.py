@@ -443,6 +443,15 @@ class LocalShiftOptionsFlow(OptionsFlow):
             else:
                 # Update entry data with new entity mappings
                 new_data = {**self.config_entry.data, **user_input}
+                # Issue #1210: Amber Express never reads the forecast mappings
+                # and the form hides them, so the merge above would keep stale
+                # ids. Clear them instead.
+                if (
+                    new_data.get(CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE)
+                    == PRICING_SOURCE_AMBER_EXPRESS
+                ):
+                    new_data[CONF_PRICING_GENERAL_FORECAST] = ""
+                    new_data[CONF_PRICING_FEED_IN_FORECAST] = ""
                 self.hass.config_entries.async_update_entry(
                     self.config_entry, data=new_data
                 )

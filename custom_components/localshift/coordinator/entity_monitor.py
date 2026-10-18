@@ -18,9 +18,13 @@ from typing import TYPE_CHECKING
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    CONF_PRICING_DATA_SOURCE,
     CONF_PRICING_GENERAL_FORECAST,
+    CONF_PRICING_GENERAL_PRICE,
     CONF_TESLEMETRY_SELL_TARIFF,
     CONF_WEATHER_ENTITY,
+    DEFAULT_PRICING_DATA_SOURCE,
+    PRICING_SOURCE_AMBER_EXPRESS,
     TESLA_TARIFF_LOOKAHEAD_HOURS,
 )
 from ..utils.export_availability import export_blocked_periods
@@ -155,7 +159,7 @@ class EntityMonitor:
         # accessor every other read site in the codebase uses
         # (coordinator.py:338, state/reader.py:497), and it falls back to
         # DEFAULT_ENTITY_IDS when the key is unset.
-        forecast_entity = self._coordinator.get_entity_id(CONF_PRICING_GENERAL_FORECAST)
+        forecast_entity = self._forecast_source_label()
 
         if health.needs_startup_warning:
             _LOGGER.warning(
@@ -185,6 +189,20 @@ class EntityMonitor:
         if data.integration_status == "ok":
             data.integration_status = "degraded"
             data.integration_status_message = warning
+
+    def _forecast_source_label(self) -> str:
+        """Name where the price forecast is read from, for warnings.
+
+        Issue #1210: under Amber Express the forecast is the price entity's
+        ``detailedForecast`` attribute; the forecast mapping is never read.
+        """
+        pricing_source = self._coordinator.entry.data.get(
+            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+        )
+        if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+            price_entity = self._coordinator.get_entity_id(CONF_PRICING_GENERAL_PRICE)
+            return f"the detailedForecast attribute of {price_entity}"
+        return self._coordinator.get_entity_id(CONF_PRICING_GENERAL_FORECAST)
 
     def reset_entity_tracking_on_options_change(self) -> None:
         """Reset entity tracking when options change.

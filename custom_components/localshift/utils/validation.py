@@ -23,12 +23,12 @@ from ..const import (
     CONF_SOLCAST_FORECAST_TOMORROW,
 )
 from .entity_configs import (
-    ENTITY_CONFIG,
     FAILURE_THRESHOLD_ERROR,
     FAILURE_THRESHOLD_WARNING,
     LOCALSHIFT_ENTITY_CONFIG,
     STALENESS_THRESHOLDS,
     EntityCategory,
+    entity_config_for_source,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -92,16 +92,24 @@ class EntityValidator:
     - User-friendly error messages
     """
 
-    def __init__(self, hass: HomeAssistant, get_entity_id_func: callable) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        get_entity_id_func: callable,
+        pricing_source: str | None = None,
+    ) -> None:
         """Initialize the entity validator.
 
         Args:
             hass: Home Assistant instance
             get_entity_id_func: Function to get entity IDs by config key
+            pricing_source: Configured pricing source; entity keys that source
+                never reads are left out of validation (Issue #1210)
 
         """
         self.hass = hass
         self._get_entity_id = get_entity_id_func
+        self._entity_config = entity_config_for_source(pricing_source)
         self._entity_health: dict[str, EntityHealth] = {}
         self._localshift_entity_health: dict[str, EntityHealth] = {}
         self._last_full_check: datetime | None = None
@@ -110,7 +118,7 @@ class EntityValidator:
         self._cached_warnings: list[str] = []
 
         # Initialize health tracking for all known entities
-        for config_key, config in ENTITY_CONFIG.items():
+        for config_key, config in self._entity_config.items():
             entity_id = self._get_entity_id(config_key)
             self._entity_health[config_key] = EntityHealth(
                 entity_id=entity_id,
@@ -122,7 +130,7 @@ class EntityValidator:
     def check_entity(self, config_key: str) -> EntityHealth:
         """Check health of a single entity."""
         entity_id = self._get_entity_id(config_key)
-        config = ENTITY_CONFIG.get(config_key, {})
+        config = self._entity_config.get(config_key, {})
         health = self._entity_health.get(config_key)
 
         if health is None:
@@ -321,7 +329,7 @@ class EntityValidator:
         self, config_key: str, state_value: str, attributes: dict
     ) -> ValidationResult:
         """Validate an entity's value against expected constraints."""
-        config = ENTITY_CONFIG.get(config_key, {})
+        config = self._entity_config.get(config_key, {})
         expected_type = config.get("expected_type")
 
         if expected_type is None:
@@ -423,7 +431,7 @@ class EntityValidator:
             Dictionary mapping config keys to EntityHealth
 
         """
-        for config_key in ENTITY_CONFIG:
+        for config_key in self._entity_config:
             self.check_entity(config_key)
 
         self._last_full_check = dt_util.now()
@@ -673,7 +681,7 @@ class EntityValidator:
             if health.is_healthy:
                 continue
 
-            config = ENTITY_CONFIG.get(config_key, {})
+            config = self._entity_config.get(config_key, {})
             description = config.get("description", config_key)
             msg = self._format_health_error_message(health, description)
 

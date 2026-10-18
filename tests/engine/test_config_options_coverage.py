@@ -200,7 +200,7 @@ def test_the_969_sliders_reach_the_engine_on_the_live_path(
 
     conf = getattr(const, conf_name)
     engine = ComputationEngine.__new__(ComputationEngine)
-    engine.entry = SimpleNamespace(options={conf: value})
+    engine.entry = SimpleNamespace(data={}, options={conf: value})
     engine._get_switch_state = lambda _key: False
 
     options = engine._build_optimizer_config_options()
@@ -219,7 +219,7 @@ def test_away_reserve_reaches_the_engine_on_the_live_path() -> None:
     )
 
     engine = ComputationEngine.__new__(ComputationEngine)
-    engine.entry = SimpleNamespace(options={CONF_AWAY_RESERVE: 40})
+    engine.entry = SimpleNamespace(data={}, options={CONF_AWAY_RESERVE: 40})
     engine._get_switch_state = lambda _key: False
 
     options = engine._build_optimizer_config_options()
@@ -274,7 +274,7 @@ def _slot_flags(
     )
 
     engine = ComputationEngine.__new__(ComputationEngine)
-    engine.entry = SimpleNamespace(options=options)
+    engine.entry = SimpleNamespace(data={}, options=options)
     engine._get_switch_state = lambda _key: False
 
     builder = SlotBuilder(engine._build_optimizer_config_options(), str(tz))
