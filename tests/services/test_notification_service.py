@@ -586,6 +586,33 @@ class TestAlertNotifications:
         mock_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "mode",
+        [
+            BatteryMode.SELF_CONSUMPTION,
+            BatteryMode.DEMAND_BLOCK,
+            BatteryMode.PROACTIVE_EXPORT,
+            BatteryMode.SPIKE_DISCHARGE,
+            BatteryMode.HOLD,
+        ],
+    )
+    async def test_health_correction_suppressed_in_every_non_charge_mode(
+        self, notification_service, coordinator_data, mock_hass, mode
+    ):
+        """Issue #1217: grid charging is expected off in every non-charge mode."""
+        await notification_service.send_health_correction_notification(
+            mode,
+            coordinator_data,
+            mismatch_details={
+                "grid_charging_allowed": True,
+                "operation_mode": False,
+                "backup_reserve": False,
+            },
+        )
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_health_correction_not_suppressed_when_other_field_mismatched(
         self, notification_service, coordinator_data, mock_hass
     ):

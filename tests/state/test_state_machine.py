@@ -1190,6 +1190,124 @@ class TestHealthCheck:
         )
 
 
+class TestHealthCheckCloudSyncSuppression:
+    """Issue #1217: the #394 cloud-sync suppression must see the pre-correction mismatch.
+
+    Tesla's cloud flips allow_charging_from_grid back on roughly hourly. The
+    health check corrects it; the notification for that correction is meant to
+    be suppressed. The mismatch used to be read after the correction, when the
+    hardware already matched, so the suppression never triggered.
+    """
+
+    # mode -> (tracked-reserve attribute, reserve, hardware operation mode)
+    MODE_STATE = {
+        BatteryMode.SELF_CONSUMPTION: ("_self_consumption_reserve", 10, "self_consumption"),
+        BatteryMode.DEMAND_BLOCK: ("_self_consumption_reserve", 10, "self_consumption"),
+        BatteryMode.HOLD: ("_self_consumption_reserve", 80, "self_consumption"),
+        BatteryMode.PROACTIVE_EXPORT: ("_proactive_export_reserve", 45, "autonomous"),
+        BatteryMode.SPIKE_DISCHARGE: ("_spike_discharge_reserve", 45, "autonomous"),
+    }
+
+    @staticmethod
+    def _wire(state_machine, coordinator_data, mock_battery_controller, mode):
+        """Put the machine in *mode* with grid charging reverted to allowed.
+
+        Returns the real NotificationService (delivery mocked) and the fake
+        hardware dict, whose grid flag the correction flips back off.
+        """
+        from custom_components.localshift.services.notification_service import (
+            NotificationService,
+        )
+
+        attr, reserve, op_mode = TestHealthCheckCloudSyncSuppression.MODE_STATE[mode]
+        service = NotificationService(
+            MagicMock(), MagicMock(), MagicMock(), get_switch_state_func=None
+        )
+        service.send_notification = AsyncMock()
+        state_machine._notification_service = service
+
+        state_machine._commanded_mode = mode
+        setattr(state_machine, attr, float(reserve))
+        state_machine._last_successful_transition = None
+        state_machine._last_health_correction = None
+        coordinator_data.operation_mode = op_mode
+        coordinator_data.backup_reserve = reserve
+        coordinator_data.soc = 50.0
+        coordinator_data.grid_services_active = False
+        coordinator_data.storm_watch_active = False
+
+        hardware = {"grid_charging": True}
+
+        async def _correct(*_args, **_kwargs):
+            hardware["grid_charging"] = False
+            return True
+
+        for setter in (
+            "set_self_consumption",
+            "set_force_discharge",
+            "set_proactive_export",
+        ):
+            setattr(mock_battery_controller, setter, AsyncMock(side_effect=_correct))
+        # HOLD's correction re-reads SOC from hardware for its reserve.
+        mock_battery_controller.read_fresh_soc.return_value = float(reserve)
+        mock_battery_controller.verify_current_state = AsyncMock(return_value=False)
+        mock_battery_controller._get_entity_id.return_value = "switch.grid_charging"
+        mock_battery_controller._read_bool.side_effect = (
+            lambda _entity: hardware["grid_charging"]
+        )
+        return service, hardware
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", list(MODE_STATE))
+    async def test_grid_charging_only_reversion_corrected_sends_no_notification(
+        self, state_machine, coordinator_data, mock_battery_controller, mode
+    ):
+        """Issue #1217 named test: corrected cloud-sync reversion is silent in every non-charge mode."""
+        service, hardware = self._wire(
+            state_machine, coordinator_data, mock_battery_controller, mode
+        )
+
+        await state_machine._perform_health_check(coordinator_data)
+
+        # The correction really ran and put the hardware back.
+        assert hardware["grid_charging"] is False
+        service.send_notification.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reserve_mismatch_still_notifies(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """A reserve drift alongside the reversion is a real correction: notify."""
+        service, _hardware = self._wire(
+            state_machine,
+            coordinator_data,
+            mock_battery_controller,
+            BatteryMode.PROACTIVE_EXPORT,
+        )
+        coordinator_data.backup_reserve = 20
+
+        await state_machine._perform_health_check(coordinator_data)
+
+        service.send_notification.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_operation_mismatch_still_notifies(
+        self, state_machine, coordinator_data, mock_battery_controller
+    ):
+        """An operation-mode drift alongside the reversion is a real correction: notify."""
+        service, _hardware = self._wire(
+            state_machine,
+            coordinator_data,
+            mock_battery_controller,
+            BatteryMode.HOLD,
+        )
+        coordinator_data.operation_mode = "autonomous"
+
+        await state_machine._perform_health_check(coordinator_data)
+
+        service.send_notification.assert_awaited_once()
+
+
 class TestProactiveExportReserveStep:
     """Issue #1081: PROACTIVE_EXPORT must re-step its reserve while it stays selected.
 
