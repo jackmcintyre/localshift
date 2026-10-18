@@ -41,6 +41,7 @@ from ..forecast.bootstrapper import ForecastBootstrapper
 from ..learning.telemetry import DecisionTelemetry
 from ..services.evaluation_dispatcher import EvaluationDispatcher
 from ..services.subscription_manager import SubscriptionManager
+from ..utils.entity_configs import unused_entity_keys
 from .data import CoordinatorData
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -287,7 +288,9 @@ class LocalShiftCoordinator:
         """Start listening to entity changes and periodic timer."""
         # Initialize helper modules
         from ..computation_engine import ComputationEngine
+        from ..const import CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
         from ..integration.controller import BatteryController
+        from ..pricing import create_provider
         from ..services.notification_service import NotificationService
         from ..state.machine import StateMachine
         from ..state.reader import StateReader
@@ -295,7 +298,13 @@ class LocalShiftCoordinator:
         from ..utils.daily_totals_store import DailyTotalsStore
         from ..utils.validation import EntityValidator
 
-        self._entity_validator = EntityValidator(self.hass, self.get_entity_id)
+        pricing_source = self.entry.data.get(
+            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
+        )
+        # Issue #1210: the validator skips entity keys this source never reads.
+        self._entity_validator = EntityValidator(
+            self.hass, self.get_entity_id, pricing_source
+        )
 
         # Import EntityMonitor
         from .entity_monitor import EntityMonitor
@@ -309,12 +318,6 @@ class LocalShiftCoordinator:
         # Create tick scheduler
         self._tick_scheduler = TickScheduler(self)
 
-        from ..const import CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
-        from ..pricing import create_provider
-
-        pricing_source = self.entry.data.get(
-            CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
-        )
         _pricing_provider = create_provider(pricing_source)
         self._state_reader = StateReader(
             self.hass, self.entry, self._entity_validator, _pricing_provider
@@ -393,18 +396,24 @@ class LocalShiftCoordinator:
         # NOT monitored (handled by periodic tick instead):
         # - GRID/BATTERY/SOLAR/LOAD_POWER: only used for cost tracking (1-min tick)
         # - OPERATION_MODE/BACKUP_RESERVE: outputs, health-checked in 1-min tick
-        monitored_entities = [
+        monitored_keys = [
             # Price entities - trigger mode decisions on price changes
-            self.get_entity_id(CONF_PRICING_GENERAL_PRICE),
-            self.get_entity_id(CONF_PRICING_FEED_IN_PRICE),
-            self.get_entity_id(CONF_PRICING_GENERAL_FORECAST),
-            self.get_entity_id(CONF_PRICING_FEED_IN_FORECAST),
-            self.get_entity_id(CONF_PRICING_PRICE_SPIKE),
+            CONF_PRICING_GENERAL_PRICE,
+            CONF_PRICING_FEED_IN_PRICE,
+            CONF_PRICING_GENERAL_FORECAST,
+            CONF_PRICING_FEED_IN_FORECAST,
+            CONF_PRICING_PRICE_SPIKE,
             # Solcast entities - trigger forecast recomputation
-            self.get_entity_id(CONF_SOLCAST_FORECAST_TODAY),
-            self.get_entity_id(CONF_SOLCAST_FORECAST_TOMORROW),
+            CONF_SOLCAST_FORECAST_TODAY,
+            CONF_SOLCAST_FORECAST_TOMORROW,
             # SOC - trigger target stop when battery reaches target
-            # self.get_entity_id(CONF_TESLEMETRY_SOC),  # REMOVED (Issue #524) - handled by 1-min periodic tick instead
+            # CONF_TESLEMETRY_SOC,  # REMOVED (Issue #524) - handled by 1-min periodic tick instead
+        ]
+        # Issue #1210: don't watch mappings the pricing source never reads
+        # (the forecast entities under Amber Express).
+        unused_keys = unused_entity_keys(pricing_source)
+        monitored_entities = [
+            self.get_entity_id(key) for key in monitored_keys if key not in unused_keys
         ]
 
         self._evaluation_dispatcher = EvaluationDispatcher(

@@ -29,6 +29,7 @@ from ..const import (
     CONF_TESLEMETRY_SOLAR_POWER,
     CONF_TESLEMETRY_STORM_WATCH,
     CONF_WEATHER_ENTITY,
+    PRICING_SOURCE_AMBER_EXPRESS,
 )
 
 
@@ -139,6 +140,31 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
         "description": "Weather entity for load prediction",
     },
 }
+
+# Issue #1210: under Amber Express the price forecast comes from the price
+# entity's own forecast attribute (pricing/provider.py), so these two mappings
+# are never read. Validating or watching them only reports a missing entity
+# once the integration they point at is removed.
+AMBER_EXPRESS_UNUSED_KEYS: frozenset[str] = frozenset({
+    CONF_PRICING_GENERAL_FORECAST,
+    CONF_PRICING_FEED_IN_FORECAST,
+})
+
+
+def unused_entity_keys(pricing_source: str | None) -> frozenset[str]:
+    """Return the entity config keys the given pricing source never reads."""
+    if pricing_source == PRICING_SOURCE_AMBER_EXPRESS:
+        return AMBER_EXPRESS_UNUSED_KEYS
+    return frozenset()
+
+
+def entity_config_for_source(
+    pricing_source: str | None,
+) -> dict[str, dict[str, Any]]:
+    """Return ENTITY_CONFIG without the keys the pricing source never reads."""
+    unused = unused_entity_keys(pricing_source)
+    return {k: v for k, v in ENTITY_CONFIG.items() if k not in unused}
+
 
 STALENESS_THRESHOLDS: dict[str, timedelta] = {
     CONF_TESLEMETRY_SOC: timedelta(minutes=30),

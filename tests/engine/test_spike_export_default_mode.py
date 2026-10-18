@@ -589,7 +589,7 @@ class TestKillSwitch:
             return switch_on if key == SWITCH_SPIKE_DISCHARGE_ENABLED else False
 
         engine = ComputationEngine.__new__(ComputationEngine)
-        engine.entry = SimpleNamespace(options={})
+        engine.entry = SimpleNamespace(data={}, options={})
         engine._get_switch_state = switch_state
 
         options = engine._build_optimizer_config_options()

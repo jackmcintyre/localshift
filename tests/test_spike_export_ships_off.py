@@ -192,7 +192,7 @@ async def test_planner_reads_off_after_the_migration(stored):
     switch = _start(hass, entry)
 
     engine = ComputationEngine.__new__(ComputationEngine)
-    engine.entry = SimpleNamespace(options=dict(entry.options))
+    engine.entry = SimpleNamespace(data={}, options=dict(entry.options))
     engine._get_switch_state = switch.coordinator.get_switch_state
 
     assert engine._build_optimizer_config_options()[CONF_SPIKE_EXPORT_ENABLED] is False

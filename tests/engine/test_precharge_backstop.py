@@ -1071,7 +1071,9 @@ class TestRunwayMarginKnob:
         )
 
         engine = ComputationEngine.__new__(ComputationEngine)
-        engine.entry = SimpleNamespace(options={CONF_PRECHARGE_RUNWAY_MARGIN_MIN: 45.0})
+        engine.entry = SimpleNamespace(
+            data={}, options={CONF_PRECHARGE_RUNWAY_MARGIN_MIN: 45.0}
+        )
         engine._get_switch_state = lambda _key: False
 
         options = engine._build_optimizer_config_options()
@@ -1106,7 +1108,9 @@ class TestRunwayMarginKnob:
         )
 
         engine = ComputationEngine.__new__(ComputationEngine)
-        engine.entry = SimpleNamespace(options={CONF_MAX_PRECHARGE_PRICE: 0.26})
+        engine.entry = SimpleNamespace(
+            data={}, options={CONF_MAX_PRECHARGE_PRICE: 0.26}
+        )
         engine._get_switch_state = lambda _key: False
 
         options = engine._build_optimizer_config_options()
@@ -1118,7 +1122,7 @@ class TestRunwayMarginKnob:
         )
 
         # And the default still flows when the option is absent.
-        engine.entry = SimpleNamespace(options={})
+        engine.entry = SimpleNamespace(data={}, options={})
         options = engine._build_optimizer_config_options()
         assert (
             _build_optimizer_config(SimpleNamespace(), options).max_precharge_price
