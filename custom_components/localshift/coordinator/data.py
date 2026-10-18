@@ -440,6 +440,11 @@ class CoordinatorData:
     decision_mode: BatteryMode | None = None
     """The mode that was decided (for lag tracking)."""
 
+    charge_committed_at: datetime | None = None
+    """When a charge mode was committed from a non-charge mode, else None: the
+    charge dwell's clock (#1159). Kept on a charge-to-charge switch; None after
+    any non-charge commit and after a restart."""
+
     command_completion_timestamp: datetime | None = None
     """Issue #508 phase 1: when the last control entity command completed."""
 
@@ -492,8 +497,9 @@ class CoordinatorData:
     construction; that is a correction, not a mode change.
 
     grant_source (#941) is `price` | `spike` | `demand_window` | `soc_floor`
-    | `plan_charge` | `price_confirmed` | `debounce` | `retry` | `backstop`
-    | `unknown`.
+    | `plan_charge` | `price_confirmed` | `charge_dwell` | `debounce` | `retry`
+    | `backstop` | `unknown`. `charge_dwell` (#1159) is a price change the
+    charge dwell deferred, decided once the band ended.
     `debounce` and `retry` mark a transition that did NOT land on a fresh
     decision token — a debounce completing after its wait, or a retry of a
     command the controller rejected or the entity validator blocked — and

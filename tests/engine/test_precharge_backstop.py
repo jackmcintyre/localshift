@@ -37,11 +37,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.util import dt as dt_util
 
+from custom_components.localshift import const
 from custom_components.localshift.const import (
     DEFAULT_PRECHARGE_RUNWAY_MARGIN_MIN,
     BatteryMode,
@@ -54,6 +55,7 @@ from custom_components.localshift.engine.optimizer_facade import (
     OptimizerFacade,
 )
 from custom_components.localshift.engine.types import OptimizerConfig, OptimizerResult
+from custom_components.localshift.state.machine import StateMachine
 
 # The 14:30 line of the evidence pack: SOC 62.2%, price 11.6 c, plan projects a 72.6%
 # DW entry against a 95% target, and the DP has a pre-DW grid charge at slot 4.
@@ -1381,27 +1383,31 @@ def _commit_charge_data(
     data.active_mode = BatteryMode.GRID_CHARGING
     data.decision_mode = BatteryMode.GRID_CHARGING
     data.decision_timestamp = committed_at
+    data.charge_committed_at = committed_at
     return data
 
 
+# The approved band (#1159): one 5-minute slot. Pinned by
+# ``test_band_is_one_slot`` rather than imported, so the scenarios below read
+# the same whatever the constant is later tuned to.
+BAND_MIN = 5.0
+
+
 class TestChargeCommitDwell:
-    """A committed grid charge must stay on for at least one slot-0 width.
+    """A committed charge is not released by a price-only change for one slot.
 
-    Found live 2026-07-30: on that demand window the binary sensor
-    ``charge_forced`` toggled eleven times in 124 minutes, including two on-pulses
-    of 45 and 46 seconds that produced real grid-import cycles on the Powerwall. The
-    runway arm's release has an anti-chatter band (`PRECHARGE_RUNWAY_HYSTERESIS_MIN`
-    widening the threshold while holding), but the ordinary token-gated commit path
-    that drives ``charge_forced`` had no equivalent damping — each grant committed
-    whatever slot-0 said, and slot-0's plan oscillated hold/charge on every replan
-    because the cheapest first-charge slot drifts forward and slack is quantised to
-    slot-0 width. The result is a sawtooth commit/release with no band at all.
+    Found live 2026-07-30 (``charge_forced`` toggled eleven times in 124
+    minutes, with 45 and 46 s on-pulses) and again on 13, 14 and 16 Oct, after
+    the first fix: that dwell read ``decision_timestamp``, which lag tracking
+    clears seconds after every transition, so it failed open almost at once.
 
-    The fix is a minimum on-duration on the ordinary commit path, sized like the
-    runway arm's band: ``max(PRECHARGE_RUNWAY_HYSTERESIS_MIN, quantum)`` where
-    ``quantum = precharge_runway_quantum_min`` (slot-0's width in minutes). The
-    runway band and the dwell band are the same anti-sawtooth mechanism viewed
-    from two sides; they share the same floor constant so tuning one retunes both.
+    Issue #1159's fix lives on the decision token, not on the commit path. For
+    ``CHARGE_RELEASE_DWELL_MIN`` after a charge is committed from a non-charge
+    mode (clock: ``CoordinatorData.charge_committed_at``), a token raised only
+    by a buy/sell price change is deferred: neither granted nor consumed. The
+    first evaluation after the band sees the still-unconsumed change and grants
+    an ordinary token, tagged ``charge_dwell``. Nothing is remembered about the
+    release itself.
     """
 
     @staticmethod
@@ -1433,60 +1439,24 @@ class TestChargeCommitDwell:
             )
             facade._assign_active_mode(data, _result(), config, {})
 
-    def test_sub_minute_pulse_is_held(self) -> None:
-        """The money case: the 45-second pulse observed on 2026-07-30 at 13:41.
+    def test_band_is_one_slot(self) -> None:
+        """Jack's call on #1159: 5 minutes, one slot."""
+        assert const.CHARGE_RELEASE_DWELL_MIN == BAND_MIN
 
-        active_mode was committed to GRID_CHARGING ~45 seconds ago, the plan now
-        wants hold, and the token is granted. Without a dwell band this releases
-        immediately; with it the mode must stay at GRID_CHARGING and the pending
-        plan surfaces on debug_plan_mode_pending.
-        """
+    def test_the_facade_no_longer_holds_a_granted_release(self) -> None:
+        """The hold moved to the token: a granted release commits at once."""
         facade = OptimizerFacade()
-        now = dt_util.now()
         data = _commit_charge_data(
             _data(mode_backstop_allowed=False, mode_decision_allowed=True),
-            now - timedelta(seconds=45),
+            dt_util.now() - timedelta(seconds=45),
         )
-        config = _dwell_config(precharge_runway_quantum_min=5.0)
 
-        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
-
-        assert data.active_mode == BatteryMode.GRID_CHARGING
-        assert data.debug_plan_mode_pending == BatteryMode.SELF_CONSUMPTION.value
-        # The commit must NOT be recorded (decision_timestamp only updates on a
-        # committed mode change).
-        assert data.decision_timestamp == now - timedelta(seconds=45)
-
-    def test_dwell_expired_allows_release(self) -> None:
-        """Once the committed charge has lived past the band, the release commits."""
-        facade = OptimizerFacade()
-        now = dt_util.now()
-        data = _commit_charge_data(
-            _data(mode_backstop_allowed=False, mode_decision_allowed=True),
-            now - timedelta(minutes=11),
+        self._run_for_commit_dwell(
+            facade, data, _dwell_config(), BatteryMode.SELF_CONSUMPTION
         )
-        config = _dwell_config(precharge_runway_quantum_min=5.0)
-
-        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
 
         assert data.active_mode == BatteryMode.SELF_CONSUMPTION
         assert data.debug_plan_mode_pending is None
-
-    def test_band_scales_with_slot_quantum(self) -> None:
-        """30-minute slot-0 widens the band to 30 min — the 11-minute pulse stays
-        held, as it would on the horizon that opens with no 5-minute Amber data."""
-        facade = OptimizerFacade()
-        now = dt_util.now()
-        data = _commit_charge_data(
-            _data(mode_backstop_allowed=False, mode_decision_allowed=True),
-            now - timedelta(minutes=11),
-        )
-        config = _dwell_config(precharge_runway_quantum_min=30.0)
-
-        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
-
-        assert data.active_mode == BatteryMode.GRID_CHARGING
-        assert data.debug_plan_mode_pending == BatteryMode.SELF_CONSUMPTION.value
 
     def test_turn_on_is_not_damped(self) -> None:
         """The fix damps releases, not commits. A wanted charge must still start
@@ -1494,7 +1464,6 @@ class TestChargeCommitDwell:
         path."""
         facade = OptimizerFacade()
         data = _data(mode_backstop_allowed=False, mode_decision_allowed=True)
-        # Decision timestamp is None (freshly-started session).
         config = _dwell_config(precharge_runway_quantum_min=5.0)
 
         self._run_for_commit_dwell(facade, data, config, BatteryMode.GRID_CHARGING)
@@ -1502,64 +1471,27 @@ class TestChargeCommitDwell:
         assert data.active_mode == BatteryMode.GRID_CHARGING
         assert data.debug_plan_mode_pending is None
 
-    def test_demand_window_active_exempt(self) -> None:
-        """Once the DW is live the pre-charge is moot. The dwell must not drag a
-        committed grid charge into the demand window — that would fight demand-block
-        behaviour. Mirrors ``_backstop_context_permits``."""
+    def test_a_charge_commit_from_a_non_charge_mode_starts_the_clock(self) -> None:
         facade = OptimizerFacade()
+        data = _data(mode_backstop_allowed=False, mode_decision_allowed=True)
         now = dt_util.now()
-        data = _commit_charge_data(
-            _data(
-                mode_backstop_allowed=False,
-                mode_decision_allowed=True,
-                demand_window_active=True,
-            ),
-            now - timedelta(minutes=1),
-        )
-        config = _dwell_config(precharge_runway_quantum_min=5.0)
 
-        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
+        with patch.object(dt_util, "now", return_value=now):
+            self._run_for_commit_dwell(
+                facade, data, _dwell_config(), BatteryMode.BOOST_CHARGING
+            )
 
-        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
-        assert data.debug_plan_mode_pending is None
+        assert data.charge_committed_at == now
 
-    def test_missing_decision_timestamp_fails_open(self) -> None:
-        """A committed-at-less-than-one-slot-ago that has lost its timestamp (crash
-        restart, stale data) must not hold the mode forever. Fail open: release
-        instead of pinning indefinitely."""
-        facade = OptimizerFacade()
-        data = _commit_charge_data(
-            _data(mode_backstop_allowed=False, mode_decision_allowed=True),
-            None,
-        )
-        config = _dwell_config(precharge_runway_quantum_min=5.0)
-
-        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
-
-        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
-
-    def test_naive_timestamp_fails_open(self) -> None:
-        """Mixed naive/aware timestamps raise TypeError on subtraction; the gate
-        must degrade to 'no hold' rather than propagate the exception."""
-        facade = OptimizerFacade()
-        data = _commit_charge_data(
-            _data(mode_backstop_allowed=False, mode_decision_allowed=True),
-            datetime.now(),  # naive — no tz
-        )
-        config = _dwell_config(precharge_runway_quantum_min=5.0)
-
-        self._run_for_commit_dwell(facade, data, config, BatteryMode.SELF_CONSUMPTION)
-
-        assert data.active_mode == BatteryMode.SELF_CONSUMPTION
-
-    def test_charge_to_charge_not_damped(self) -> None:
+    def test_charge_to_charge_not_damped_and_keeps_the_clock(self) -> None:
         """GRID↔BOOST transitions while the battery is already charging are not the
-        pathology. A mode change within ``_CHARGE_MODES`` must still commit."""
+        pathology: the switch commits, and the band still runs from the first
+        charge commit."""
         facade = OptimizerFacade()
-        now = dt_util.now()
+        committed = dt_util.now() - timedelta(seconds=45)
         data = _commit_charge_data(
             _data(mode_backstop_allowed=False, mode_decision_allowed=True),
-            now - timedelta(seconds=45),
+            committed,
         )
         config = _dwell_config(precharge_runway_quantum_min=5.0)
 
@@ -1567,6 +1499,35 @@ class TestChargeCommitDwell:
 
         assert data.active_mode == BatteryMode.BOOST_CHARGING
         assert data.debug_plan_mode_pending is None
+        assert data.charge_committed_at == committed
+
+    def test_a_non_charge_commit_clears_the_clock(self) -> None:
+        facade = OptimizerFacade()
+        data = _commit_charge_data(
+            _data(mode_backstop_allowed=False, mode_decision_allowed=True),
+            dt_util.now() - timedelta(minutes=20),
+        )
+
+        self._run_for_commit_dwell(
+            facade, data, _dwell_config(), BatteryMode.SELF_CONSUMPTION
+        )
+
+        assert data.charge_committed_at is None
+
+    def test_a_frozen_evaluation_leaves_the_clock(self) -> None:
+        facade = OptimizerFacade()
+        committed = dt_util.now() - timedelta(minutes=1)
+        data = _commit_charge_data(
+            _data(mode_backstop_allowed=False, mode_decision_allowed=False),
+            committed,
+        )
+
+        self._run_for_commit_dwell(
+            facade, data, _dwell_config(), BatteryMode.SELF_CONSUMPTION
+        )
+
+        assert data.active_mode == BatteryMode.GRID_CHARGING
+        assert data.charge_committed_at == committed
 
     def test_safety_gate_fallback_not_damped(self) -> None:
         """A safety-gate block must release immediately; the fallback path is above
@@ -1633,6 +1594,344 @@ class TestChargeCommitDwell:
 
         assert data.active_mode == BatteryMode.BOOST_CHARGING
         assert data.debug_mode_source == "runway_backstop"
+
+
+class _DwellRig:
+    """The real in-lock evaluation around the real facade commit path (#1159).
+
+    ``StateMachine.evaluate_state_machine`` decides the token, runs the facade
+    through a stub computation engine and closes the token in its finally
+    block, so "granted", "deferred" and "frozen" are computed, not asserted.
+    Only the hardware transition (``_evaluate_core``) is stubbed: when an
+    evaluation commits a new mode, the rig completes the transition through the
+    real ``_record_transition_metrics``, which (as live) clears
+    ``decision_timestamp`` and records the boundary-lag grant source. Prices
+    never move unless a test moves them.
+    """
+
+    def __init__(self) -> None:
+        self.t0 = dt_util.now()
+        self.facade = OptimizerFacade()
+        self.machine = StateMachine(
+            MagicMock(),
+            MagicMock(),
+            lambda key: False,
+            lambda key, default=None: default,
+            MagicMock(),
+        )
+        self.machine._evaluate_core = AsyncMock()
+        # No pre-DW charge in the plan: the #901 backstop stays out of the way.
+        self.data = _data(optimizer_decisions=[])
+        self.data.feed_in_price = 0.05
+        self.config = _dwell_config(precharge_runway_quantum_min=5.0)
+        self.plan = BatteryMode.SELF_CONSUMPTION
+        self.early_exit = False
+        self.grants: list[tuple[float, str | None]] = []
+        self.transitions: list[tuple[float, BatteryMode, str]] = []
+        self.engine = MagicMock()
+        self.engine.compute_derived_values.side_effect = self._compute
+
+    def _compute(self, data: CoordinatorData) -> None:
+        if self.early_exit:
+            # run_inline's early exits produce no decision this tick.
+            OptimizerFacade._mark_mode_debug_fallback(data)
+            return
+        TestChargeCommitDwell._run_for_commit_dwell(
+            self.facade, data, self.config, self.plan
+        )
+
+    async def evaluate(
+        self, minutes: float, plan: BatteryMode, early_exit: bool = False
+    ) -> None:
+        self.plan = plan
+        self.early_exit = early_exit
+        before_fp = self.machine._last_evaluated_fingerprint
+        before_mode = self.data.active_mode
+        with patch.object(
+            dt_util, "now", return_value=self.t0 + timedelta(minutes=minutes)
+        ):
+            await self.machine.evaluate_state_machine(self.data, self.engine)
+            if self.machine._last_evaluated_fingerprint != before_fp:
+                self.grants.append((minutes, self.machine._last_grant_source))
+            target = self.data.active_mode
+            if target != before_mode:
+                self.machine._record_transition_metrics(
+                    self.data, target, dry_run=False
+                )
+                self.machine._commanded_mode = target
+                stamp = (self.t0 + timedelta(minutes=minutes)).isoformat()
+                source = next(
+                    entry["grant_source"]
+                    for bucket in self.data.boundary_lag_history.values()
+                    for entry in bucket
+                    if entry["transition_time"] == stamp
+                )
+                self.transitions.append((minutes, target, source))
+
+    def grants_after(self, minutes: float) -> list[str | None]:
+        return [source for at, source in self.grants if at >= minutes]
+
+
+async def _committed_rig(mode: BatteryMode = BatteryMode.BOOST_CHARGING) -> _DwellRig:
+    """A rig whose first token commits ``mode`` at minute 0 (from SC)."""
+    rig = _DwellRig()
+    await rig.evaluate(0.0, mode)
+    assert rig.data.active_mode == mode
+    assert rig.data.decision_timestamp is None  # lag tracking done with it
+    return rig
+
+
+class TestChargeDwellDefersPriceTokens:
+    """#1159 through the real token: what the deferral does and does not touch."""
+
+    SC = BatteryMode.SELF_CONSUMPTION
+    GRID = BatteryMode.GRID_CHARGING
+    BOOST = BatteryMode.BOOST_CHARGING
+
+    async def test_16_oct_boost_is_not_released_by_a_price_update_at_45_s(
+        self, caplog
+    ) -> None:
+        """The 16 Oct shape: boost committed, the next price update (45 s later)
+        flips the plan to self-consumption. On main that released the boost.
+        Now it stays on through flat prices, and the change lands on the first
+        evaluation after the band, tagged ``charge_dwell``."""
+        rig = await _committed_rig(self.BOOST)
+
+        with caplog.at_level("INFO"):
+            rig.data.general_price = 0.124  # a price update: a fresh context
+            await rig.evaluate(0.75, self.SC)
+            assert rig.data.active_mode == self.BOOST
+            assert rig.data.debug_plan_mode_pending == self.SC.value
+            for minute in (1.0, 2.0, 3.0, 4.0, BAND_MIN - 0.1):  # flat prices
+                await rig.evaluate(minute, self.SC)
+                assert rig.data.active_mode == self.BOOST
+
+            await rig.evaluate(BAND_MIN, self.SC)
+
+        assert rig.data.active_mode == self.SC
+        assert rig.data.debug_plan_mode_pending is None
+        assert rig.transitions[-1] == (BAND_MIN, self.SC, "charge_dwell")
+        assert "charge_dwell" in rig.data.boundary_lag_history
+        assert rig.grants_after(0.5) == ["charge_dwell"]
+        messages = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+        deferring = [m for m in messages if "Charge dwell: deferring" in m]
+        band_over = [m for m in messages if "Charge dwell: band over" in m]
+        assert len(deferring) == 1
+        assert "band 5 min" in deferring[0]
+        assert len(band_over) == 1
+
+    async def test_13_and_14_oct_price_changes_inside_the_band_are_deferred(
+        self,
+    ) -> None:
+        """Price changes at +56 s and +3 min 55 s both wanted a release; the
+        release lands once, at the band's end."""
+        rig = await _committed_rig(self.GRID)
+        rig.data.general_price = 0.121
+        await rig.evaluate(56 / 60, self.SC)
+        await rig.evaluate(2.0, self.SC)
+        rig.data.general_price = 0.126
+        await rig.evaluate(3 + 55 / 60, self.SC)
+        assert rig.data.active_mode == self.GRID
+
+        await rig.evaluate(BAND_MIN + 0.5, self.SC)
+
+        assert rig.data.active_mode == self.SC
+        assert [t[1:] for t in rig.transitions] == [
+            (self.GRID, "unknown"),
+            (self.SC, "charge_dwell"),
+        ]
+
+    @pytest.mark.parametrize("first_after_band", ["release", "charge"])
+    async def test_1186_alternating_probe_gets_one_grant_after_the_band(
+        self, first_after_band: str
+    ) -> None:
+        """#1186's probe: the plan alternates release/charge every evaluation,
+        one price change is deferred, then 40 flat-price evaluations from band
+        + 0.5 min. The dwell adds exactly one grant after the band; anything
+        after that is main's own plan-charge trigger (one committed charge per
+        price context), and then the mode is pinned."""
+        rig = await _committed_rig(self.GRID)
+        rig.data.general_price = 0.121
+        minute = 0.5
+        while minute < BAND_MIN:
+            await rig.evaluate(minute, self.SC if int(minute * 2) % 2 else self.GRID)
+            assert rig.data.active_mode == self.GRID
+            minute += 0.5
+
+        first = self.SC if first_after_band == "release" else self.GRID
+        second = self.GRID if first is self.SC else self.SC
+        for i in range(40):
+            await rig.evaluate(
+                BAND_MIN + 0.5 + i * 0.5, first if i % 2 == 0 else second
+            )
+
+        after = rig.grants_after(BAND_MIN)
+        assert after.count("charge_dwell") == 1
+        assert after[0] == "charge_dwell"
+        assert rig.machine._dwell_deferred_since is None
+        if first_after_band == "release":
+            # Main's state machine from here, with no charge committed, so the
+            # dwell is inert: the plan's wanted charges raise plan-charge
+            # grants, each lands on a release plan, commits nothing and is
+            # refunded (#1172). The mode stays where the band-end grant put it.
+            assert set(after[1:]) == {"plan_charge"}
+            assert [t[1:] for t in rig.transitions[1:]] == [(self.SC, "charge_dwell")]
+            assert rig.data.active_mode == self.SC
+        else:
+            # The band-end grant kept the charge; the wanted stops that follow
+            # wait for the next price change, as on main.
+            assert after == ["charge_dwell"]
+            assert rig.transitions[1:] == []
+            assert rig.data.active_mode == self.GRID
+
+    async def test_no_price_move_in_the_band_creates_no_token(self) -> None:
+        rig = await _committed_rig(self.GRID)
+        for minute in (1.0, 3.0, BAND_MIN, BAND_MIN + 1.0, BAND_MIN + 10.0):
+            await rig.evaluate(minute, self.SC)
+
+        assert rig.data.active_mode == self.GRID
+        assert rig.grants_after(0.5) == []
+        assert rig.machine._dwell_deferred_since is None
+
+    async def test_price_a_b_a_inside_the_band_gives_no_grant(self) -> None:
+        rig = await _committed_rig(self.GRID)
+        price_a = rig.data.general_price
+        rig.data.general_price = 0.131
+        await rig.evaluate(1.0, self.SC)  # B: deferred
+        rig.data.general_price = price_a
+        await rig.evaluate(2.0, self.SC)  # back to A: nothing to decide
+        for minute in (BAND_MIN + 0.5, BAND_MIN + 5.0):
+            await rig.evaluate(minute, self.SC)
+
+        assert rig.data.active_mode == self.GRID
+        assert rig.grants_after(0.5) == []
+
+    async def test_an_early_exit_inside_the_band_does_not_stop_the_band_end_grant(
+        self,
+    ) -> None:
+        rig = await _committed_rig(self.BOOST)
+        rig.data.general_price = 0.121
+        await rig.evaluate(1.0, self.SC)  # deferred
+        await rig.evaluate(2.0, self.SC, early_exit=True)
+        assert rig.data.active_mode == self.BOOST
+
+        await rig.evaluate(BAND_MIN + 0.5, self.SC)
+
+        assert rig.data.active_mode == self.SC
+        assert rig.transitions[-1][2] == "charge_dwell"
+
+    async def test_charge_turn_on_is_not_delayed(self) -> None:
+        rig = _DwellRig()
+        await rig.evaluate(0.0, self.SC)
+        rig.data.general_price = 0.081
+
+        await rig.evaluate(1.0, self.GRID)
+
+        assert rig.data.active_mode == self.GRID
+        assert rig.data.charge_committed_at == rig.t0 + timedelta(minutes=1)
+
+    @pytest.mark.parametrize(
+        ("change", "source"),
+        [
+            ({"price_spike": True, "general_price": 0.95}, "spike"),
+            ({"demand_window_active": True}, "demand_window"),
+            ({"soc": 15.0}, "soc_floor"),
+        ],
+    )
+    async def test_a_non_price_trigger_inside_the_band_is_honoured_at_once(
+        self, change: dict[str, Any], source: str
+    ) -> None:
+        """Spike onset, a demand-window crossing and a SOC-floor breach are not
+        price-only changes: each grants at once, even with a price change
+        already deferred."""
+        rig = await _committed_rig(self.GRID)
+        rig.data.general_price = 0.121
+        await rig.evaluate(0.5, self.SC)  # deferred
+        for key, value in change.items():
+            setattr(rig.data, key, value)
+
+        await rig.evaluate(1.0, self.SC)
+
+        assert rig.data.active_mode == self.SC
+        assert rig.transitions[-1] == (1.0, self.SC, source)
+        assert rig.machine._dwell_deferred_since is None
+
+    async def test_invalidation_inside_the_band_grants_at_once(self) -> None:
+        rig = await _committed_rig(self.GRID)
+        rig.data.general_price = 0.121
+        await rig.evaluate(0.5, self.SC)  # deferred
+        rig.machine.invalidate_decision_fingerprint("user changed a setting")
+        assert rig.machine._dwell_deferred_since is None
+
+        await rig.evaluate(1.0, self.SC)
+
+        assert rig.data.active_mode == self.SC
+        assert rig.transitions[-1] == (1.0, self.SC, "unknown")
+
+    async def test_the_export_start_epoch_inside_the_band_grants_at_once(
+        self,
+    ) -> None:
+        """#1119's repaid export start is an epoch grant, never deferred."""
+        rig = await _committed_rig(self.GRID)
+        rig.machine._export_start_owed = True
+
+        await rig.evaluate(1.0, BatteryMode.PROACTIVE_EXPORT)
+
+        assert rig.data.active_mode == BatteryMode.PROACTIVE_EXPORT
+        assert rig.transitions[-1] == (
+            1.0,
+            BatteryMode.PROACTIVE_EXPORT,
+            "price_confirmed",
+        )
+
+    async def test_no_clock_means_no_dwell_and_says_so(self, caplog) -> None:
+        """A charge committed without the facade's clock gets no dwell.
+
+        Defensive only: live, a charge becomes the committed mode solely via
+        ``_commit_or_hold_mode``, which starts the clock."""
+        rig = _DwellRig()
+        rig.data.active_mode = self.GRID
+        await rig.evaluate(0.0, self.GRID)  # first token, nothing changes
+        assert rig.data.charge_committed_at is None
+        rig.data.general_price = 0.121
+
+        with caplog.at_level("INFO"):
+            await rig.evaluate(1.0, self.SC)
+
+        assert rig.data.active_mode == self.SC
+        assert any(
+            "Charge dwell: no commit time" in r.getMessage() and r.levelname == "INFO"
+            for r in caplog.records
+        )
+
+    async def test_no_clock_is_logged_once_per_charge(self, caplog) -> None:
+        """Every price change re-checks the dwell; the missing clock is said
+        once per charge, not once per price change."""
+        rig = _DwellRig()
+        rig.data.active_mode = self.GRID
+        await rig.evaluate(0.0, self.GRID)
+
+        def no_clock_logs() -> int:
+            return sum(
+                "Charge dwell: no commit time" in r.getMessage() for r in caplog.records
+            )
+
+        with caplog.at_level("INFO"):
+            for minute, price in ((1.0, 0.121), (6.0, 0.122), (11.0, 0.123)):
+                rig.data.general_price = price
+                await rig.evaluate(minute, self.GRID)
+                assert rig.data.active_mode == self.GRID
+            assert no_clock_logs() == 1
+
+            rig.data.general_price = 0.124
+            await rig.evaluate(16.0, self.SC)  # the charge ends
+            assert rig.data.active_mode == self.SC
+            await rig.evaluate(17.0, self.SC)  # a tick outside the charge
+
+            rig.data.active_mode = self.GRID  # a second clockless charge
+            rig.data.general_price = 0.125
+            await rig.evaluate(21.0, self.GRID)
+            assert no_clock_logs() == 2
 
 
 class TestRunwayBackstopLogsOncePerHold:

@@ -15,6 +15,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BACKUP_RESERVE_MAX_VALID,
+    CHARGE_RELEASE_DWELL_MIN,
     CONF_AWAY_RESERVE,
     CONF_BATTERY_TARGET,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
@@ -182,6 +183,14 @@ class StateMachine:
         # is derived from is overwritten there — by transition time the "previous"
         # base is already the current one.
         self._last_grant_source: str | None = None
+        # Issue #1159 (telemetry only, gates nothing): when the charge dwell
+        # first deferred the price change that is still pending, so the grant
+        # that finally decides it can be tagged ``charge_dwell`` and logged.
+        self._dwell_deferred_since: datetime | None = None
+        # Issue #1159: the missing-clock guard in ``_charge_dwell_defers`` says
+        # so once per charge, not on every price change. Re-armed whenever an
+        # evaluation starts outside a charge.
+        self._dwell_no_clock_logged = False
         # Plan-disagreement trigger (2026-07-27 pre-charge incident): the plan is
         # itself a decision input. ``_plan_charge_epoch`` is a MONOTONE counter
         # incremented on the rising edge of "the plan wants to START charging while
@@ -525,7 +534,13 @@ class StateMachine:
         #622 gate replacement: the mode may be re-decided only when the discrete
         decision context changes. This fingerprint enumerates every legitimate
         re-decision trigger so the once-per-context invariant holds by
-        construction — no timers, no dwell:
+        construction. The fingerprint itself holds no timer or dwell state. The
+        one time-based rule sits outside it, in ``_apply_decision_token``
+        (#1159): while a charge committed from a non-charge mode is younger than
+        ``CHARGE_RELEASE_DWELL_MIN``, a change in buy/sell price alone is
+        deferred (``_charge_dwell_defers``): neither granted nor consumed, so
+        the first evaluation after the band decides it. No other trigger below
+        is ever deferred:
 
         - buy/sell price (Amber's 5-min interval is the primary trigger)
         - spike: price-spike onset
@@ -1108,6 +1123,9 @@ class StateMachine:
         *attributed*: when the price/spike/DW/floor context is unchanged and only
         the epoch moved, ``mode_decision_plan_charge_only`` tells the facade this
         grant may commit a charge mode and nothing else.
+
+        Issue #1159: a grant raised only by a price change shortly after a
+        charge commit is deferred, not granted (``_charge_dwell_defers``).
         """
         # Plan-disagreement trigger: fold the plan into the decision context
         # BEFORE fingerprinting, so the fingerprint computed here reflects the
@@ -1126,6 +1144,15 @@ class StateMachine:
         decision_allowed = (
             fingerprint is not None and fingerprint != self._last_evaluated_fingerprint
         )
+        if fingerprint == self._last_evaluated_fingerprint:
+            # Nothing pending (e.g. the price went back): nothing deferred.
+            self._dwell_deferred_since = None
+        if data.active_mode not in _CHARGE_MODES:
+            self._dwell_no_clock_logged = False
+        if decision_allowed and self._charge_dwell_defers(
+            data, context, plan_epoch_moved or export_epoch_moved
+        ):
+            decision_allowed = False
         # Same price/spike/DW/floor context as the last grant ⇒ only an epoch
         # moved ⇒ the grant is restricted to what that epoch exists to start.
         # Issue #1119: the export-start epoch is attributed separately, so its
@@ -1138,9 +1165,17 @@ class StateMachine:
             # _last_evaluated_base is overwritten below — by transition time the
             # "previous" base is already this one, so the comparison must happen
             # here or the tag is unrecoverable.
-            self._last_grant_source = self._classify_grant_source(
+            source = self._classify_grant_source(
                 context, export_start_only and not plan_epoch_moved
             )
+            if self._dwell_deferred_since is not None and source == "price":
+                source = "charge_dwell"
+                _LOGGER.info(
+                    "Charge dwell: band over, deciding the change deferred since %s",
+                    self._dwell_deferred_since.isoformat(),
+                )
+            self._dwell_deferred_since = None
+            self._last_grant_source = source
             # Issue #966: a fresh token is a new decision by construction, so
             # whatever attempt failed before it is no longer pending. Cleared
             # only here (never unconditionally) — a non-granting evaluation
@@ -1170,6 +1205,54 @@ class StateMachine:
         # compute_derived_values in coordinator.async_recompute_and_evaluate can
         # never trip it.
         data.mode_backstop_allowed = True
+
+    def _charge_dwell_defers(
+        self, data: CoordinatorData, context: str | None, epoch_moved: bool
+    ) -> bool:
+        """Whether to defer a would-be grant inside the charge dwell (#1159).
+
+        Deferred = neither granted nor consumed: the fingerprint stays
+        unconsumed, so the first evaluation after the band still sees the
+        change and grants an ordinary token. Only a change in buy/sell price
+        is deferred, and only while a charge committed from a non-charge mode
+        less than ``CHARGE_RELEASE_DWELL_MIN`` ago is still the committed mode.
+        Spike, demand-window and SOC-floor changes, epochs and invalidations
+        are never deferred. Nothing about the release is remembered.
+        """
+        previous = self._last_evaluated_base
+        if (
+            epoch_moved
+            or data.active_mode not in _CHARGE_MODES
+            or self._last_evaluated_fingerprint is None
+            or previous is None
+            or context is None
+            or context.split("|")[2:] != previous.split("|")[2:]
+        ):
+            return False
+        committed_at = data.charge_committed_at
+        if committed_at is None:
+            # Defensive: live, a charge becomes the committed mode only via
+            # _commit_or_hold_mode, which starts the clock. Said once per charge.
+            if not self._dwell_no_clock_logged:
+                self._dwell_no_clock_logged = True
+                _LOGGER.info(
+                    "Charge dwell: no commit time for the committed %s, not deferring",
+                    data.active_mode.value,
+                )
+            return False
+        now = dt_util.now()
+        elapsed_min = (now - committed_at).total_seconds() / 60.0
+        if elapsed_min >= CHARGE_RELEASE_DWELL_MIN:
+            return False
+        if self._dwell_deferred_since is None:
+            self._dwell_deferred_since = now
+            _LOGGER.info(
+                "Charge dwell: deferring a price change (charge committed "
+                "%.1f min ago, band %g min)",
+                elapsed_min,
+                CHARGE_RELEASE_DWELL_MIN,
+            )
+        return True
 
     def _refund_unspent_plan_charge(self, data: CoordinatorData) -> None:
         """Return the plan-charge budget when no charge was committed (#1172).
@@ -1888,8 +1971,8 @@ class StateMachine:
         # fire up to once per 5 minutes for the length of a drift episode and
         # carry no analytic signal for the Amber-latency baseline, so they are
         # demoted to DEBUG. Every decision-granted transition (price, spike,
-        # demand_window, soc_floor, plan_charge, price_confirmed, debounce,
-        # retry, unknown)
+        # demand_window, soc_floor, plan_charge, price_confirmed, charge_dwell,
+        # debounce, retry, unknown)
         # stays at INFO.
         level = logging.DEBUG if grant_source == "backstop" else logging.INFO
         _LOGGER.log(
@@ -2433,6 +2516,7 @@ class StateMachine:
         # Issue #510 slice 1: a transition landing between this invalidation
         # and the next grant must not inherit a now-stale attribution.
         self._last_grant_source = None
+        self._dwell_deferred_since = None
 
     def suppress_next_plan_charge_grant(self, reason: str) -> None:
         """Bar the NEXT evaluation from granting on the plan-charge trigger.

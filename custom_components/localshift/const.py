@@ -595,6 +595,11 @@ STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES = 5
 # Prevents false positives when Tesla API is still propagating state changes.
 STATE_MACHINE_TRANSITION_GRACE_SECONDS = 30
 
+# Issue #1159: for this long after a charge is committed from a non-charge mode, a
+# decision token raised only by a buy/sell price change is deferred (neither
+# granted nor consumed). One 5-minute slot.
+CHARGE_RELEASE_DWELL_MIN = 5.0
+
 # Coalesce entity state changes before running expensive reevaluation.
 STATE_CHANGE_COALESCE_SECONDS = 15
 
