@@ -29,7 +29,7 @@ Usage
   scripts/deploy_check.py --preflight
   scripts/deploy_check.py --wait-restart 21:05:30   # time just before the restart was issued
   scripts/deploy_check.py --before B.json --after A.json \\
-      --component-dir /Volumes/appdata/Home-Assistant-Container/custom_components/localshift
+      --component-dir "$HA_CONFIG/custom_components/localshift"
 
   --log PATH                   read the log from a file instead of the API
   --allow-removed-attr KEY     an attribute the change removed on purpose (repeatable)

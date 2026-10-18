@@ -16,6 +16,13 @@
 - **Tests**: `tests/`
 - **Deploy**: Use skill `deploy-and-validate` when work is complete to deploy and validate
 - **Python**: 3.13+, type hints required
+- **Where development runs**: devbox (Linux), under the devbox projects coordinator (moved from the Mac, 18 Oct 2026). Worktrees live under `worktrees/` in the repo. Tools marked *optional (Mac-only)* below are not installed on devbox; skip them there.
+
+## House rules that affect deploys
+
+- **HA restarts are coordinated by the devbox coordinator.** The house brain trial forbids restarts during its shadow counts, so LocalShift deploys ride planned restarts; do not restart HA on your own schedule.
+- **No HA restart 01:30–02:00** (nightly backup window).
+- **Deploys are moving to the HA pull deployer on nectaron** (in progress). `deploy.sh` run from the Mac is retiring; do not treat it as the deploy path on devbox.
 
 ## Optimizer Changes (CRITICAL)
 
@@ -41,21 +48,21 @@ When modifying DP optimizer, you MUST consult `docs/PLANNING_MODEL.md` first:
 
 Use the right tool for the task:
 
-**SymDex** - Precise code navigation:
+**SymDex** *(optional, Mac-only)* - Precise code navigation:
 - `symdex_search_symbols("function")` - find symbol/class by exact name
 - `symdex_get_file_outline("file.py")` - file structure
 - `symdex_search_text("text")` - exact content search
 - Use when: you know the name, need structure, or want fast lookups
 
-**OpenViking** - Semantic code understanding:
+**OpenViking** *(optional, Mac-only)* - Semantic code understanding:
 - `ov search "query"` - semantic search across codebase
 - `ov read viking://resources/localshift/path/to/file` - read file content
 - `ov abstract viking://...` - get directory summary
 - Use when: exploring how/why code works, finding patterns, conceptual queries
-- Start if not running: `~/.local/bin/ov-start`
+- Start if not running: `~/.local/bin/ov-start` (Mac only)
 
 **@homeassistant subagent** - HA gateway (CLI for reads, MCP for writes):
-- Automatically uses hass-cli for entity state, history, lists
+- Automatically uses hass-cli for entity state, history, lists (hass-cli is optional, Mac-only; not on devbox)
 - Automatically uses MCP for turn on/off, set values, call services
 - Use: `@homeassistant check battery state` or `@homeassistant turn on automation`
 - Skill: `homeassistant` (merged CLI+MCP)
@@ -64,7 +71,7 @@ Use the right tool for the task:
 
 | You need... | Use |
 |--------------|-----|
-| Find function `foo` by name | SymDex |
+| Find function `foo` by name | SymDex (Mac) / `grep` (devbox) |
 | Understand how auth works | OpenViking |
 | See file structure | SymDex |
 | Find code related to "grid charging" | OpenViking |

@@ -8,6 +8,8 @@ churn stats, charge timing, and decision-outcome distributions.
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from scripts.ha_data_sweep import (
     AEST,
     bucket_pairs,
@@ -21,6 +23,7 @@ from scripts.ha_data_sweep import (
     pctl,
     price_capture,
     render_markdown,
+    resolve_config_dir,
     step_value,
 )
 
@@ -346,3 +349,23 @@ class TestRenderMarkdown:
         assert "105 changes" in md
         assert "| 08-25 | 14.0 | 0.172 | 8, 9, 10 |" in md
         assert "missing cost: 2/500" in md
+
+
+class TestResolveConfigDir:
+    """Config dir comes from --config, then HA_CONFIG; there is no host default."""
+
+    def test_flag_wins_over_env(self):
+        assert resolve_config_dir("/flag/ha", {"HA_CONFIG": "/env/ha"}) == "/flag/ha"
+
+    def test_env_used_when_no_flag(self):
+        assert resolve_config_dir(None, {"HA_CONFIG": "/env/ha"}) == "/env/ha"
+
+    def test_neither_set_exits_with_clear_message(self):
+        with pytest.raises(SystemExit) as exc:
+            resolve_config_dir(None, {})
+        assert "HA_CONFIG" in str(exc.value)
+        assert "--config" in str(exc.value)
+
+    def test_empty_env_counts_as_unset(self):
+        with pytest.raises(SystemExit):
+            resolve_config_dir(None, {"HA_CONFIG": ""})

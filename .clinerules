@@ -6,8 +6,8 @@ Do not use sed, awk, or direct shell commands to edit files. Only use the provid
 
 1. **FIRST ACTION:** Run `git worktree list` to check current worktree status
 2. **If output shows only the main repo (no worktree path matches current directory):**
-   - For GitHub issues: `git worktree add /Users/jackmcintyre/worktrees/issue-{NNN} -b issue/{NNN}`
-   - For ad-hoc tasks: `git worktree add /Users/jackmcintyre/worktrees/{task-name} -b task/{task-name}`
+   - For GitHub issues: `git worktree add worktrees/issue-{NNN} -b issue/{NNN}`
+   - For ad-hoc tasks: `git worktree add worktrees/{task-name} -b task/{task-name}`
 3. **Change directory to the worktree before making ANY file changes**
 4. **Only then proceed with the actual task**
 
@@ -27,10 +27,10 @@ This ensures isolation between tasks and prevents changes to the main repo.
    git stash push -m "orphaned changes from crashed session"
    
    # Create worktree
-   git worktree add /Users/jackmcintyre/worktrees/{task-name} -b task/{task-name}
+   git worktree add worktrees/{task-name} -b task/{task-name}
    
    # In worktree, apply the stash
-   cd /Users/jackmcintyre/worktrees/{task-name}
+   cd worktrees/{task-name}
    git stash pop
    ```
 4. **Only commit directly on main** if:
@@ -95,7 +95,7 @@ Each Cline task should operate in its own git worktree. This provides:
 - No need to stash/commit unfinished work when switching tasks
 
 ## Worktree Directory Structure
-- All worktrees are stored in `/Users/jackmcintyre/worktrees/`
+- All worktrees are stored in `worktrees/` at the repo root (gitignored)
 - Naming convention: `issue-{NNN}` (e.g., `issue-1`, `issue-42`)
 
 ## Starting a New Task
@@ -106,11 +106,11 @@ Each Cline task should operate in its own git worktree. This provides:
    This ensures you're branching from the latest state and prevents divergence.
 2. **Create worktree for GitHub issue:**
    ```bash
-   git worktree add /Users/jackmcintyre/worktrees/issue-{NNN} -b issue/{NNN}
+   git worktree add worktrees/issue-{NNN} -b issue/{NNN}
    ```
 3. **Or create worktree for ad-hoc task:**
    ```bash
-   git worktree add /Users/jackmcintyre/worktrees/{task-name} -b task/{task-name}
+   git worktree add worktrees/{task-name} -b task/{task-name}
    ```
 4. **Change directory to the worktree before making changes**
 
@@ -138,7 +138,7 @@ This makes `git pull` fail if branches have diverged, forcing an explicit choice
 2. Ask user to commit or merge changes
 3. After merge/completion, clean up:
    ```bash
-   git worktree remove /Users/jackmcintyre/worktrees/{worktree-name}
+   git worktree remove worktrees/{worktree-name}
    git branch -d {branch-name}  # if merged
    ```
 
@@ -180,7 +180,7 @@ Check with: `git worktree list`
 
 ### 1. Develop in Worktree
 ```bash
-git worktree add /Users/jackmcintyre/worktrees/issue-42 -b issue/42
+git worktree add worktrees/issue-42 -b issue/42
 # Make changes
 ```
 
@@ -215,7 +215,7 @@ Look for:
 
 ### 6. Cleanup
 ```bash
-git worktree remove /Users/jackmcintyre/worktrees/issue-42
+git worktree remove worktrees/issue-42
 git branch -d issue/42
 ```
 
@@ -243,7 +243,7 @@ After a PR is merged to main:
 
 ```bash
 # 1. Remove the worktree
-git worktree remove /Users/jackmcintyre/worktrees/{worktree-name}
+git worktree remove worktrees/{worktree-name}
 
 # 2. Delete local branch (if merged)
 git branch -d {branch-name}
@@ -489,7 +489,7 @@ gh issue create --title "Title" --body "Description" --label "priority: medium,s
    ```
 2. Create worktree:
    ```bash
-   git worktree add /Users/jackmcintyre/worktrees/issue-{NNN} -b issue/{NNN}
+   git worktree add worktrees/issue-{NNN} -b issue/{NNN}
    ```
 
 ## Completing an Issue
