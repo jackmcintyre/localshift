@@ -2674,24 +2674,33 @@ class StateMachine:
         would otherwise be corrected every minute indefinitely. A reversion
         within the reset window of the last correction doubles the guard, up
         to the health check's correction cooldown; one that comes after a
-        correction held for the whole window resets it.
+        correction held for the whole window resets it. Only reaching the cap
+        is a sustained bounce worth a WARNING (once per episode); the hourly
+        cloud pair (#1208) doubles the guard once and logs at DEBUG.
         """
         last = self._last_listener_correction
         reset = timedelta(seconds=GRID_CHARGING_LISTENER_BACKOFF_RESET_SECONDS)
         if last is None or now - last >= reset:
             self._listener_guard_seconds = GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS
             return
-        if self._listener_guard_seconds == GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS:
-            _LOGGER.warning(
-                "[GRID CHARGING LISTENER] Grid charging keeps reverting; "
-                "backing off re-checks up to every %ds until a correction "
-                "holds for %ds",
-                GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS,
-                GRID_CHARGING_LISTENER_BACKOFF_RESET_SECONDS,
-            )
+        previous = self._listener_guard_seconds
         self._listener_guard_seconds = min(
-            self._listener_guard_seconds * 2,
+            previous * 2, GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS
+        )
+        if self._listener_guard_seconds == previous:
+            return
+        if self._listener_guard_seconds < GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS:
+            _LOGGER.debug(
+                "[GRID CHARGING LISTENER] Reverted again; re-check guard now %ds",
+                self._listener_guard_seconds,
+            )
+            return
+        _LOGGER.warning(
+            "[GRID CHARGING LISTENER] Grid charging keeps reverting; "
+            "backed off to one correction every %ds until a correction "
+            "holds for %ds",
             GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS,
+            GRID_CHARGING_LISTENER_BACKOFF_RESET_SECONDS,
         )
 
     def _schedule_grid_charging_recheck(

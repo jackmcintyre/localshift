@@ -2143,13 +2143,22 @@ class TestGridChargingListenerCooldown:
         for _ in range(3):
             await asyncio.sleep(0)
 
+    @staticmethod
+    def _back_off_warnings(caplog):
+        return [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "keeps reverting" in r.getMessage()
+        ]
+
     @pytest.mark.asyncio
     async def test_persistent_bounce_backs_off_to_the_health_check_cadence(
         self, state_machine, mock_hass, mock_battery_controller, monkeypatch, caplog
     ):
         """Review finding on #1230: a switch that keeps reverting was corrected
         every 60 s forever. Re-checks now double per recurrence, capped at the
-        health check's correction cooldown, with one WARNING on backing off."""
+        health check's correction cooldown. The one WARNING comes only when
+        the guard reaches that cap (a sustained bounce); doublings are DEBUG."""
         captured, scheduled, clock = self._arm(
             state_machine, mock_hass, mock_battery_controller, monkeypatch
         )
@@ -2158,18 +2167,35 @@ class TestGridChargingListenerCooldown:
         with caplog.at_level(logging.WARNING):
             await self._flip(captured)
             delays = []
+            warnings_after = []
             for _ in range(6):
                 delays.append(scheduled[-1]["delay"])
                 await self._fire_latest_recheck(scheduled, clock)
+                warnings_after.append(len(self._back_off_warnings(caplog)))
 
         assert delays == [60, 120, 240, 300, 300, 300]
         assert mock_hass.services.async_call.await_count == 7
-        backing_off = [
-            r
-            for r in caplog.records
-            if r.levelno == logging.WARNING and "backing off" in r.getMessage()
-        ]
-        assert len(backing_off) == 1
+        assert warnings_after == [0, 0, 1, 1, 1, 1]
+
+    @pytest.mark.asyncio
+    async def test_ordinary_pair_logs_no_back_off_warning(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch, caplog
+    ):
+        """The hourly cloud reversion comes as a pair about 5 minutes apart
+        (#1208). It doubles the guard but must not WARN once an hour forever."""
+        captured, _, clock = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+
+        with caplog.at_level(logging.WARNING):
+            for _ in range(3):  # three hours of pairs
+                await self._flip(captured)
+                clock["now"] += timedelta(minutes=4, seconds=59)
+                await self._flip(captured)
+                clock["now"] += timedelta(minutes=55)
+
+        assert mock_hass.services.async_call.await_count == 6
+        assert self._back_off_warnings(caplog) == []
 
     @pytest.mark.asyncio
     async def test_back_off_resets_once_a_correction_holds(
