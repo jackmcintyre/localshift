@@ -1,0 +1,4 @@
+{
+  "_readme": "Intended config_options changes for the next ship, read by scripts/deploy_check.py after the restart. A PR that intentionally changes a reported option adds an entry: \"KEY\": {\"old\": ..., \"new\": ...}. Clear the entries after a successful ship.",
+  "config_options": {}
+}

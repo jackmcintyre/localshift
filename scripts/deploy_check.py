@@ -19,6 +19,23 @@ the log is fetched over the API: the network share keeps serving cached pages
 of the previous log for minutes after a restart, so a file read there can
 show the old restart time and a planner that looks stopped.
 
+Entity health passes when every validated entity is healthy ("N/N", N > 0).
+Its total may differ from the before dump: a change can add or drop validated
+entities on purpose, and a lost entity already fails "entities present".
+
+Intended config changes. "config_options identical" fails on any option whose
+reported value changed, unless the change is declared in
+deploy/expected-changes.json, read from the repo checkout this script runs
+from (the deployer's checkout of main); a missing file declares nothing:
+
+  {"config_options": {"pricing_source": {"old": "amber", "new": "amber_express"}}}
+
+A declared change passes (reported as "expected: ...") only when both values
+match; an undeclared or mismatched change still fails, and a file that does
+not parse is a usage error (exit 2). A PR that intentionally changes a
+reported option adds an entry; clear the entries after a successful ship.
+For a manual run, --allow-config-change KEY passes any change of KEY.
+
 Run with --preflight (and no dumps) before reserving: it reads the live plan
 and refuses (exit 1) inside the demand window, when a grid-charge slot starts
 or is running within the next 30 minutes, or when the pre-charge backstop is
@@ -34,6 +51,8 @@ Usage
   --log PATH                   read the log from a file instead of the API
   --allow-removed-attr KEY     an attribute the change removed on purpose (repeatable)
   --allow-removed-entity ID    an entity the change removed on purpose (repeatable)
+  --allow-config-change KEY    a config option the change alters on purpose (repeatable;
+                               manual runs, see "Intended config changes")
   --allow-dw-entry-move        the change is meant to move the projected entry
   --expect-recompile           code was copied: every compiled file must post-date the restart
   --wait-settled SECONDS       re-fetch the after state every 20 s until settled,
@@ -80,6 +99,11 @@ SETTLE_POLL_S = 20
 RESTART_POLL_S = 3
 # Distinct from argparse's 2, so a retry wrapper cannot loop on a typo.
 NOT_SETTLED_EXIT = 3
+# Declared intended changes for the next ship, read from the checkout this
+# script runs from (the deployer's checkout of main on the host).
+EXPECTED_CHANGES_FILE = (
+    Path(__file__).resolve().parent.parent / "deploy" / "expected-changes.json"
+)
 
 UNAVAILABLE = {"unavailable", "unknown"}
 LOG_TS = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ ")
@@ -152,6 +176,17 @@ def not_settled(before, after) -> str | None:
     return None
 
 
+def _fully_healthy(health: str | None) -> bool:
+    """True for "N/N" with N > 0.
+
+    The total is not compared with the before dump: a change can add or drop
+    validated entities on purpose, and a lost entity already fails "entities
+    present". "0/0" is no health tick yet, which not_settled() reports first.
+    """
+    healthy, sep, total = (health or "").partition("/")
+    return bool(sep) and healthy.isdigit() and healthy == total and int(total) > 0
+
+
 def check_entities(before, after, allow_removed: set[str]) -> list[Check]:
     lost = sorted(_localshift(before) - _localshift(after) - allow_removed)
     newly_dead = sorted(
@@ -160,11 +195,6 @@ def check_entities(before, after, allow_removed: set[str]) -> list[Check]:
         if _state(after, eid) in UNAVAILABLE and _state(before, eid) not in UNAVAILABLE
     )
     health_before, health_after = _state(before, HEALTH), _state(after, HEALTH)
-    health_ok = health_after is not None and health_after == health_before
-    if allow_removed and health_after is not None:
-        # A deliberate removal changes the total; require every entity healthy.
-        healthy, _, total = health_after.partition("/")
-        health_ok = healthy == total
     return [
         Check(
             "entities present",
@@ -176,11 +206,21 @@ def check_entities(before, after, allow_removed: set[str]) -> list[Check]:
         Check(
             "none newly unavailable", not newly_dead, ", ".join(newly_dead) or "none"
         ),
-        Check("entity health", health_ok, f"{health_before} -> {health_after}"),
+        Check(
+            "entity health",
+            _fully_healthy(health_after),
+            f"{health_before} -> {health_after}",
+        ),
     ]
 
 
-def check_attributes(before, after, allow_removed: set[str]) -> list[Check]:
+def check_attributes(
+    before,
+    after,
+    allow_removed: set[str],
+    expected: dict[str, tuple] | None = None,
+    allowed_changes: frozenset[str] = frozenset(),
+) -> list[Check]:
     checks = []
     for eid in (SUMMARY, PLAN):
         lost = sorted(
@@ -202,25 +242,68 @@ def check_attributes(before, after, allow_removed: set[str]) -> list[Check]:
             Check("config_options identical", False, "config_options missing")
         )
     else:
-        changed = sorted(
-            k
-            for k in set(opts_before) | set(opts_after)
-            if opts_before.get(k) != opts_after.get(k)
-        )
         checks.append(
-            Check(
-                "config_options identical",
-                not changed,
-                "changed: "
-                + ", ".join(
-                    f"{k} {opts_before.get(k)!r}->{opts_after.get(k)!r}"
-                    for k in changed
-                )
-                if changed
-                else "identical",
-            )
+            _config_check(opts_before, opts_after, expected or {}, allowed_changes)
         )
     return checks
+
+
+def _config_check(opts_before, opts_after, expected, allowed) -> Check:
+    """Fail on any option that changed, unless the change was declared.
+
+    A change declared in the expected-changes file passes only when both its
+    old and new values match; --allow-config-change passes any change of a key.
+    """
+    changed, ok_expected, ok_allowed = [], [], []
+    for k in sorted(set(opts_before) | set(opts_after)):
+        old, new = opts_before.get(k), opts_after.get(k)
+        if old == new:
+            continue
+        seen = f"{k} {old!r}->{new!r}"
+        if k in allowed:
+            ok_allowed.append(seen)
+        elif expected.get(k) == (old, new):
+            ok_expected.append(seen)
+        elif k in expected:
+            want_old, want_new = expected[k]
+            changed.append(f"{seen} (declared {want_old!r}->{want_new!r})")
+        else:
+            changed.append(seen)
+    parts = [
+        f"{label}: {', '.join(items)}"
+        for label, items in (
+            ("changed", changed),
+            ("expected", ok_expected),
+            ("allowed", ok_allowed),
+        )
+        if items
+    ]
+    return Check(
+        "config_options identical", not changed, "; ".join(parts) or "identical"
+    )
+
+
+def load_expected_changes(path: Path) -> dict[str, tuple]:
+    """Read the declared config_options changes as ``{key: (old, new)}``.
+
+    A missing file declares nothing. A file that does not parse raises
+    ValueError, which main() turns into a usage error (exit 2) rather than a
+    verdict on the build.
+    """
+    try:
+        text = Path(path).read_text()
+    except FileNotFoundError:
+        return {}
+    try:
+        data = json.loads(text)
+        options = data.get("config_options", {})
+        return {key: (change["old"], change["new"]) for key, change in options.items()}
+    except (ValueError, AttributeError, TypeError, KeyError) as exc:
+        raise ValueError(
+            f"{path}: not a valid expected-changes file "
+            '(want {"config_options": {KEY: {"old": ..., "new": ...}}}): '
+            f"{exc!r}"
+        ) from exc
 
 
 def check_switches(before, after) -> list[Check]:
@@ -484,9 +567,17 @@ def run_checks(
     allow_removed_entities=frozenset(),
     allow_dw_entry_move=False,
     expect_recompile=False,
+    expected_config=None,
+    allow_config_changes=frozenset(),
 ) -> list[Check]:
     checks = check_entities(before, after, set(allow_removed_entities))
-    checks += check_attributes(before, after, set(allow_removed_attrs))
+    checks += check_attributes(
+        before,
+        after,
+        set(allow_removed_attrs),
+        expected_config,
+        frozenset(allow_config_changes),
+    )
     checks += check_switches(before, after)
     checks += check_plan(before, after, allow_dw_entry_move)
     log_checks, restart = check_log(log_lines, now)
@@ -654,6 +745,7 @@ def main(argv=None) -> int:
     ap.add_argument("--component-dir", type=Path)
     ap.add_argument("--allow-removed-attr", action="append", default=[])
     ap.add_argument("--allow-removed-entity", action="append", default=[])
+    ap.add_argument("--allow-config-change", action="append", default=[])
     ap.add_argument("--allow-dw-entry-move", action="store_true")
     ap.add_argument("--expect-recompile", action="store_true")
     ap.add_argument("--wait-settled", type=float, metavar="SECONDS")
@@ -682,6 +774,11 @@ def main(argv=None) -> int:
         # planner would look stopped; the API log is read after the wait.
         ap.error("--wait-settled reads the log over the API; drop --log")
 
+    try:
+        expected_config = load_expected_changes(EXPECTED_CHANGES_FILE)
+    except ValueError as exc:
+        ap.error(str(exc))
+
     before, after = load_dump(args.before), load_dump(args.after)
     if args.wait_settled is not None:
         after = wait_settled(before, after, args.wait_settled)
@@ -705,6 +802,8 @@ def main(argv=None) -> int:
         allow_removed_entities=frozenset(args.allow_removed_entity),
         allow_dw_entry_move=args.allow_dw_entry_move,
         expect_recompile=args.expect_recompile,
+        expected_config=expected_config,
+        allow_config_changes=frozenset(args.allow_config_change),
     )
     print(render(checks))
     return 0 if all(c.ok for c in checks) else 1
