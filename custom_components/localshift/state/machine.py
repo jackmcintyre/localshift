@@ -28,6 +28,8 @@ from ..const import (
     EXPORT_INVERSION_CONFIRM_SECONDS,
     EXPORT_INVERSION_HOLDOFF_MINUTES,
     EXPORT_INVERSION_POWER_KW,
+    GRID_CHARGING_LISTENER_BACKOFF_RESET_SECONDS,
+    GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS,
     GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS,
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT,
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT,
@@ -165,6 +167,7 @@ class StateMachine:
         # Issue #1208: the listener's own guard and its one pending re-check.
         self._last_listener_correction: datetime | None = None
         self._grid_charging_recheck: Callable | None = None
+        self._listener_guard_seconds: int = GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS
         # Issue #510 slice 1: one-shot tag for transitions issued outside the
         # decision path (Tesla re-probe, health-check correction). Set immediately
         # before the call, cleared immediately after — never left armed.
@@ -2611,10 +2614,13 @@ class StateMachine:
         """Turn off grid_charging when it was re-enabled unexpectedly.
 
         Issue #1208: not gated by the health check's cooldown, which dropped
-        the second flip of a pair. A flip inside the listener's own guard is
-        re-checked once when the guard expires, so writes stay bounded even
-        if the Powerwall keeps turning the switch back on. Skips when a Tesla
-        override is active, in dry run, or while a write is in flight (#1160).
+        the second flip of a pair, and it does not stamp that cooldown either,
+        so the health check keeps correcting mode and reserve drift on its own
+        cadence. A flip inside the listener's own guard is re-checked once
+        when the guard expires; the guard doubles while the switch keeps
+        reverting, up to the health check's cooldown (see
+        ``_advance_listener_guard``). Skips when a Tesla override is active,
+        in dry run, or while a write is in flight (#1160).
         """
         now = dt_util.now()
         if self._in_mode_transition or self._get_switch_state("dry_run"):
@@ -2631,12 +2637,13 @@ class StateMachine:
         ):
             return
         last = self._last_listener_correction
-        guard = timedelta(seconds=GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS)
+        guard = timedelta(seconds=self._listener_guard_seconds)
         if last is not None and now - last < guard:
             self._schedule_grid_charging_recheck(
                 hass, entity_id, (guard - (now - last)).total_seconds()
             )
             return
+        self._advance_listener_guard(now)
 
         _LOGGER.warning(
             "[GRID CHARGING LISTENER] Grid charging re-enabled while in "
@@ -2659,7 +2666,33 @@ class StateMachine:
                 exc_info=True,
             )
         self._last_listener_correction = now
-        self._last_health_correction = now
+
+    def _advance_listener_guard(self, now: datetime) -> None:
+        """Back the listener's guard off while grid charging keeps reverting.
+
+        Review on #1230: a Powerwall that turns the switch straight back on
+        would otherwise be corrected every minute indefinitely. A reversion
+        within the reset window of the last correction doubles the guard, up
+        to the health check's correction cooldown; one that comes after a
+        correction held for the whole window resets it.
+        """
+        last = self._last_listener_correction
+        reset = timedelta(seconds=GRID_CHARGING_LISTENER_BACKOFF_RESET_SECONDS)
+        if last is None or now - last >= reset:
+            self._listener_guard_seconds = GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS
+            return
+        if self._listener_guard_seconds == GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS:
+            _LOGGER.warning(
+                "[GRID CHARGING LISTENER] Grid charging keeps reverting; "
+                "backing off re-checks up to every %ds until a correction "
+                "holds for %ds",
+                GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS,
+                GRID_CHARGING_LISTENER_BACKOFF_RESET_SECONDS,
+            )
+        self._listener_guard_seconds = min(
+            self._listener_guard_seconds * 2,
+            GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS,
+        )
 
     def _schedule_grid_charging_recheck(
         self, hass: Any, entity_id: str, delay: float

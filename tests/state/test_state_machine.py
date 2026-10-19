@@ -1999,8 +1999,8 @@ class TestGridChargingListenerCooldown:
 
         assert mock_hass.services.async_call.await_count == 2
         assert scheduled == []
-        # The health check still backs off after a listener correction.
-        assert state_machine._last_health_correction == clock["now"]
+        # A listener write no longer stamps the health check's cooldown.
+        assert state_machine._last_health_correction is None
 
     @pytest.mark.asyncio
     async def test_bounce_inside_listener_guard_is_rechecked_once(
@@ -2126,6 +2126,137 @@ class TestGridChargingListenerCooldown:
 
         scheduled[0]["cancel"].assert_called_once()
         assert state_machine._grid_charging_recheck is None
+
+    def _refuse_writes(self, captured, mock_hass):
+        """A Powerwall that turns grid charging straight back on after each write."""
+
+        async def _refuse(*_args, **_kwargs):
+            captured["callback"](self._make_event("on"))
+            return True
+
+        mock_hass.services.async_call = AsyncMock(side_effect=_refuse)
+
+    async def _fire_latest_recheck(self, scheduled, clock):
+        """Advance the clock to the newest re-check and run it."""
+        clock["now"] += timedelta(seconds=scheduled[-1]["delay"])
+        scheduled[-1]["action"](clock["now"])
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_persistent_bounce_backs_off_to_the_health_check_cadence(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch, caplog
+    ):
+        """Review finding on #1230: a switch that keeps reverting was corrected
+        every 60 s forever. Re-checks now double per recurrence, capped at the
+        health check's correction cooldown, with one WARNING on backing off."""
+        captured, scheduled, clock = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        self._refuse_writes(captured, mock_hass)
+
+        with caplog.at_level(logging.WARNING):
+            await self._flip(captured)
+            delays = []
+            for _ in range(6):
+                delays.append(scheduled[-1]["delay"])
+                await self._fire_latest_recheck(scheduled, clock)
+
+        assert delays == [60, 120, 240, 300, 300, 300]
+        assert mock_hass.services.async_call.await_count == 7
+        backing_off = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "backing off" in r.getMessage()
+        ]
+        assert len(backing_off) == 1
+
+    @pytest.mark.asyncio
+    async def test_back_off_resets_once_a_correction_holds(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        """A correction that holds for the reset window ends the back-off: the
+        next isolated flip gets the normal 60 s guard again."""
+        captured, scheduled, clock = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        self._refuse_writes(captured, mock_hass)
+        await self._flip(captured)
+        for _ in range(3):
+            await self._fire_latest_recheck(scheduled, clock)
+        assert scheduled[-1]["delay"] == 300
+
+        # The Powerwall stops fighting: this re-check's write holds.
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        await self._fire_latest_recheck(scheduled, clock)
+        rechecks = len(scheduled)
+
+        clock["now"] += timedelta(minutes=10)
+        await self._flip(captured)
+        clock["now"] += timedelta(seconds=5)
+        await self._flip(captured)
+
+        assert mock_hass.services.async_call.await_count == 2
+        assert len(scheduled) == rechecks + 1
+        assert scheduled[-1]["delay"] == 55
+
+    @pytest.mark.asyncio
+    async def test_health_check_still_corrects_drift_during_a_bounce(
+        self,
+        state_machine,
+        mock_hass,
+        mock_battery_controller,
+        coordinator_data,
+        monkeypatch,
+    ):
+        """Review finding on #1230: each listener write stamped the health
+        check's cooldown, so during a bounce operation-mode or reserve drift
+        was never corrected. The health check keeps its own cadence."""
+        captured, scheduled, clock = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        self._refuse_writes(captured, mock_hass)
+        await self._flip(captured)
+        await self._fire_latest_recheck(scheduled, clock)
+        assert mock_hass.services.async_call.await_count == 2
+
+        # Operation mode has drifted as well; the health check's next tick.
+        clock["now"] += timedelta(minutes=1)
+        coordinator_data.operation_mode = "autonomous"
+        mock_battery_controller.verify_current_state = AsyncMock(return_value=False)
+        mock_battery_controller.set_self_consumption.reset_mock()
+
+        await state_machine._perform_health_check(coordinator_data)
+
+        mock_battery_controller.set_self_consumption.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "charge_mode", [BatteryMode.GRID_CHARGING, BatteryMode.BOOST_CHARGING]
+    )
+    @pytest.mark.asyncio
+    async def test_recheck_writes_nothing_once_the_mode_wants_grid_charging(
+        self,
+        state_machine,
+        mock_hass,
+        mock_battery_controller,
+        monkeypatch,
+        charge_mode,
+    ):
+        """A re-check scheduled in a non-charge mode must not turn grid
+        charging off if the commanded mode has since become a charge mode."""
+        captured, scheduled, clock = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        await self._flip(captured)
+        clock["now"] += timedelta(seconds=5)
+        await self._flip(captured)
+        assert len(scheduled) == 1
+
+        state_machine._commanded_mode = charge_mode
+        await self._fire_latest_recheck(scheduled, clock)
+
+        assert mock_hass.services.async_call.await_count == 1
+        assert len(scheduled) == 1
 
 
 # =============================================================================
