@@ -764,6 +764,8 @@ class StateReader:
         data.price_spike = self._read_bool(
             self._get_entity_id(CONF_PRICING_PRICE_SPIKE)
         )
+        flag = self._read_attribute(general_price_entity, "estimate")
+        data.price_estimate = flag if isinstance(flag, bool) else None
 
         # Issue #300: Read forecasts via pricing provider abstraction
         pricing_source = self.entry.data.get(

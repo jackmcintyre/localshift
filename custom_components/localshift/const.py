@@ -595,6 +595,12 @@ STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES = 5
 # Prevents false positives when Tesla API is still propagating state changes.
 STATE_MACHINE_TRANSITION_GRACE_SECONDS = 30
 
+# Issue #1159: no charge START in the price-boundary gap, i.e. the last
+# seconds of a 5-minute interval, or while the price sensor's `estimate` is
+# true, waiting at most MAX_WAIT seconds past the boundary.
+CHARGE_START_GATE_PRE_BOUNDARY_S = 30
+CHARGE_START_GATE_MAX_WAIT_S = 60
+
 # Coalesce entity state changes before running expensive reevaluation.
 STATE_CHANGE_COALESCE_SECONDS = 15
 

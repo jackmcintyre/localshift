@@ -106,6 +106,9 @@ class CoordinatorData:
     general_price: float = 0.0
     feed_in_price: float = 0.0
     price_spike: bool = False
+    # Issue #1159: the general price entity's `estimate` attribute (True until
+    # the interval's price is confirmed); None when the source has none.
+    price_estimate: bool | None = None
 
     # Shadow prices for A/B comparison (Issue #300)
     general_price_shadow: float = 0.0
@@ -532,6 +535,14 @@ class CoordinatorData:
     epoch would hand the facade a generic re-decision, and a plan whose slot-0 had
     wandered to spike_discharge would force-discharge the battery on a token
     granted because the plan wanted to charge. Transient; not persisted."""
+
+    mode_decision_charge_start_gated: bool = False
+    """Issue #1159: this grant falls in the price-boundary gap and may not START a
+    charge. Transient; not persisted."""
+
+    mode_decision_unspent: bool = False
+    """Issue #1159: the facade deferred a charge start on this grant, so the state
+    machine hands the token back. Transient; not persisted."""
 
     mode_decision_export_start_only: bool = False
     """True when this evaluation's decision token was granted *solely* because an

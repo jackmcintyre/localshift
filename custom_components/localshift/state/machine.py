@@ -15,6 +15,8 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BACKUP_RESERVE_MAX_VALID,
+    CHARGE_START_GATE_MAX_WAIT_S,
+    CHARGE_START_GATE_PRE_BOUNDARY_S,
     CONF_AWAY_RESERVE,
     CONF_BATTERY_TARGET,
     CONF_MANUAL_OVERRIDE_TIMEOUT,
@@ -69,6 +71,8 @@ _LOGGER = logging.getLogger(__name__)
 # flap-free (see _update_plan_charge_epoch).
 _CHARGE_MODES = (BatteryMode.GRID_CHARGING, BatteryMode.BOOST_CHARGING)
 _CHARGE_MODE_VALUES = frozenset(m.value for m in _CHARGE_MODES)
+# Issue #1159: grants the price-boundary charge-start gate never defers.
+_START_GATE_EXEMPT_SOURCES = frozenset({"spike", "demand_window", "soc_floor"})
 
 # Issue #508: modes whose physical battery response is observable in the
 # battery power sensor. Charging modes respond by drawing power (negative
@@ -219,6 +223,10 @@ class StateMachine:
         # _update_export_start_epoch).
         self._export_start_owed: bool = False
         self._export_start_epoch: int = 0
+        # Issue #1159: the token before this evaluation's grant, restored when the
+        # facade defers a charge start; the flag only tags the next grant.
+        self._pre_grant: tuple[Any, ...] = (None, None, None)
+        self._start_gate_refunded: bool = False
         self._MIN_CORRECTION_INTERVAL = timedelta(
             minutes=STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES
         )
@@ -1068,6 +1076,7 @@ class StateMachine:
                 # mode_decision_allowed / mode_backstop_allowed still True — leaving
                 # the out-of-lock recompute armed to force a charge.
                 computation_engine.compute_derived_values(data)
+                self._refund_deferred_charge_start(data)
                 self._refund_unspent_plan_charge(data)
                 self._note_export_start_deferral(data)
                 await self._evaluate_core(data, computation_engine)
@@ -1084,6 +1093,8 @@ class StateMachine:
                 data.mode_decision_allowed = False
                 data.mode_decision_plan_charge_only = False
                 data.mode_decision_export_start_only = False
+                data.mode_decision_charge_start_gated = False
+                data.mode_decision_unspent = False
                 data.mode_backstop_allowed = False
                 self._evaluation_task = None
                 if notify_func is not None:
@@ -1133,6 +1144,11 @@ class StateMachine:
         same_base = decision_allowed and context == self._last_evaluated_base
         export_start_only = same_base and export_epoch_moved
         plan_charge_only = same_base and (plan_epoch_moved or not export_epoch_moved)
+        self._pre_grant = (
+            self._last_evaluated_fingerprint,
+            self._last_evaluated_base,
+            self._pending_retry_mode,
+        )
         if decision_allowed:
             # Issue #510 slice 1 (measurement only): attribute the grant BEFORE
             # _last_evaluated_base is overwritten below — by transition time the
@@ -1158,6 +1174,19 @@ class StateMachine:
                 plan_charge_only,
                 export_start_only,
             )
+        data.mode_decision_charge_start_gated = (
+            decision_allowed
+            and self._last_grant_source not in _START_GATE_EXEMPT_SOURCES
+            and self._in_price_boundary_gap(data)
+        )
+        # Only the evaluation straight after a refund is its retry.
+        refunded, self._start_gate_refunded = self._start_gate_refunded, False
+        if (
+            decision_allowed
+            and refunded
+            and self._last_grant_source not in _START_GATE_EXEMPT_SOURCES
+        ):
+            self._last_grant_source = "charge_start_gate"
         self._plan_charge_grant_mode = (
             data.debug_plan_mode_pending if plan_epoch_moved else None
         )
@@ -1170,6 +1199,34 @@ class StateMachine:
         # compute_derived_values in coordinator.async_recompute_and_evaluate can
         # never trip it.
         data.mode_backstop_allowed = True
+
+    @staticmethod
+    def _in_price_boundary_gap(data: CoordinatorData) -> bool:
+        """The last seconds of a 5-minute interval, or an estimate up to the cap
+        past the boundary (#1159). A source with no estimate flag is never gated."""
+        if data.price_estimate is None:
+            return False
+        into_s = dt_util.now().timestamp() % 300
+        if into_s >= 300 - CHARGE_START_GATE_PRE_BOUNDARY_S:
+            return True
+        return data.price_estimate and into_s < CHARGE_START_GATE_MAX_WAIT_S
+
+    def _refund_deferred_charge_start(self, data: CoordinatorData) -> None:
+        """Hand back a token the facade did not spend (#1159).
+
+        The confirmed price can equal the estimate to 4 dp and move nothing, so
+        the pre-grant fingerprint is restored and the next evaluation grants.
+        """
+        if not data.mode_decision_unspent:
+            return
+        data.mode_decision_unspent = False
+        data.mode_decision_allowed = False
+        (
+            self._last_evaluated_fingerprint,
+            self._last_evaluated_base,
+            self._pending_retry_mode,
+        ) = self._pre_grant
+        self._start_gate_refunded = True
 
     def _refund_unspent_plan_charge(self, data: CoordinatorData) -> None:
         """Return the plan-charge budget when no charge was committed (#1172).
@@ -2431,6 +2488,7 @@ class StateMachine:
         """
         _LOGGER.info("Decision fingerprint invalidated: %s", reason)
         self._last_evaluated_fingerprint = None
+        self._start_gate_refunded = False
         # Cleared with it, or the next grant would be misattributed to the plan
         # ("same base as last time") and restricted to charge modes only.
         self._last_evaluated_base = None
