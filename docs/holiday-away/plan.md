@@ -67,7 +67,7 @@ from LocalShift too; a second writer would fight it.
 - Coverage stays at 95% or above.
 - Never commit to `main` or `test`.
 - Type hints on everything.
-- Don't deploy. Deploying is attended, through the `deploy-and-validate` skill.
+- Don't deploy. The HA host's pull deployer ships merges to `main`; the change goes live at the next HA restart.
 
 ## Acceptance
 
