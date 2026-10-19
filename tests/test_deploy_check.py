@@ -133,6 +133,160 @@ def test_changed_config_option_fails():
     assert "battery_target 95.0->80.0" in next(c.detail for c in checks if not c.ok)
 
 
+# --- intended changes (#1241) -------------------------------------------------
+# e4c166f shipped #1210, which dropped two validated Amber keys (health 70/70 ->
+# 68/68) and corrected the pricing_source readout ('amber' -> 'amber_express').
+# Both were intended, and the check failed both.
+
+
+def _detail(checks, name: str) -> str:
+    return next(c.detail for c in checks if c.name == name)
+
+
+def _e4c166f_pair():
+    before, after = _dump(), _dump()
+    before[dc.HEALTH]["state"] = "70/70"
+    after[dc.HEALTH]["state"] = "68/68"
+    before[dc.SUMMARY]["attributes"]["config_options"]["pricing_source"] = "amber"
+    after[dc.SUMMARY]["attributes"]["config_options"]["pricing_source"] = (
+        "amber_express"
+    )
+    return before, after
+
+
+PRICING_DECLARED = {"pricing_source": ("amber", "amber_express")}
+
+
+def test_health_total_change_passes_when_fully_healthy():
+    before, after = _e4c166f_pair()
+    checks = _run(before=before, after=after, expected_config=PRICING_DECLARED)
+    assert _failed(checks) == []
+    assert _detail(checks, "entity health") == "70/70 -> 68/68"
+
+
+@pytest.mark.parametrize("health", ["67/68", "0/68", "0/0", "68", "x/y"])
+def test_health_not_fully_healthy_fails(health):
+    before, after = _e4c166f_pair()
+    after[dc.HEALTH]["state"] = health
+    checks = _run(before=before, after=after, expected_config=PRICING_DECLARED)
+    assert _failed(checks) == ["entity health"]
+
+
+def test_health_0_of_0_after_is_still_not_settled():
+    before, after = _e4c166f_pair()
+    after[dc.HEALTH]["state"] = "0/0"
+    assert "no health tick" in dc.not_settled(before, after)
+
+
+def test_declared_config_change_passes():
+    before, after = _e4c166f_pair()
+    checks = _run(before=before, after=after, expected_config=PRICING_DECLARED)
+    assert _failed(checks) == []
+    assert _detail(checks, "config_options identical") == (
+        "expected: pricing_source 'amber'->'amber_express'"
+    )
+
+
+def test_undeclared_config_change_still_fails():
+    before, after = _e4c166f_pair()
+    assert _failed(_run(before=before, after=after)) == ["config_options identical"]
+    # A declaration for one key does not cover another.
+    after[dc.SUMMARY]["attributes"]["config_options"]["battery_target"] = 80.0
+    checks = _run(before=before, after=after, expected_config=PRICING_DECLARED)
+    assert _failed(checks) == ["config_options identical"]
+    assert _detail(checks, "config_options identical") == (
+        "changed: battery_target 95.0->80.0; "
+        "expected: pricing_source 'amber'->'amber_express'"
+    )
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        ("amber", "localvolts"),  # lands on a different value
+        ("localvolts", "amber_express"),  # starts from a different value
+    ],
+)
+def test_mismatched_declared_change_fails(declared):
+    before, after = _e4c166f_pair()
+    checks = _run(
+        before=before, after=after, expected_config={"pricing_source": declared}
+    )
+    assert _failed(checks) == ["config_options identical"]
+    detail = _detail(checks, "config_options identical")
+    assert detail.startswith("changed: pricing_source 'amber'->'amber_express'")
+    assert f"declared {declared[0]!r}->{declared[1]!r}" in detail
+
+
+def test_declared_change_that_did_not_happen_passes():
+    # Declared but not seen (e.g. the readout was already corrected): nothing
+    # changed, so the check stays "identical".
+    checks = _run(expected_config=PRICING_DECLARED)
+    assert _failed(checks) == []
+    assert _detail(checks, "config_options identical") == "identical"
+
+
+def test_allowed_config_change_passes_whatever_the_values():
+    before, after = _e4c166f_pair()
+    checks = _run(
+        before=before, after=after, allow_config_changes=frozenset({"pricing_source"})
+    )
+    assert _failed(checks) == []
+    assert _detail(checks, "config_options identical") == (
+        "allowed: pricing_source 'amber'->'amber_express'"
+    )
+
+
+def _write_expected(tmp_path, payload) -> "os.PathLike":
+    path = tmp_path / "expected-changes.json"
+    path.write_text(payload if isinstance(payload, str) else json.dumps(payload))
+    return path
+
+
+def test_load_expected_changes(tmp_path):
+    assert dc.load_expected_changes(tmp_path / "missing.json") == {}
+    path = _write_expected(
+        tmp_path,
+        {
+            "_readme": "ignored",
+            "config_options": {
+                "pricing_source": {"old": "amber", "new": "amber_express"},
+                "battery_target": {"old": 95.0, "new": None},
+            },
+        },
+    )
+    assert dc.load_expected_changes(path) == {
+        "pricing_source": ("amber", "amber_express"),
+        "battery_target": (95.0, None),
+    }
+    assert dc.load_expected_changes(_write_expected(tmp_path, {})) == {}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "{not json",
+        "[]",
+        {"config_options": []},
+        {"config_options": {"pricing_source": "amber_express"}},
+        {"config_options": {"pricing_source": {"new": "amber_express"}}},
+    ],
+)
+def test_malformed_expected_changes_is_refused(tmp_path, payload):
+    with pytest.raises(ValueError, match="expected-changes"):
+        dc.load_expected_changes(_write_expected(tmp_path, payload))
+
+
+def test_repo_expected_changes_file_is_valid():
+    # The deployer runs the check from its checkout of main: the committed file
+    # sits next to the script's repo root and must always parse.
+    assert dc.EXPECTED_CHANGES_FILE.is_file()
+    assert dc.EXPECTED_CHANGES_FILE.parent.parent == (
+        dc.Path(dc.__file__).resolve().parent.parent
+    )
+    dc.load_expected_changes(dc.EXPECTED_CHANGES_FILE)
+
+
 @pytest.mark.parametrize(
     ("entity", "state", "check"),
     [
@@ -336,6 +490,69 @@ def test_main_exit_codes(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(dc, "fetch_live_states", lambda: unticked)
     assert dc.main([*api, "--wait-settled", "0"]) == 1
     assert "judging anyway" in capsys.readouterr().out
+
+
+def test_main_reads_expected_changes_and_allow_flag(tmp_path, capsys, monkeypatch):
+    def write(name, ents):
+        path = tmp_path / name
+        path.write_text(
+            json.dumps({
+                "meta": {},
+                "groups": {"g": [{"entity_id": eid, **e} for eid, e in ents.items()]},
+            })
+        )
+        return path
+
+    before_ents, after_ents = _e4c166f_pair()
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log = tmp_path / "ha.log"
+    ls = "[custom_components.localshift.engine.optimizer_facade]"
+    log.write_text(
+        "\n".join(
+            f"{stamp}.000 INFO (MainThread) {ls} Pre-charge decision: x"
+            for _ in range(2)
+        )
+    )
+    base = [
+        "--before",
+        str(write("before.json", before_ents)),
+        "--after",
+        str(write("after.json", after_ents)),
+        "--log",
+        str(log),
+    ]
+
+    # Nothing declared (no file): the readout change fails.
+    monkeypatch.setattr(dc, "EXPECTED_CHANGES_FILE", tmp_path / "none.json")
+    assert dc.main(base) == 1
+    assert "FAIL  config_options identical" in capsys.readouterr().out
+
+    # The manual flag allows it, and is repeatable.
+    flags = ["--allow-config-change", "pricing_source"]
+    assert dc.main([*base, *flags, "--allow-config-change", "other"]) == 0
+    assert "allowed: pricing_source" in capsys.readouterr().out
+
+    # Declared in the repo file: the e4c166f ship passes.
+    declared = _write_expected(
+        tmp_path,
+        {
+            "config_options": {
+                "pricing_source": {"old": "amber", "new": "amber_express"}
+            }
+        },
+    )
+    monkeypatch.setattr(dc, "EXPECTED_CHANGES_FILE", declared)
+    assert dc.main(base) == 0
+    out = capsys.readouterr().out
+    assert "PASS  entity health" in out
+    assert "expected: pricing_source 'amber'->'amber_express'" in out
+
+    # A broken declaration file is a usage error, not a verdict.
+    _write_expected(tmp_path, "{not json")
+    with pytest.raises(SystemExit) as usage:
+        dc.main(base)
+    assert usage.value.code == 2
+    assert "expected-changes" in capsys.readouterr().err
 
 
 def _health(ents, statuses: dict[str, str]):
