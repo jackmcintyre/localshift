@@ -80,6 +80,9 @@ def _correction_is_due(machine) -> None:
     machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
     machine._last_health_correction = None
     machine.is_tesla_override_active = MagicMock(return_value=False)
+    # Issue #1208: the listener now honours dry run, which this fixture's
+    # all-on switch lambda would otherwise enable.
+    machine._get_switch_state = lambda key: key != "dry_run"
 
 
 async def test_reactive_grid_charging_correction_writes_when_running(machine):

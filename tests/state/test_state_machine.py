@@ -1765,33 +1765,6 @@ class TestGridChargingListener:
         )
 
     @pytest.mark.asyncio
-    async def test_reactive_correction_respects_cooldown(
-        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
-    ):
-        """Listener should skip correction when health-check cooldown is active."""
-        from datetime import datetime, timedelta
-
-        from custom_components.localshift.const import BatteryMode
-
-        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
-        mock_battery_controller._get_entity_id.return_value = (
-            "switch.my_home_allow_charging_from_grid"
-        )
-        # Set last correction to 1 minute ago (within 5-min cooldown)
-        now = datetime.now(UTC)
-        state_machine._last_health_correction = now - timedelta(minutes=1)
-
-        mock_hass.services.async_call = AsyncMock(return_value=True)
-        mock_hass.async_create_task = asyncio.create_task
-        captured = self._patch_track(monkeypatch)
-        state_machine.start_grid_charging_listener(mock_hass)
-
-        captured["callback"](self._make_event("on"))
-        await asyncio.sleep(0)
-
-        mock_hass.services.async_call.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_reactive_correction_skips_when_tesla_override_active(
         self, state_machine, mock_hass, mock_battery_controller, monkeypatch
     ):
@@ -1952,6 +1925,207 @@ class TestGridChargingListener:
             i for i, m in enumerate(messages) if "re-enabled while in" in m
         )
         assert messages.index(attribution[0]) < warning_idx
+
+
+class TestGridChargingListenerCooldown:
+    """Issue #1208: the listener must not drop a flip inside the cooldown.
+
+    It used to share the health check's 5-minute cooldown, so a second flip
+    arriving inside it (the second of a pair, or after a reserve correction)
+    was dropped and the switch stayed on until the health check caught it.
+    """
+
+    _MACHINE_TRACK = TestGridChargingListener._MACHINE_TRACK
+    _patch_track = TestGridChargingListener._patch_track
+    _make_event = TestGridChargingListener._make_event
+    _ENTITY = "switch.my_home_allow_charging_from_grid"
+    _MACHINE_CALL_LATER = "custom_components.localshift.state.machine.async_call_later"
+    _MACHINE_NOW = "custom_components.localshift.state.machine.dt_util.now"
+
+    def _arm(self, state_machine, mock_hass, mock_battery_controller, monkeypatch):
+        """Listener registered in self_consumption with a controllable clock."""
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        mock_battery_controller._get_entity_id.return_value = self._ENTITY
+        mock_battery_controller._read_bool.return_value = True
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        mock_hass.async_create_task = asyncio.create_task
+        captured = self._patch_track(monkeypatch)
+        scheduled = []
+
+        def _fake_call_later(hass, delay, action):
+            cancel = MagicMock()
+            scheduled.append({"delay": delay, "action": action, "cancel": cancel})
+            return cancel
+
+        monkeypatch.setattr(self._MACHINE_CALL_LATER, _fake_call_later)
+        clock = {"now": datetime(2026, 1, 1, tzinfo=UTC)}
+        monkeypatch.setattr(self._MACHINE_NOW, lambda: clock["now"])
+        state_machine.start_grid_charging_listener(mock_hass)
+        return captured, scheduled, clock
+
+    async def _flip(self, captured):
+        captured["callback"](self._make_event("on"))
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_flip_inside_health_check_cooldown_is_corrected(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        """A health-check correction a minute ago no longer blocks the listener."""
+        captured, _, clock = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        state_machine._last_health_correction = clock["now"] - timedelta(minutes=1)
+
+        await self._flip(captured)
+
+        mock_hass.services.async_call.assert_called_once_with(
+            "switch", "turn_off", {"entity_id": self._ENTITY}, blocking=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_second_flip_of_a_pair_is_corrected_promptly(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        """The live pattern: a second flip just inside 5 minutes of the first."""
+        captured, scheduled, clock = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+
+        await self._flip(captured)
+        clock["now"] += timedelta(minutes=4, seconds=59)
+        await self._flip(captured)
+
+        assert mock_hass.services.async_call.await_count == 2
+        assert scheduled == []
+        # The health check still backs off after a listener correction.
+        assert state_machine._last_health_correction == clock["now"]
+
+    @pytest.mark.asyncio
+    async def test_bounce_inside_listener_guard_is_rechecked_once(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        """A Powerwall that refuses the write (switch bounces straight back on)
+        gets one deferred re-check per guard interval, never a tight loop."""
+        captured, scheduled, clock = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+
+        async def _refuse(*_args, **_kwargs):
+            captured["callback"](self._make_event("on"))
+            return True
+
+        mock_hass.services.async_call = AsyncMock(side_effect=_refuse)
+
+        await self._flip(captured)
+        clock["now"] += timedelta(seconds=5)
+        await self._flip(captured)
+        await self._flip(captured)
+
+        assert mock_hass.services.async_call.await_count == 1
+        assert len(scheduled) == 1
+        assert 0 < scheduled[0]["delay"] <= 60
+
+        clock["now"] += timedelta(seconds=scheduled[0]["delay"])
+        scheduled[0]["action"](clock["now"])
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        assert mock_hass.services.async_call.await_count == 2
+        assert len(scheduled) == 2
+
+    @pytest.mark.asyncio
+    async def test_failed_write_is_not_retried_by_the_listener(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        """A write that raises leaves the retry to the health check."""
+        captured, scheduled, _ = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        mock_hass.services.async_call = AsyncMock(side_effect=RuntimeError("refused"))
+
+        await self._flip(captured)
+
+        assert mock_hass.services.async_call.await_count == 1
+        assert scheduled == []
+
+    @pytest.mark.asyncio
+    async def test_recheck_writes_nothing_once_the_switch_is_off(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        captured, scheduled, clock = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        await self._flip(captured)
+        clock["now"] += timedelta(seconds=5)
+        await self._flip(captured)
+        assert len(scheduled) == 1
+
+        mock_battery_controller._read_bool.return_value = False
+        clock["now"] += timedelta(minutes=1)
+        scheduled[0]["action"](clock["now"])
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        assert mock_hass.services.async_call.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_flip_during_manual_write_in_flight_is_not_corrected(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        """Issue #1160 guard holds for the flip and for a deferred re-check."""
+        captured, scheduled, clock = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        with state_machine.manual_mode_write():
+            await self._flip(captured)
+        mock_hass.services.async_call.assert_not_called()
+
+        await self._flip(captured)
+        clock["now"] += timedelta(seconds=5)
+        await self._flip(captured)
+        assert len(scheduled) == 1
+
+        clock["now"] += timedelta(minutes=1)
+        with state_machine.manual_mode_write():
+            scheduled[0]["action"](clock["now"])
+            for _ in range(3):
+                await asyncio.sleep(0)
+
+        assert mock_hass.services.async_call.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dry_run_writes_nothing(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        captured, scheduled, _ = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        state_machine._get_switch_state = lambda key: key == "dry_run"
+
+        await self._flip(captured)
+        await self._flip(captured)
+
+        mock_hass.services.async_call.assert_not_called()
+        assert scheduled == []
+
+    @pytest.mark.asyncio
+    async def test_unload_cancels_a_scheduled_recheck(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        captured, scheduled, clock = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        await self._flip(captured)
+        clock["now"] += timedelta(seconds=5)
+        await self._flip(captured)
+        assert len(scheduled) == 1
+
+        state_machine.stop_grid_charging_listener()
+
+        scheduled[0]["cancel"].assert_called_once()
+        assert state_machine._grid_charging_recheck is None
 
 
 # =============================================================================
