@@ -591,6 +591,19 @@ OPTIMIZER_FORECAST_FRESHNESS_MINUTES = 30
 # Prevents command spam when Teslemetry cloud lags in reflecting a legitimate transition.
 STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES = 5
 
+# Issue #1208: the grid-charging listener's own guard, separate from the
+# health check's cooldown so a fresh reversion is never dropped. A flip inside
+# it is re-checked once when it expires, which bounds listener writes.
+GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS = 60
+# A reversion within the reset window of the listener's last correction is a
+# bounce: the guard (and so the re-check delay) doubles, capped at the health
+# check's correction cooldown. A correction that holds for the whole window
+# resets the guard to the minimum.
+GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS = (
+    STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES * 60
+)
+GRID_CHARGING_LISTENER_BACKOFF_RESET_SECONDS = 600
+
 # Grace period after successful transition before health checks trigger corrections.
 # Prevents false positives when Tesla API is still propagating state changes.
 STATE_MACHINE_TRANSITION_GRACE_SECONDS = 30

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from homeassistant.core import Event, callback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
 from ..const import (
@@ -28,6 +28,9 @@ from ..const import (
     EXPORT_INVERSION_CONFIRM_SECONDS,
     EXPORT_INVERSION_HOLDOFF_MINUTES,
     EXPORT_INVERSION_POWER_KW,
+    GRID_CHARGING_LISTENER_BACKOFF_RESET_SECONDS,
+    GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS,
+    GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS,
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT,
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT,
     PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
@@ -161,6 +164,10 @@ class StateMachine:
         self._last_health_correction: datetime | None = None
         # Listener for reactive grid_charging correction (#491)
         self._grid_charging_listener: Callable | None = None
+        # Issue #1208: the listener's own guard and its one pending re-check.
+        self._last_listener_correction: datetime | None = None
+        self._grid_charging_recheck: Callable | None = None
+        self._listener_guard_seconds: int = GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS
         # Issue #510 slice 1: one-shot tag for transitions issued outside the
         # decision path (Tesla re-probe, health-check correction). Set immediately
         # before the call, cleared immediately after — never left armed.
@@ -2549,8 +2556,8 @@ class StateMachine:
 
         The listener corrects the switch immediately when Teslemetry's hourly
         cloud sync re-enables grid charging while LocalShift expects it off.
-        The 5-minute cooldown on ``_last_health_correction`` is shared with
-        the periodic health check so corrections do not thrash.
+        Issue #1208: it has its own short guard rather than the health
+        check's cooldown; see ``_reactive_correct_grid_charging``.
         """
         if self._grid_charging_listener is not None:
             return
@@ -2595,6 +2602,9 @@ class StateMachine:
 
     def stop_grid_charging_listener(self) -> None:
         """Unregister the reactive grid_charging state listener."""
+        if self._grid_charging_recheck is not None:
+            self._grid_charging_recheck()
+            self._grid_charging_recheck = None
         if self._grid_charging_listener is not None:
             self._grid_charging_listener()
             self._grid_charging_listener = None
@@ -2603,15 +2613,17 @@ class StateMachine:
     async def _reactive_correct_grid_charging(self, hass: Any, entity_id: str) -> None:
         """Turn off grid_charging when it was re-enabled unexpectedly.
 
-        Respects the same cooldown as the health check and skips when a
-        Tesla override is active.
+        Issue #1208: not gated by the health check's cooldown, which dropped
+        the second flip of a pair, and it does not stamp that cooldown either,
+        so the health check keeps correcting mode and reserve drift on its own
+        cadence. A flip inside the listener's own guard is re-checked once
+        when the guard expires; the guard doubles while the switch keeps
+        reverting, up to the health check's cooldown (see
+        ``_advance_listener_guard``). Skips when a Tesla override is active,
+        in dry run, or while a write is in flight (#1160).
         """
         now = dt_util.now()
-        if (
-            self._last_health_correction is not None
-            and now - self._last_health_correction < self._MIN_CORRECTION_INTERVAL
-        ):
-            _LOGGER.debug("[GRID CHARGING LISTENER] Correction blocked by cooldown")
+        if self._in_mode_transition or self._get_switch_state("dry_run"):
             return
         if self.is_tesla_override_active():
             _LOGGER.debug("[GRID CHARGING LISTENER] Skipping — Tesla override active")
@@ -2624,6 +2636,14 @@ class StateMachine:
             BatteryMode.HOLD,
         ):
             return
+        last = self._last_listener_correction
+        guard = timedelta(seconds=self._listener_guard_seconds)
+        if last is not None and now - last < guard:
+            self._schedule_grid_charging_recheck(
+                hass, entity_id, (guard - (now - last)).total_seconds()
+            )
+            return
+        self._advance_listener_guard(now)
 
         _LOGGER.warning(
             "[GRID CHARGING LISTENER] Grid charging re-enabled while in "
@@ -2645,4 +2665,58 @@ class StateMachine:
                 exc,
                 exc_info=True,
             )
-        self._last_health_correction = now
+        self._last_listener_correction = now
+
+    def _advance_listener_guard(self, now: datetime) -> None:
+        """Back the listener's guard off while grid charging keeps reverting.
+
+        Review on #1230: a Powerwall that turns the switch straight back on
+        would otherwise be corrected every minute indefinitely. A reversion
+        within the reset window of the last correction doubles the guard, up
+        to the health check's correction cooldown; one that comes after a
+        correction held for the whole window resets it. Only reaching the cap
+        is a sustained bounce worth a WARNING (once per episode); the hourly
+        cloud pair (#1208) doubles the guard once and logs at DEBUG.
+        """
+        last = self._last_listener_correction
+        reset = timedelta(seconds=GRID_CHARGING_LISTENER_BACKOFF_RESET_SECONDS)
+        if last is None or now - last >= reset:
+            self._listener_guard_seconds = GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS
+            return
+        previous = self._listener_guard_seconds
+        self._listener_guard_seconds = min(
+            previous * 2, GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS
+        )
+        if self._listener_guard_seconds == previous:
+            return
+        if self._listener_guard_seconds < GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS:
+            _LOGGER.debug(
+                "[GRID CHARGING LISTENER] Reverted again; re-check guard now %ds",
+                self._listener_guard_seconds,
+            )
+            return
+        _LOGGER.warning(
+            "[GRID CHARGING LISTENER] Grid charging keeps reverting; "
+            "backed off to one correction every %ds until a correction "
+            "holds for %ds",
+            GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS,
+            GRID_CHARGING_LISTENER_BACKOFF_RESET_SECONDS,
+        )
+
+    def _schedule_grid_charging_recheck(
+        self, hass: Any, entity_id: str, delay: float
+    ) -> None:
+        """Re-check the switch once the listener's guard expires (#1208)."""
+        if self._grid_charging_recheck is not None:
+            return
+        _LOGGER.debug("[GRID CHARGING LISTENER] Re-checking in %.0fs", delay)
+
+        @callback
+        def _recheck(_now: datetime) -> None:
+            self._grid_charging_recheck = None
+            if self._battery_controller._read_bool(entity_id):  # noqa: SLF001
+                hass.async_create_task(
+                    self._reactive_correct_grid_charging(hass, entity_id)
+                )
+
+        self._grid_charging_recheck = async_call_later(hass, delay, _recheck)
