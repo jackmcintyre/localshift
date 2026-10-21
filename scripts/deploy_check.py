@@ -19,6 +19,14 @@ the log is fetched over the API: the network share keeps serving cached pages
 of the previous log for minutes after a restart, so a file read there can
 show the old restart time and a planner that looks stopped.
 
+Projected DW entry normally compares the two dumps within a tolerance. A ship
+staged before a demand window and restarted after it projects two different
+windows, so when both dumps carry dw_entry_actual_at and the after value is
+later, the check passes as "different window" unless the after projection is
+below dw_entry_actual_target_pct minus the tolerance. A missing or unparseable
+dw_entry_actual_at (an ISO timestamp with an offset is required) keeps the plain
+comparison.
+
 Entity health passes when every validated entity is healthy ("N/N", N > 0).
 Its total may differ from the before dump: a change can add or drop validated
 entities on purpose, and a lost entity already fails "entities present".
@@ -54,6 +62,7 @@ Usage
   --allow-config-change KEY    a config option the change alters on purpose (repeatable;
                                manual runs, see "Intended config changes")
   --allow-dw-entry-move        the change is meant to move the projected entry
+                               (a different window between the dumps passes without it)
   --expect-recompile           code was copied: every compiled file must post-date the restart
   --wait-settled SECONDS       re-fetch the after state every 20 s until settled,
                                then judge (cannot be combined with --log)
@@ -372,6 +381,16 @@ def check_plan(before, after, allow_dw_entry_move: bool) -> list[Check]:
                 f"{dw_before} -> {dw_after} (move allowed)",
             )
         )
+    elif _window_passed_between(before, after):
+        # The projections refer to different windows, so they are not
+        # comparable. Hold the next window to its own target instead.
+        target = _as_float(summary.get("dw_entry_actual_target_pct"))
+        floor = None if target is None else target - DW_ENTRY_TOLERANCE_PCT
+        below = dw_after is not None and floor is not None and dw_after < floor
+        detail = f"different window: before {dw_before}, after {dw_after}"
+        if below:
+            detail += f" (below target {target} - {DW_ENTRY_TOLERANCE_PCT})"
+        checks.append(Check("projected DW entry", not below, detail))
     else:
         # Both null is legitimate: no demand window left in the horizon.
         dw_ok = (dw_before is None and dw_after is None) or (
@@ -381,6 +400,26 @@ def check_plan(before, after, allow_dw_entry_move: bool) -> list[Check]:
         )
         checks.append(Check("projected DW entry", dw_ok, f"{dw_before} -> {dw_after}"))
     return checks
+
+
+def _entry_time(value) -> datetime | None:
+    """An ISO timestamp with an offset, or None when it is not one."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _window_passed_between(before, after) -> bool:
+    """Did a demand window entry happen between the two dumps?
+
+    The dumps then project different windows. Anything unparseable or missing
+    counts as no: the plain comparison applies.
+    """
+    at_before = _entry_time(_attrs(before, SUMMARY).get("dw_entry_actual_at"))
+    at_after = _entry_time(_attrs(after, SUMMARY).get("dw_entry_actual_at"))
+    return at_before is not None and at_after is not None and at_after > at_before
 
 
 def _log_time(line: str) -> datetime | None:
