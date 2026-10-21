@@ -39,6 +39,93 @@ All of the above release automatically, within one cycle, when the away entity t
 
 ---
 
+## Signals for other automations
+
+Other Home Assistant automations (a flexible-load queue, climate rules, anything that wants to run a load when energy is cheap) may consume LocalShift only through the small, documented set of signals below. They never read price feeds or LocalShift's plan internals. In the other direction, LocalShift reads only a short list of generic household inputs.
+
+`tests/test_signal_contract.py` keeps this section honest: it fails if an entity listed under "Available now" is removed or renamed, or if an attribute documented for one stops being published.
+
+### Published, stable signals
+
+**Stability promise.** For every signal listed under "Available now", the entity id, the meaning of the state values and the attributes documented here are stable. Attributes are only ever added. An entity id, a state value or an attribute is never renamed or removed without a deprecation note in this section first, stating what replaces it and when it goes. Anything not listed here is internal and may change at any time.
+
+**Cadence, for all of them.** The signals are recomputed on each evaluation cycle: at least once a minute, and sooner when a monitored input changes. No evaluation runs during the startup grace period after a restart, so until the first cycle completes they read their defaults (`HOLD` and `off`).
+
+**Unavailable and unknown.** LocalShift does not mark these entities unavailable when its own inputs are missing; it publishes `HOLD` (or `off`) instead. Home Assistant shows `unavailable` or `unknown` only while the integration is not loaded (for example during a restart or if it is disabled). A consumer should treat `unavailable` and `unknown` exactly like `HOLD`: do nothing that depends on the signal.
+
+#### Available now
+
+##### `sensor.localshift_load_shift_signal`
+
+**Meaning:** Whether the house can add or should shed discretionary load right now without causing grid charging before the demand window.
+
+**State:** one of `INCREASE_LOAD`, `MAINTAIN_LOAD`, `REDUCE_LOAD`, `HOLD`. The value set is part of the contract; new values will not be added without a deprecation note.
+
+| State | Meaning |
+|-------|---------|
+| `INCREASE_LOAD` | Excess solar is available and there is headroom to add load (`safe_additional_load_kw` above 0.5 and no `grid_charge_risk`). |
+| `MAINTAIN_LOAD` | Current balance is fine; no change wanted. |
+| `REDUCE_LOAD` | The current load alone is forecast to need grid charging before the demand window (`grid_charge_risk` is true). |
+| `HOLD` | No usable signal: the demand window is active, manual override is on, no solar forecast is available for today, or LocalShift has not completed its first evaluation. Make no load decision from it. |
+
+| Attribute | Units / values | Meaning |
+|-----------|----------------|---------|
+| `recommended_additional_kw` | kW, rounded to 0.1 | Suggested change in load: positive on `INCREASE_LOAD`, `-1.0` on `REDUCE_LOAD`, `0.0` otherwise. |
+| `recommended_duration_minutes` | minutes | How long the recommendation is expected to hold; `0` when there is no recommendation. |
+| `signal_reason` | text | Human-readable explanation. For display only; the wording may change, so do not parse it. |
+| `signal_confidence` | `low`, `medium` or `high` | How much to trust the signal. |
+| `current_excess_rate_kw` | kW, rounded to 0.01 | Solar power currently surplus to the house load. |
+| `grid_charge_risk` | `true` / `false` | The current load, with nothing added, is forecast to need grid charging before the demand window. Derived from the forecast, never from battery state of charge alone. |
+| `safe_additional_load_kw` | kW, `0.0` to `5.0` | The largest extra continuous load tested (steps of 0.5 kW up to 4.0, then 5.0) that would not cause grid charging before the demand window. It assumes the load runs from now until the demand window starts, so it can read `0.0` for long stretches overnight. `5.0` means "5 kW or more". |
+
+##### `binary_sensor.localshift_excess_solar_available`
+
+**Meaning:** A simple on/off trigger: there is surplus solar, the battery is full or charging, and adding load is safe.
+
+**State:** `on` only when all of these hold: solar output exceeds house load by more than 0.5 kW; the battery is above 80% or charging; more than 0.5 kWh of excess solar is forecast over the next two hours; `safe_additional_load_kw` is above 0.5; there is no `grid_charge_risk`; the demand window is not active; manual override is off. Otherwise `off`. There is no separate "unknown" state from LocalShift itself.
+
+| Attribute | Units / values | Meaning |
+|-----------|----------------|---------|
+| `current_excess_kw` | kW, rounded to 0.01 | Solar power currently surplus to the house load. |
+| `battery_soc` | percent, rounded to 0.1 | Battery state of charge. |
+| `battery_charging` | `true` / `false` | The battery is charging. |
+| `can_add_load_now` | `true` / `false` | The forecast and safety part of the conditions above (two-hour excess, headroom, no grid-charge risk, demand window not active, no manual override), without the live solar and battery checks. |
+| `safe_additional_load_kw` | kW, `0.0` to `5.0` | Same figure as on `sensor.localshift_load_shift_signal`. |
+
+##### `binary_sensor.localshift_demand_window`
+
+**Meaning:** Whether LocalShift currently treats the demand window as active. Other automations should avoid starting discretionary load while it is `on`.
+
+**State:** `on` when the `switch.localshift_demand_window_block` switch is on and the current time is inside the demand window; `off` otherwise. The window comes from the configured start and end times, or from the pricing provider's own flag when `switch.localshift_demand_window_from_amber` is on. Because of the block switch, `off` does not guarantee a demand window is not running; it means LocalShift is not blocking for one. No attributes.
+
+#### Planned (not available yet)
+
+These are decided or proposed but do not exist. Do not build on them until they move to "Available now".
+
+| Signal | Status |
+|--------|--------|
+| `localshift.book_load` and `localshift.cancel_load` services | Planned. [#1237](https://github.com/jackmcintyre/localshift/issues/1237) (book, persist and pick a start), [#1238](https://github.com/jackmcintyre/localshift/issues/1238) (choose start times from the plan, stagger bookings, honour the demand window), [#1239](https://github.com/jackmcintyre/localshift/issues/1239) (re-plan unstarted bookings, lock started ones). |
+| Per-booking sensor (`start_at`, `finish_by`, `est_kwh`, `status`, `reason`) | Planned in [#1237](https://github.com/jackmcintyre/localshift/issues/1237). The house books a load and reads `start_at`; it never chooses times itself. If LocalShift is unavailable, the house starts the load by `latest_finish - duration`. |
+
+Not planned: a duration-aware headroom figure ([#1235](https://github.com/jackmcintyre/localshift/issues/1235)) and a per-slot marginal-cost sensor ([#1236](https://github.com/jackmcintyre/localshift/issues/1236)) were both closed as superseded by the booking direction above, so they are not part of the contract.
+
+#### Not part of the contract
+
+The plan and forecast sensors, `optimizer_plan*` (for example `sensor.localshift_optimizer_plan`) and `forecast_*` (for example `sensor.localshift_forecast_prices`), are explicitly not part of the contract. They are LocalShift's working state: their shape, attributes and cadence change with the planner, and no stability promise applies. Every other entity not listed under "Available now" is likewise outside the contract.
+
+### Consumed from the house
+
+LocalShift reads exactly two things from the wider house. Both are optional and set in the integration's options.
+
+| Input | Option key | What LocalShift expects | What it does with it |
+|-------|-----------|-------------------------|----------------------|
+| Away flag | `away_entity` | Any on/off entity (any domain) that is `on` while the house is empty. Unset by default. | Switches the load forecast to the house's away profile and raises the backup reserve while it is on. See [Away Mode](#away-mode-holiday-mode). An unreadable entity holds the last known state. |
+| Weather | `weather_entity` | A Home Assistant `weather` entity. Unset by default. | Its current condition and temperature, plus its forecast from the `weather.get_forecasts` service, feed the temperature-based load prediction. Skipped while the away flag is on. Unset or unavailable means no weather adjustment. |
+
+Nothing else is read from the house. Everything else LocalShift reads is energy-side: the battery and inverter, grid and solar power, electricity prices and the solar forecast.
+
+---
+
 ## Entity Categories
 
 Issue #787: every entity's Home Assistant `entity_category`, kept in sync with
