@@ -342,6 +342,102 @@ def test_dw_entry_absent_on_both_sides_passes():
     assert _failed(_run(before=before, after=after)) == []
 
 
+def _set_dw(ents, soc, actual_at, target=95.0):
+    attrs = ents[dc.SUMMARY]["attributes"]
+    attrs["dw_entry_soc_pct"] = soc
+    attrs["dw_entry_actual_at"] = actual_at
+    attrs["dw_entry_actual_target_pct"] = target
+
+
+def _projected_dw(checks) -> dc.Check:
+    return next(c for c in checks if c.name == "projected DW entry")
+
+
+def test_dw_entry_different_window_passes_as_informational():
+    # 21 Oct: the before dump projected that afternoon's window (100.0); the
+    # window happened, and the evening after dump projects the next day's.
+    before, after = _dump(), _dump()
+    _set_dw(before, 100.0, "2026-10-20T14:55:00+11:00")
+    _set_dw(after, 96.83, "2026-10-21T14:55:00+11:00")
+    checks = _run(before=before, after=after)
+    assert _failed(checks) == []
+    assert "different window: before 100.0, after 96.83" in _projected_dw(checks).detail
+
+
+def test_dw_entry_different_window_fails_when_after_under_target():
+    before, after = _dump(), _dump()
+    _set_dw(before, 100.0, "2026-10-20T14:55:00+11:00")
+    _set_dw(after, 80.0, "2026-10-21T14:55:00+11:00", target=95.0)
+    checks = _run(before=before, after=after)
+    assert _failed(checks) == ["projected DW entry"]
+    detail = _projected_dw(checks).detail
+    assert "different window" in detail
+    assert "below target" in detail
+
+
+def test_dw_entry_different_window_within_tolerance_of_target_passes():
+    before, after = _dump(), _dump()
+    _set_dw(before, 100.0, "2026-10-20T14:55:00+11:00")
+    _set_dw(after, 92.0, "2026-10-21T14:55:00+11:00", target=95.0)
+    assert _failed(_run(before=before, after=after)) == []
+
+
+def test_dw_entry_different_window_without_projection_passes():
+    before, after = _dump(), _dump()
+    _set_dw(before, 100.0, "2026-10-20T14:55:00+11:00")
+    _set_dw(after, None, "2026-10-21T14:55:00+11:00")
+    assert _failed(_run(before=before, after=after)) == []
+
+
+def test_dw_entry_different_window_without_target_passes():
+    before, after = _dump(), _dump()
+    _set_dw(before, 100.0, "2026-10-20T14:55:00+11:00")
+    _set_dw(after, 50.0, "2026-10-21T14:55:00+11:00", target=None)
+    assert _failed(_run(before=before, after=after)) == []
+
+
+def test_dw_entry_same_window_drop_beyond_tolerance_still_fails():
+    before, after = _dump(), _dump()
+    _set_dw(before, 100.0, "2026-10-21T14:55:00+11:00")
+    _set_dw(after, 80.0, "2026-10-21T14:55:00+11:00")
+    checks = _run(before=before, after=after)
+    assert _failed(checks) == ["projected DW entry"]
+    assert "different window" not in _projected_dw(checks).detail
+
+
+def test_dw_entry_different_window_ignored_when_move_allowed():
+    before, after = _dump(), _dump()
+    _set_dw(before, 100.0, "2026-10-20T14:55:00+11:00")
+    _set_dw(after, 80.0, "2026-10-21T14:55:00+11:00")
+    assert _failed(_run(before=before, after=after, allow_dw_entry_move=True)) == []
+
+
+@pytest.mark.parametrize(
+    ("before_at", "after_at"),
+    [
+        (None, "2026-10-21T14:55:00+11:00"),
+        ("2026-10-20T14:55:00+11:00", None),
+        ("not a time", "2026-10-21T14:55:00+11:00"),
+        ("2026-10-20T14:55:00+11:00", "garbage"),
+        ("2026-10-20T14:55:00", "2026-10-21T14:55:00+11:00"),
+        (1234, "2026-10-21T14:55:00+11:00"),
+    ],
+)
+def test_dw_entry_unusable_window_marker_keeps_old_behaviour(before_at, after_at):
+    before, after = _dump(), _dump()
+    _set_dw(before, 100.0, before_at)
+    _set_dw(after, 96.83, after_at)
+    # 100.0 -> 96.83 is a 3.17 point drop: fails exactly as before this change.
+    assert _failed(_run(before=before, after=after)) == ["projected DW entry"]
+
+
+def test_dw_entry_after_marker_not_later_is_same_window():
+    before, after = _dump(), _dump()
+    _set_dw(before, 100.0, "2026-10-21T14:55:00+11:00")
+    _set_dw(after, 96.83, "2026-10-21T03:55:00+00:00")  # same instant
+    assert _failed(_run(before=before, after=after)) == ["projected DW entry"]
+
+
 def test_error_line_fails():
     log = _log() + [
         "2026-10-14 10:20:20.000 ERROR (MainThread) [custom_components.localshift.coordinator] boom"
