@@ -215,7 +215,7 @@ Daily snapshots are stored per hour. Each day's data is one `DailySnapshot` cont
 ```json
 {
     "version": 2,
-    "weather_entity_id": "weather.crows_nest_hourly",
+    "weather_entity_id": "weather.home_hourly",
     "cooling_threshold": 24.0,
     "heating_threshold": 18.0,
     "daily_regression_stats": {

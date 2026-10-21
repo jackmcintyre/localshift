@@ -2,16 +2,15 @@
 
 The spec for the LocalShift half of the house's holiday mode, decided by Jack on 24 Sep 2026.
 
-**Source of truth: the house's holiday-mode plan artifact,
-https://claude.ai/artifact/EX4kS2inMAm1FE8G6Ltp2F** (slice 5 and its LocalShift section). The
-build copies are `docs/holiday/slice-5-localshift.md` in the `homeassistant-100h` repo and
+**Source of truth: the house's holiday-mode plan artifact** (slice 5 and its LocalShift section). The
+build copies are `docs/holiday/slice-5-localshift.md` in the house's Home Assistant repo and
 `docs/holiday-away/plan.md` in the LocalShift worktree. When they differ, the artifact wins:
 change it there first, then here.
 
 ## Why
 
 LocalShift forecasts load from the mean of 28 days (`HISTORY_WINDOW_DAYS` in `const.py`) of
-`sensor.my_home_load_power` statistics, per hour and per day of week. That's about four samples
+`sensor.home_load_power` statistics, per hour and per day of week. That's about four samples
 per weekday hour (`forecast/history.py`). Live load only blends in for about three hours ahead,
 with a decay factor of 0.8 per hour (`forecast/load.py`). Weather correlation uses a 30-day
 sliding window (`learning/correlation.py`, `SLIDING_WINDOW_DAYS`). Nothing knows the house is
@@ -28,7 +27,7 @@ empty, which causes two problems:
 
 The house also wants a bigger backup reserve while away, so an outage at night doesn't take the
 cameras, network and HA down with it. LocalShift already owns the reserve: it steers the
-Powerwall through `number.my_home_backup_reserve` (`integration/controller.py`). Self-consumption
+Powerwall through `number.home_backup_reserve` (`integration/controller.py`). Self-consumption
 sets 10% (or `preserve_soc`), and force charge sets the target. So the away reserve must come
 from LocalShift too; a second writer would fight it.
 
