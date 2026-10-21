@@ -137,7 +137,7 @@ All bypass attempts and recovery actions are logged to `.git-bypass.log` in the 
 1. Create worktree for each task: `git worktree add worktrees/issue-{NNN} -b issue/{NNN}`
 2. Work in the worktree directory
 3. Commit and push from the issue branch
-4. Create pull request targeting `test` (for testing) or `main` (for production)
+4. Create pull request targeting `main`
 5. Merge via GitHub UI after approval
 
 ### ❌ DON'T:

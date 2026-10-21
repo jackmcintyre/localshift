@@ -35,24 +35,22 @@ git worktree list
 
 ## ⚠️ PR Creation from Worktrees
 
-**All feature PRs from worktrees MUST target `test`, not `main`.**
+**All PRs from worktrees target `main`.**
 
 When your work is complete and you're asked to create a PR:
 
 ```bash
-# From your worktree, create PR targeting test branch
-gh pr create --base test --title "..."
+# From your worktree, create PR targeting main
+gh pr create --base main --title "..."
 ```
 
-**Why test by default:**
-- Changes are validated in live Home Assistant before production
-- Enables watch mode for rapid iteration
-- Catches integration issues early
+**Why main:**
+- `main` is the only integration branch: every merged PR is based on it
+- The `main` ruleset requires the owner's review plus passing CI
+- Merges to `main` auto-ship via the HA host's pull deployer; there is no separate staging step
+- Agents never commit to `main` or `test` directly: always work in a worktree branch and open a PR
 
-**Only target `main` if:**
-- User explicitly requests direct-to-main
-- Hotfix requiring immediate production deployment
-- Documentation-only with no code changes
+The `test` branch is not a PR target. Leave it alone.
 
 ---
 
@@ -112,7 +110,7 @@ gh pr create --base test --title "..."
 
 ```bash
 # CORRECT - preserves backticks, pipes, newlines
-gh pr create --base test --title "Fix thing" --body "$(cat <<'EOF'
+gh pr create --base main --title "Fix thing" --body "$(cat <<'EOF'
 This PR does `thing` with | table | support |
 - Item 1
 - Item 2
@@ -120,7 +118,7 @@ EOF
 )"
 
 # WRONG - causes escaped characters like \` and broken tables
-gh pr create --base test --title "Fix thing" --body "This has \`backticks\` and broken|tables"
+gh pr create --base main --title "Fix thing" --body "This has \`backticks\` and broken|tables"
 ```
 
 **Why this matters:** Shell escaping converts `\`` to `\\`` and breaks table formatting.
@@ -134,7 +132,7 @@ Branches named `issue/{NNN}` automatically extract the issue number. Use this pa
 ISSUE_NUM=$(git branch --show-current | grep -oP 'issue/\K\d+')
 
 # Create PR with auto-linking
-gh pr create --base test --title "TITLE" --body "$(cat <<'EOF'
+gh pr create --base main --title "TITLE" --body "$(cat <<'EOF'
 ## Summary
 Brief description
 
@@ -154,7 +152,7 @@ EOF
 
 **One-liner version:**
 ```bash
-gh pr create --base test --title "TITLE" --body "$(cat <<'EOF
+gh pr create --base main --title "TITLE" --body "$(cat <<'EOF
 ## Summary
 Brief description
 

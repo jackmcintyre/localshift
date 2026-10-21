@@ -1,6 +1,6 @@
 ---
 name: homeassistant
-description: Home Assistant gateway - CLI for reads, MCP for writes
+description: Home Assistant read-only gateway - states, attributes, history and logbook
 license: MIT
 compatibility: opencode
 metadata:
@@ -8,212 +8,90 @@ metadata:
   workflow: debugging
 ---
 
-## Tool Access - READ THIS FIRST
+## Read-only: READ THIS FIRST
 
-**You have access to:**
-- `bash` tool - for hass-cli commands (read operations) - always available
+This gateway only reads Home Assistant: entity states, attributes, history,
+statistics and the logbook. It never changes anything.
 
-**You MAY have access to (check your tool list):**
-- `homeassistant_*` MCP tools - for write operations
+- The token must be a **read-only (non-admin) user's** long-lived token. Never
+  use or ask for an admin token.
+- Service calls are expected to fail with that token. Do not call services,
+  turn anything on or off, set values, reload, restart or edit configuration,
+  and do not look for another way to do it.
+- Any change to the house goes through a reviewed PR that merges to `main`.
+  If a task needs a write, stop and say so; a human or a PR does it.
 
-**Before any write operation:** Look at the tools available to you. If `homeassistant_HassTurnOn` is NOT in that list, you CANNOT perform writes. Report this immediately - do NOT attempt the call.
+## Prerequisites
 
-## Decision Matrix: CLI vs MCP
+The launcher sets these for the agent process:
+- `HOMEASSISTANT_URL` - Home Assistant URL
+- `HA_LONG_LIVED_TOKEN` - the read-only user's long-lived token
 
-| Operation | Use | Command/Tool |
-|-----------|-----|--------------|
-| Get entity state | CLI | `hass-cli state get <entity>` |
-| List/search entities | CLI | `hass-cli entity list` |
-| Get history | CLI | `hass-cli raw GET api/history/...` |
-| Get statistics | CLI | `hass-cli raw GET api/statistics/...` |
-| Turn on/off device | MCP | `homeassistant_HassTurnOn/Off(name=...)` |
-| Set temperature | MCP | `homeassistant_HassClimateSetTemperature(...)` |
-| Set light brightness | MCP | `homeassistant_HassLightSet(name=..., brightness=%)` |
-| Set volume | MCP | `homeassistant_HassSetVolume(name=..., volume_level=%)` |
-| Call service | MCP | `homeassistant_HassTurnOn(name=...)` for most services |
-
-**Rule:** CLI for reads (fast, low overhead). MCP for writes (state changes).
-
----
-
-## Fallback Protocol (CRITICAL)
-
-### Read Operations
-
-1. **Try CLI first** - Use `hass-cli` commands
-2. **If CLI fails** - Immediately try MCP: `homeassistant_GetLiveContext()` and extract the entity from the response
-3. **If both fail** - STOP. Do not try anything else. Report failure to user with the error details.
-
-```
-# Example fallback for getting entity state
-# Step 1: CLI
-result = bash("HASS_SERVER=... hass-cli state get sensor.battery")
-
-# Step 2: If CLI failed, try MCP
-if CLI_failed:
-    context = homeassistant_GetLiveContext()
-    # Extract entity from context.states
-    
-# Step 3: If MCP also failed, STOP and report
-if MCP_failed:
-    report("Failed to get entity state. CLI error: [X], MCP error: [Y]")
-    DO NOT try any other approach
-```
-
-### Write Operations
-
-**CRITICAL: MCP tools may not be available in your session. Check FIRST.**
-
-1. **LOOK at your available tools** - Do you see `homeassistant_HassTurnOn` in the tool list provided to you?
-2. **If NO** → STOP immediately. Output exactly:
-   ```
-   ❌ MCP tools not available. Enable Home Assistant MCP integration.
-   
-   Cannot perform write operation. Awaiting user guidance.
-   ```
-   Do NOT attempt to invoke any homeassistant_* tool - it will fail silently.
-3. **If YES** → Proceed with MCP call
-4. **Wait for actual result** - Do NOT report success until you see a success response
-5. **DO NOT** attempt CLI workarounds for writes
-
-```
-# CORRECT workflow:
-# 1. Check your tool list - is homeassistant_HassTurnOn there?
-# 2. If missing: STOP, report error, wait for user
-# 3. If present: Call the tool
-# 4. Wait for response (not just <invoke> XML)
-# 5. Report result based on actual response
-
-# WRONG: Seeing <invoke> XML and reporting success
-# That XML shows what you TRIED, not what HAPPENED
-```
-
-**DO NOT:**
-- Try more than 2 approaches for reads
-- Try any alternative for writes if MCP fails
-- Guess or assume entity states
-- Continue with stale/cached data
-- Silently ignore failures
-- Abort without reporting the specific error to the user
-- Report success without seeing an actual success result
-- Assume a tool invocation = success (wait for the response)
-
----
-
-## CLI Commands (Preferred for Read Operations)
-
-### Prerequisites
-
-The CLI requires environment variables:
-- `HASS_SERVER` - Home Assistant URL (no trailing slash)
-- `HASS_TOKEN` - Long-lived access token
-
-This project uses `HA_URL` and `HA_LONG_LIVED_TOKEN`. Wrap commands:
-```bash
-HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN uvx --from homeassistant-cli hass-cli ...
-```
-
-### Environment Bootstrapping (Critical)
-
-Do not assume interactive shell exports are available to subprocesses. Source env explicitly.
+`hass-cli` wants `HASS_SERVER` and `HASS_TOKEN`, so wrap each command:
 
 ```bash
-# Recommended location (outside repo/worktree)
-source ~/.config/localshift/ha.env
+HASS_SERVER="${HOMEASSISTANT_URL%/}" HASS_TOKEN="$HA_LONG_LIVED_TOKEN" \
+  uvx --from homeassistant-cli hass-cli ...
+```
 
-# Quick connectivity check before CLI reads
+Do not assume interactive shell exports reach subprocesses. Quick connectivity
+check before reads:
+
+```bash
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Authorization: Bearer $HA_LONG_LIVED_TOKEN" \
-  "${HA_URL%/}/api/config"
+  "${HOMEASSISTANT_URL%/}/api/config"
 ```
 
-If the check returns `000` or DNS errors, `HA_URL` is not reachable from current runtime.
-Use a resolvable URL (for example, your LAN or public HA URL), then retry CLI commands.
+`200` means reachable. `000` or a DNS error means the URL is not reachable
+from this runtime; `401` means the token is wrong. Stop and report either one.
 
-### Entity Queries
+## If a read fails
+
+Try at most two approaches (for example `state get`, then the REST call), then
+STOP and report the exact error. Do not guess or assume entity states, do not
+continue with stale data, and do not silently ignore failures.
+
+---
+
+## Reading state
 
 ```bash
-# Get specific entity state (JSON)
-source ~/.config/localshift/ha.env && \
-HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
-  uvx --from homeassistant-cli hass-cli --output json state get sensor.battery_level
+# Get one entity (JSON)
+HASS_SERVER="${HOMEASSISTANT_URL%/}" HASS_TOKEN="$HA_LONG_LIVED_TOKEN" \
+  uvx --from homeassistant-cli hass-cli --output json state get sensor.localshift_battery_percent
 
-# List all entities
-source ~/.config/localshift/ha.env && \
-HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
-  uvx --from homeassistant-cli hass-cli entity list
-
-# Search entities
-source ~/.config/localshift/ha.env && \
-HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
+# List entities, or search them
+HASS_SERVER="${HOMEASSISTANT_URL%/}" HASS_TOKEN="$HA_LONG_LIVED_TOKEN" \
   uvx --from homeassistant-cli hass-cli entity list | grep -i battery
 ```
 
-### History & Statistics
+Attributes are in the `attributes` object of the JSON state.
+
+## History, statistics and logbook
 
 ```bash
-# Get entity history (last 24h, JSON)
-source ~/.config/localshift/ha.env && \
-HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
-  uvx --from homeassistant-cli hass-cli --output json raw GET "api/history/period?filter_entity_id=sensor.battery_level"
+# History (default last 24h)
+HASS_SERVER="${HOMEASSISTANT_URL%/}" HASS_TOKEN="$HA_LONG_LIVED_TOKEN" \
+  uvx --from homeassistant-cli hass-cli --output json raw GET \
+  "api/history/period?filter_entity_id=sensor.localshift_battery_percent"
 
-# Get statistics
-source ~/.config/localshift/ha.env && \
-HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
-  uvx --from homeassistant-cli hass-cli --output json raw GET "api/statistics_during_period?entity_ids=sensor.battery_level&period=day"
-```
+# Statistics
+HASS_SERVER="${HOMEASSISTANT_URL%/}" HASS_TOKEN="$HA_LONG_LIVED_TOKEN" \
+  uvx --from homeassistant-cli hass-cli --output json raw GET \
+  "api/statistics_during_period?entity_ids=sensor.localshift_battery_percent&period=day"
 
----
-
-## MCP Tools (For Write Operations Only)
-
-### State & Discovery
-
-| Tool | Purpose |
-|------|---------|
-| `homeassistant_GetLiveContext()` | Returns all entity states and attributes |
-| `homeassistant_GetDateTime()` | Returns current date/time from HA system |
-
-### Device Control
-
-| Tool | Purpose |
-|------|---------|
-| `homeassistant_HassTurnOn(name=...)` | Turn a device/entity on |
-| `homeassistant_HassTurnOff(name=...)` | Turn a device/entity off |
-| `homeassistant_HassLightSet(name=..., brightness=%)` | Set light brightness (0-100%) |
-| `homeassistant_HassClimateSetTemperature(name=..., temperature=...)` | Set target temperature |
-| `homeassistant_HassSetVolume(name=..., volume_level=%)` | Set absolute volume (0-100%) |
-
-### Examples
-
-```python
-# Turn on a switch
-homeassistant_HassTurnOn(name="switch.localshift_automation_enabled")
-
-# Turn off a switch
-homeassistant_HassTurnOff(name="switch.localshift_dry_run")
-
-# Set light brightness
-homeassistant_HassLightSet(name="light.kitchen", brightness=50)
-```
-
----
-
-## Direct Log Access
-
-Home Assistant logs: `/homeassistant/home-assistant.log`
-
-```bash
-tail -100 /homeassistant/home-assistant.log | grep -i localshift
-tail -f /homeassistant/home-assistant.log | grep -i localshift
-grep -i "error\|exception\|failed" /homeassistant/home-assistant.log | tail -50
+# Logbook
+HASS_SERVER="${HOMEASSISTANT_URL%/}" HASS_TOKEN="$HA_LONG_LIVED_TOKEN" \
+  uvx --from homeassistant-cli hass-cli --output json raw GET \
+  "api/logbook?entity=sensor.localshift_current_mode"
 ```
 
 ---
 
 ## LocalShift Entity Quick Reference
 
-### Critical Control Entities
+### Control Entities (read their state; do not change them)
 
 | Entity | Type | Purpose |
 |--------|------|---------|
@@ -261,63 +139,32 @@ grep -i "error\|exception\|failed" /homeassistant/home-assistant.log | tail -50
 | `number.localshift_max_pre_charge_price` | Max price for grid charging | $0.00-$0.50/kWh |
 
 **For complete entity reference with all attributes:**
-`/config/home/localshift/docs/ENTITY_REFERENCE.md`
+`docs/ENTITY_REFERENCE.md`
 
 ---
 
-## Common Workflows
-
-### 1. Check if automation is enabled
+## Common Reads
 
 ```bash
-HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
-  uvx --from homeassistant-cli hass-cli --output json state get switch.localshift_automation_enabled
+# Is automation enabled?
+... state get switch.localshift_automation_enabled
+# Battery state
+... state get sensor.localshift_battery_percent
+# Integration health
+... state get sensor.localshift_integration_status
+# Recent decisions
+... state get sensor.localshift_decision_log
+# Which commit is running
+... state get sensor.localshift_build
 ```
 
-### 2. Get battery state
-
-```bash
-HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
-  uvx --from homeassistant-cli hass-cli --output json state get sensor.localshift_battery_percent
-```
-
-### 3. Toggle automation (MCP - requires confirmation)
-
-Ask user first, then:
-```python
-homeassistant_HassTurnOn(name="switch.localshift_automation_enabled")
-# or
-homeassistant_HassTurnOff(name="switch.localshift_automation_enabled")
-```
-
-### 4. Check integration health
-
-```bash
-HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
-  uvx --from homeassistant-cli hass-cli --output json state get sensor.localshift_integration_status
-```
-
-### 5. Get recent decisions
-
-```bash
-HASS_SERVER="${HA_URL%/}" HASS_TOKEN=$HA_LONG_LIVED_TOKEN \
-  uvx --from homeassistant-cli hass-cli --output json state get sensor.localshift_decision_log
-```
-
----
-
-## Gatekeeper Policy
-
-- **Read operations:** Execute immediately via CLI
-- **Write operations:** Ask for user confirmation before executing via MCP
-- **Least privilege:** Only perform the exact action requested
+(`...` is the `HASS_SERVER=... HASS_TOKEN=... uvx --from homeassistant-cli hass-cli --output json` prefix above.)
 
 ---
 
 ## Best Practices
 
-1. **CLI first for reads** - Lower overhead, faster response
-2. **MCP only for writes** - State changes need confirmation
-3. **Use exact entity names** - If uncertain, search first with `hass-cli entity list | grep`
-4. **Check logs for errors** - `/homeassistant/home-assistant.log`
-5. **Use `--output json`** - Machine-parseable, pipe to `jq` if needed
+1. Use exact entity names; if unsure, search first with `entity list | grep`.
+2. Use `--output json` and pipe to `jq` when you need a field.
+3. Read only the exact data the task needs.
+4. If the answer would need a write, report that instead of attempting it.

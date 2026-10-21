@@ -19,7 +19,11 @@ deploy LocalShift, never run `deploy.sh` or a rollback, and never restart HA.**
 3. Jack restarts HA. The new code loads at that restart, not before.
 4. After the restart the deployer judges the result with
    `scripts/deploy_check.py --before/--after --expect-recompile`. On a failed
-   check it restores the previous files itself and asks for another restart.
+   check the deployer reports the failure. It does not restore the previous
+   files automatically yet: restoring is a human step for now. If a PR
+   intentionally changes a config option the check reports, declare the change
+   in `deploy/expected-changes.json` (`"KEY": {"old": ..., "new": ...}` under
+   `config_options`) so the check treats it as expected.
 
 So approving a LocalShift PR means "live at the next HA restart once the pull
 deployer has shipped it".
