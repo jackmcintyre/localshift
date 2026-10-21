@@ -299,8 +299,8 @@ types: `localshift-command-card`, `localshift-decisions-card`, and
    - Type: `JavaScript module`
 
 The dashboard also references entities from:
-- **Teslemetry** — `my_home_*` entities (Powerwall)
-- **Amber Electric** — `100h_*` entities (pricing)
+- **Teslemetry** — your Powerwall entities
+- **Amber Electric** — your pricing entities
 
 Adjust entity IDs to match your setup if different — each card accepts an
 `entities:` map, and the command card takes `dw_start` / `dw_end` for your

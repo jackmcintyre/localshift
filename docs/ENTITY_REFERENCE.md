@@ -98,6 +98,8 @@ Other Home Assistant automations (a flexible-load queue, climate rules, anything
 
 **State:** `on` when the `switch.localshift_demand_window_block` switch is on and the current time is inside the demand window; `off` otherwise. The window comes from the configured start and end times, or from the pricing provider's own flag when `switch.localshift_demand_window_from_amber` is on. Because of the block switch, `off` does not guarantee a demand window is not running; it means LocalShift is not blocking for one. No attributes.
 
+**Known issue ([#1244](https://github.com/jackmcintyre/localshift/issues/1244)):** after a restart inside the window hours it can briefly read `on` until the first plan is computed, even with the block switch off. Consumers should not act on a change in this sensor in the first minutes after LocalShift starts.
+
 #### Planned (not available yet)
 
 These are decided or proposed but do not exist. Do not build on them until they move to "Available now".
@@ -500,7 +502,7 @@ Attributes:
   consumption_profile_hours: 24
   consumption_weighting: 0.67
   current_load_kw: 0.791
-  weather_entity_id: weather.crows_nest_hourly
+  weather_entity_id: weather.home_hourly
   weather_temperature_current: 21.6
   weather_condition: rainy
   weather_correlation_confidence: medium
