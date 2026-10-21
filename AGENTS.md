@@ -16,13 +16,14 @@
 - **Tests**: `tests/`
 - **Deploy**: Deploys are done only by the HA host's pull deployer, which ships every merge to `main`. There is no other deploy path. Agents never run `deploy.sh` (kept for a human in an emergency; it refuses without `--i-am-not-the-deployer`), `rollback.sh` or restart HA.
 - **Python**: 3.13+, type hints required
-- **Where development runs**: a shared dev host, with deploys moving to the HA host's pull deployer (in progress). Worktrees live under `worktrees/` in the repo. Tools marked *optional* below may not be installed in your environment; skip them if absent.
+- **Where development runs**: a shared dev host. Worktrees live under `worktrees/` in the repo. Tools marked *optional* below may not be installed in your environment; skip them if absent.
+- **Home Assistant access**: read-only. The token agents use (`HA_LONG_LIVED_TOKEN`, with the URL in `HOMEASSISTANT_URL`, both set by the launcher for the agent process) must belong to a read-only (non-admin) HA user. Service calls are expected to fail; never try to work around that. A change to the house goes through a PR.
 
 ## House rules that affect deploys
 
 - **HA restarts**: Jack restarts HA; the coordinator pre-checks. Merged changes go live at the next restart; never restart HA yourself.
 - **No HA restart during the nightly backup window.**
-- **The move to the HA host's pull deployer is in progress.** Until it ships `main` merges, a merged change waits for it; do not work around that by deploying by hand.
+- **The pull deployer is the only deploy path.** A merged change waits for it; do not work around that by deploying by hand.
 
 ## Optimizer Changes (CRITICAL)
 
