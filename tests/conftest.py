@@ -828,3 +828,13 @@ def mock_recorder():
         return_value=mock_instance,
     ):
         yield mock_instance
+
+
+@pytest.fixture(autouse=True)
+def _no_real_booking_storage():
+    """Bookings load through a real Store, which a mock hass cannot back (#1237)."""
+    store = MagicMock()
+    store.async_load = AsyncMock(return_value=None)
+    store.async_save = AsyncMock()
+    with patch("custom_components.localshift.bookings.Store", return_value=store):
+        yield

@@ -1,6 +1,7 @@
 """Sensor modules for LocalShift integration."""
 
 from .base import LocalShiftSensorBase
+from .bookings import BookingsSensor
 from .build import BuildSensor
 from .cloud_event import CloudEventSensor
 from .forecast import (
@@ -49,6 +50,7 @@ from .status import (
 __all__ = [
     # Base
     "LocalShiftSensorBase",
+    "BookingsSensor",
     "BuildSensor",
     "CloudEventSensor",
     # Pricing

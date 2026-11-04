@@ -45,6 +45,7 @@ from ..utils.entity_configs import unused_entity_keys
 from .data import CoordinatorData
 
 if TYPE_CHECKING:  # pragma: no cover
+    from ..bookings import BookingStore
     from ..computation_engine import ComputationEngine
     from ..integration.controller import BatteryController
     from ..services.notification_service import NotificationService
@@ -119,6 +120,8 @@ class LocalShiftCoordinator:
         # Issue #1102: snapshot of the day's cost/energy totals, and the
         # shutdown listener that writes it (shutdown does not unload entries).
         self._daily_totals_store: DailyTotalsStore | None = None
+        # Issue #1237: deferrable-load bookings, created in async_start.
+        self.bookings: BookingStore | None = None
         self._unsub_homeassistant_stop: CALLBACK_TYPE | None = None
         # Issue #1142: the final save on shutdown and on unload. The lock
         # keeps the two from interleaving if both fire; the flag is set once
@@ -287,6 +290,7 @@ class LocalShiftCoordinator:
     async def async_start(self) -> None:
         """Start listening to entity changes and periodic timer."""
         # Initialize helper modules
+        from ..bookings import BookingStore
         from ..computation_engine import ComputationEngine
         from ..const import CONF_PRICING_DATA_SOURCE, DEFAULT_PRICING_DATA_SOURCE
         from ..integration.controller import BatteryController
@@ -327,6 +331,11 @@ class LocalShiftCoordinator:
         # subscribed, so no tick can accumulate ahead of the restore.
         self._daily_totals_store = DailyTotalsStore(self.hass, self.entry.entry_id)
         await self._daily_totals_store.async_restore(self.data, self._cost_tracker)
+        # Issue #1237: bookings survive a restart (each change saves itself).
+        self.bookings = BookingStore(
+            self.hass, self.entry.entry_id, self.notify_listeners
+        )
+        await self.bookings.async_load(dt_util.utcnow())
         self._unsub_homeassistant_stop = self.hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_STOP, self._handle_homeassistant_stop
         )

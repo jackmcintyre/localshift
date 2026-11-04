@@ -2,6 +2,7 @@
 
 from .sensors import (
     AutomationReadySensor,
+    BookingsSensor,
     BuildSensor,
     CheapChargeStopPriceSensor,
     CloudEventSensor,
@@ -74,6 +75,8 @@ __all__ = [
     "ForecastAccuracyComparisonSensor",
     # Deployed commit (live == main check)
     "BuildSensor",
+    # Deferrable-load bookings (Issue #1237)
+    "BookingsSensor",
 ]
 
 
@@ -130,6 +133,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         ForecastAccuracyComparisonSensor(coordinator, entry),
         # Which commit is running (read from the deploy's build.json)
         BuildSensor(coordinator, entry),
+        # Deferrable-load bookings (Issue #1237)
+        BookingsSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
