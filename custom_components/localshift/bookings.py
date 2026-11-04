@@ -209,27 +209,25 @@ class BookingStore:
         return dict(booking)
 
 
-def _coordinator(hass: HomeAssistant) -> LocalShiftCoordinator:
+def _loaded(hass: HomeAssistant) -> tuple[LocalShiftCoordinator, BookingStore]:
     entries = hass.config_entries.async_loaded_entries(DOMAIN)
     coordinator = entries[0].runtime_data if entries else None
     if coordinator is None or coordinator.bookings is None:
         raise ServiceValidationError("LocalShift is not loaded")
-    return coordinator
+    return coordinator, coordinator.bookings
 
 
 async def async_book_load(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
     """Book a load, or (with booking_id and status) report that one started or finished."""
-    coordinator, now, d = _coordinator(hass), dt_util.utcnow(), call.data
+    (coordinator, store), now, d = _loaded(hass), dt_util.utcnow(), call.data
     if ("booking_id" in d) != ("status" in d):
         raise ServiceValidationError("booking_id and status go together")
     if "status" in d:
-        return await coordinator.bookings.async_report(
-            d["booking_id"], d["status"], now
-        )
+        return await store.async_report(d["booking_id"], d["status"], now)
     missing = {"name", "duration_min", "earliest_start", "latest_finish"} - set(d)
     if missing:
         raise ServiceValidationError(f"Missing: {', '.join(sorted(missing))}")
-    return await coordinator.bookings.async_book(
+    return await store.async_book(
         name=d["name"],
         duration_min=d["duration_min"],
         earliest_start=d["earliest_start"],
@@ -243,7 +241,7 @@ async def async_book_load(hass: HomeAssistant, call: ServiceCall) -> dict[str, A
 
 async def async_cancel_load(hass: HomeAssistant, call: ServiceCall) -> dict[str, int]:
     """Cancel the active booking with this id, or all active ones with this name."""
-    cancelled = await _coordinator(hass).bookings.async_cancel(
+    cancelled = await _loaded(hass)[1].async_cancel(
         dt_util.utcnow(),
         booking_id=call.data.get("booking_id"),
         name=call.data.get("name"),
