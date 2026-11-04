@@ -110,7 +110,7 @@ Other Home Assistant automations (a flexible-load queue, climate rules, anything
 |-----------|----------------|---------|
 | `bookings` | list | One entry per booking: `id`, `name`, `start_at` (ISO time to start), `finish_by` (the booking's latest finish), `est_kwh`, `status` (`booked`, `started`, `done` or `cancelled`) and `reason` (text, for display only). |
 
-**Start pick:** the first start in the window where the plan's own forecast export (solar the house and battery do not use) covers the load for every slot it runs; otherwise `latest_finish - duration`, so a load never misses its deadline.
+**Start pick:** the first start in the window where, for every plan slot the run overlaps, the forecast surplus solar (export, capped at solar minus house load, so a planned battery sell-off does not count) covers the load. Two bookings in the same slot do not yet subtract from each other; otherwise `latest_finish - duration`, so a load never misses its deadline.
 
 ##### Services `localshift.book_load` and `localshift.cancel_load`
 

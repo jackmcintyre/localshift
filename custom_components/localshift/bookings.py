@@ -15,7 +15,12 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
-from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+)
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.storage import Store
@@ -35,7 +40,9 @@ _NEXT_STATUS = {"booked": {"started", "done"}, "started": {"done"}}
 SERVICE_BOOK = "book_load"
 SERVICE_CANCEL = "cancel_load"
 
-ExcessAt = Callable[[datetime], "float | None"]
+# Spare kW a load can count on across a window; None if the plan does not cover it.
+ExcessAt = Callable[[datetime, datetime], "float | None"]
+_REQUIRED = ("id", "name", "status", "finish_by")
 
 
 def _aware(value: datetime) -> datetime:
@@ -63,20 +70,25 @@ CANCEL_SCHEMA = vol.Schema({
 
 
 def excess_from_data(data: CoordinatorData) -> ExcessAt:
-    """Exported kW at a time, from the plan's own slots (read-only).
+    """Spare solar (kW) over a window, from the plan's own slots (read-only).
 
-    Export is solar the house and battery did not use: the spare solar a load
-    can absorb. Times outside the plan have no figure.
+    Per slot it is the forecast export, capped at the solar left after the
+    house load, so a planned battery sell-off is not counted as spare solar.
+    The figure for a window is its lowest slot; a window the plan does not
+    fully cover has none.
     """
     slots = []
     for d in data.optimizer_decisions:
         start = dt_util.as_utc(datetime.fromisoformat(d["timestamp_iso"]))
         minutes = d["slot_interval_minutes"]
-        end = start + timedelta(minutes=minutes)
-        slots.append((start, end, d["grid_export_kwh"] * 60 / minutes))
+        solar_left = max(0.0, d.get("solar_kwh", 0.0) - d.get("consumption_kwh", 0.0))
+        kwh = min(d["grid_export_kwh"], solar_left)
+        slots.append((start, start + timedelta(minutes=minutes), kwh * 60 / minutes))
 
-    def excess_at(when: datetime) -> float | None:
-        return next((kw for start, end, kw in slots if start <= when < end), None)
+    def excess_at(start: datetime, end: datetime) -> float | None:
+        hits = [(s, e, kw) for s, e, kw in slots if s < end and e > start]
+        covered = sum((min(e, end) - max(s, start) for s, e, _ in hits), timedelta())
+        return min(kw for *_, kw in hits) if hits and covered == end - start else None
 
     return excess_at
 
@@ -88,16 +100,24 @@ def pick_start(
     load_kw: float,
     excess_at: ExcessAt,
 ) -> tuple[datetime, str]:
-    """First start whose every slot has spare solar for the load, else the deadline start."""
+    """First start whose whole run fits in spare solar, else the deadline start."""
     latest_start = latest_finish - duration
-    slots = -(-duration // SLOT)
     start = earliest
     while start <= latest_start:
-        spare = [excess_at(start + SLOT * i) for i in range(slots)]
-        if all(kw is not None and kw >= load_kw for kw in spare):
+        spare = excess_at(start, start + duration)
+        if spare is not None and spare >= load_kw:
             return start, "fits spare solar"
         start += SLOT
     return latest_start, "no spare-solar window; latest start to meet the deadline"
+
+
+def _is_booking(entry: Any) -> bool:
+    """A stored entry with every key the sensor and pruning rely on."""
+    try:
+        datetime.fromisoformat(entry["finish_by"])
+        return all(key in entry for key in _REQUIRED)
+    except (TypeError, KeyError, ValueError):
+        return False
 
 
 class BookingStore:
@@ -111,13 +131,16 @@ class BookingStore:
         self._bookings: dict[str, dict[str, Any]] = {}
 
     async def async_load(self, now: datetime) -> None:
-        try:
-            saved = await self._store.async_load() or {}
-            self._bookings = saved.get("bookings", {})
-            self._prune(now)
-        except Exception:  # noqa: BLE001 - a bad file must not stop LocalShift starting
-            _LOGGER.warning("Could not read stored load bookings; starting with none")
-            self._bookings = {}
+        saved = await self._store.async_load()
+        raw = saved.get("bookings") if isinstance(saved, dict) else None
+        raw = raw if isinstance(raw, dict) else {}
+        self._bookings = {k: b for k, b in raw.items() if _is_booking(b)}
+        if len(self._bookings) != len(raw):
+            _LOGGER.warning(
+                "Dropped %d unreadable stored load bookings",
+                len(raw) - len(self._bookings),
+            )
+        self._prune(now)
 
     def _live(self, now: datetime) -> dict[str, dict[str, Any]]:
         return {
@@ -217,7 +240,7 @@ def _loaded(hass: HomeAssistant) -> tuple[LocalShiftCoordinator, BookingStore]:
     return coordinator, coordinator.bookings
 
 
-async def async_book_load(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
+async def async_book_load(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
     """Book a load, or (with booking_id and status) report that one started or finished."""
     (coordinator, store), now, d = _loaded(hass), dt_util.utcnow(), call.data
     if ("booking_id" in d) != ("status" in d):
@@ -239,7 +262,7 @@ async def async_book_load(hass: HomeAssistant, call: ServiceCall) -> dict[str, A
     )
 
 
-async def async_cancel_load(hass: HomeAssistant, call: ServiceCall) -> dict[str, int]:
+async def async_cancel_load(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
     """Cancel the active booking with this id, or all active ones with this name."""
     cancelled = await _loaded(hass)[1].async_cancel(
         dt_util.utcnow(),

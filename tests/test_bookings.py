@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -47,10 +47,12 @@ def make_store(on_change=None):
 
 
 def sunny(from_hour, to_hour, kw=3.0):
-    """excess_kw_at: `kw` of spare solar between the given hours, else none."""
+    """excess_kw_at: `kw` of spare solar for runs inside the given hours, else none."""
 
-    def excess(slot_start):
-        return kw if from_hour <= slot_start.hour < to_hour else -1.0
+    def excess(start, end):
+        midnight = start.replace(hour=0, minute=0)
+        inside = start.hour >= from_hour and end <= midnight + timedelta(hours=to_hour)
+        return kw if inside else -1.0
 
     return excess
 
@@ -81,7 +83,7 @@ class TestPickStart:
     def test_deadline_fallback_when_no_solar(self):
         latest = NOW + timedelta(hours=8)
         start, reason = bk.pick_start(
-            NOW, latest, timedelta(hours=1), 1.0, lambda _s: None
+            NOW, latest, timedelta(hours=1), 1.0, lambda _s, _e: None
         )
         assert start == latest - timedelta(hours=1)
         assert "deadline" in reason
@@ -94,27 +96,64 @@ class TestPickStart:
         assert start == latest - timedelta(hours=1)
 
 
-def decision(start, export_kwh, minutes=15):
+def decision(start, export_kwh, minutes=15, solar_kwh=None, consumption_kwh=0.0):
     return {
         "timestamp_iso": start.isoformat(),
         "slot_interval_minutes": minutes,
         "grid_export_kwh": export_kwh,
+        "solar_kwh": export_kwh if solar_kwh is None else solar_kwh,
+        "consumption_kwh": consumption_kwh,
     }
+
+
+def plan(*decisions):
+    data = CoordinatorData()
+    data.optimizer_decisions = list(decisions)
+    return bk.excess_from_data(data)
 
 
 class TestExcessFromData:
     def test_spare_solar_is_the_plans_export_as_kw(self):
-        data = CoordinatorData()
-        data.optimizer_decisions = [
-            decision(NOW, 0.5),
-            decision(NOW + timedelta(minutes=15), 0.0),
+        excess = plan(decision(NOW, 0.5), decision(NOW + timedelta(minutes=15), 0.0))
+        assert excess(NOW, NOW + timedelta(minutes=15)) == pytest.approx(2.0)
+        assert excess(NOW, NOW + timedelta(minutes=30)) == 0.0  # lowest slot
+        assert excess(NOW, NOW + timedelta(minutes=45)) is None  # plan ends
+        assert excess(NOW - timedelta(minutes=5), NOW + timedelta(minutes=5)) is None
+
+    def test_battery_sell_off_is_not_spare_solar(self):
+        # Exports 1 kWh but the sun only covers 0.1 kWh beyond the house.
+        excess = plan(decision(NOW, 1.0, solar_kwh=0.3, consumption_kwh=0.2))
+        assert excess(NOW, NOW + timedelta(minutes=15)) == pytest.approx(0.4)
+        sold_off = plan(decision(NOW, 1.0, solar_kwh=0.0))
+        assert sold_off(NOW, NOW + timedelta(minutes=15)) == 0.0
+
+    def test_run_checked_against_every_overlapping_plan_slot(self):
+        slots = [decision(NOW + timedelta(minutes=5 * i), 0.1, 5) for i in range(6)]
+        slots[4] = decision(NOW + timedelta(minutes=20), 0.0, 5)  # one dry slot
+        excess = plan(*slots)
+        assert excess(NOW, NOW + timedelta(minutes=20)) == pytest.approx(1.2)
+        assert excess(NOW, NOW + timedelta(minutes=30)) == 0.0
+
+    def test_half_hour_slots_are_covered(self):
+        excess = plan(decision(NOW, 1.0, 30))
+        assert excess(NOW + timedelta(minutes=10), NOW + timedelta(minutes=25)) == 2.0
+
+
+class TestPlanFit:
+    def test_run_only_partly_covered_by_export_does_not_fit(self):
+        slots = [decision(NOW + timedelta(minutes=5 * i), 0.0, 5) for i in range(12)]
+        slots[0:2] = [
+            decision(NOW + timedelta(minutes=5 * i), 0.2, 5) for i in range(2)
         ]
-        excess = bk.excess_from_data(data)
-        assert excess(NOW) == pytest.approx(2.0)  # 0.5 kWh in 15 min
-        assert excess(NOW + timedelta(minutes=14)) == pytest.approx(2.0)
-        assert excess(NOW + timedelta(minutes=15)) == 0.0
-        assert excess(NOW + timedelta(minutes=30)) is None
-        assert excess(NOW - timedelta(minutes=1)) is None
+        start, reason = bk.pick_start(
+            NOW,
+            NOW + timedelta(hours=1),
+            timedelta(minutes=30),
+            1.0,
+            plan(*slots),
+        )
+        assert start == NOW + timedelta(minutes=30)
+        assert "deadline" in reason
 
 
 class TestBookingStore:
@@ -198,12 +237,32 @@ class TestBookingStore:
         with pytest.raises(ServiceValidationError):
             await store.async_report(b["id"], "booked", NOW)
 
-    async def test_malformed_stored_payload_starts_empty(self, caplog):
-        FakeStore.saved["localshift.bookings.e1"] = {"bookings": {"x": {"bad": 1}}}
+    @pytest.mark.parametrize(
+        "payload", ["junk", {"bookings": "junk"}, {"bookings": {"x": {"bad": 1}}}]
+    )
+    async def test_malformed_stored_payload_starts_empty(self, payload):
+        FakeStore.saved["localshift.bookings.e1"] = payload
         store = make_store()
         await store.async_load(NOW)
         assert store.as_list(NOW) == []
-        assert "starting with none" in caplog.text
+
+    async def test_one_bad_entry_is_dropped_not_the_whole_file(self, caplog):
+        good = await make_store().async_book(
+            **BOOK, now=NOW, excess_kw_at=sunny(11, 14)
+        )
+        FakeStore.saved["localshift.bookings.e1"] = {
+            "bookings": {good["id"]: good, "x": {"id": "x"}, "y": 5}
+        }
+        store = make_store()
+        await store.async_load(NOW)
+        assert store.as_list(NOW) == [good]
+        assert "Dropped 2" in caplog.text
+
+    async def test_store_read_error_is_not_swallowed(self):
+        store = make_store()
+        store._store.async_load = AsyncMock(side_effect=OSError("disk"))
+        with pytest.raises(OSError):
+            await store.async_load(NOW)
 
     async def test_window_arithmetic_survives_the_dst_start_night(self):
         # Sydney clocks go 02:00 -> 03:00 on 4 Oct 2026: 03:30 local is only
@@ -223,7 +282,7 @@ class TestBookingStore:
             earliest_start=parsed["earliest_start"],
             latest_finish=parsed["latest_finish"],
             now=parsed["earliest_start"],
-            excess_kw_at=lambda _s: None,
+            excess_kw_at=lambda _s, _e: None,
         )
         start = datetime.fromisoformat(booking["start_at"])
         assert parsed["latest_finish"] - start == timedelta(minutes=120)
