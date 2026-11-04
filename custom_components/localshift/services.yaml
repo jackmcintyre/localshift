@@ -1,0 +1,56 @@
+book_load:
+  fields:
+    name:
+      example: washer
+      selector:
+        text:
+    duration_min:
+      example: 90
+      selector:
+        number:
+          min: 1
+          max: 600
+          mode: box
+    est_kwh:
+      example: 1.2
+      selector:
+        number:
+          min: 0.01
+          max: 20
+          step: 0.01
+          mode: box
+    est_kw:
+      example: 0.8
+      selector:
+        number:
+          min: 0.01
+          max: 20
+          step: 0.01
+          mode: box
+    earliest_start:
+      selector:
+        datetime:
+    latest_finish:
+      selector:
+        datetime:
+    booking_id:
+      example: 1a2b3c4d
+      selector:
+        text:
+    status:
+      example: started
+      selector:
+        select:
+          options:
+            - started
+            - done
+cancel_load:
+  fields:
+    booking_id:
+      example: 1a2b3c4d
+      selector:
+        text:
+    name:
+      example: washer
+      selector:
+        text:

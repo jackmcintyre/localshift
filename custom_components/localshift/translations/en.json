@@ -338,5 +338,59 @@
         "description": "Choose optimizer objective strategy: self_consumption or arbitrage."
       }
     }
+  },
+  "services": {
+    "book_load": {
+      "name": "Book a load",
+      "description": "Book a deferrable load. LocalShift picks the start and publishes it on the bookings sensor. With booking_id and status, reports that a booked load started or finished.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "What the load is, for example washer."
+        },
+        "duration_min": {
+          "name": "Duration",
+          "description": "Run time in minutes."
+        },
+        "est_kwh": {
+          "name": "Energy",
+          "description": "Estimated energy in kWh (or give est_kw)."
+        },
+        "est_kw": {
+          "name": "Power",
+          "description": "Estimated average power in kW (or give est_kwh)."
+        },
+        "earliest_start": {
+          "name": "Earliest start",
+          "description": "The load may not start before this."
+        },
+        "latest_finish": {
+          "name": "Latest finish",
+          "description": "The load must finish by this."
+        },
+        "booking_id": {
+          "name": "Booking id",
+          "description": "The booking to report on."
+        },
+        "status": {
+          "name": "Status",
+          "description": "started or done, reported by the house."
+        }
+      }
+    },
+    "cancel_load": {
+      "name": "Cancel a load",
+      "description": "Cancel a booking by id, or every active booking with this name.",
+      "fields": {
+        "booking_id": {
+          "name": "Booking id",
+          "description": "The booking to cancel."
+        },
+        "name": {
+          "name": "Name",
+          "description": "Cancel active bookings with this name."
+        }
+      }
+    }
   }
 }

@@ -4,11 +4,11 @@ Complete reference for all Home Assistant entities provided by the LocalShift in
 
 ## Overview
 
-The integration creates **71 entities** grouped under a single "LocalShift" device:
+The integration creates **72 entities** grouped under a single "LocalShift" device:
 
 | Category | Count | Entity Type |
 |----------|-------|-------------|
-| Sensors | 32 | `sensor` |
+| Sensors | 33 | `sensor` |
 | Binary Sensors | 11 | `binary_sensor` |
 | Switches | 10 | `switch` |
 | Numbers | 14 | `number` |
@@ -100,14 +100,31 @@ Other Home Assistant automations (a flexible-load queue, climate rules, anything
 
 **Known issue ([#1244](https://github.com/jackmcintyre/localshift/issues/1244)):** after a restart inside the window hours it can briefly read `on` until the first plan is computed, even with the block switch off. Consumers should not act on a change in this sensor in the first minutes after LocalShift starts.
 
+##### `sensor.localshift_bookings`
+
+**Meaning:** The deferrable loads (washer, dryer, dishwasher) the house has booked with LocalShift, each with the start time LocalShift picked. The house reads `start_at` and starts the appliance then; it never chooses times itself. If LocalShift is unavailable or this sensor is stale, the house starts the load by `latest_finish - duration` regardless.
+
+**State:** the number of bookings that are `booked` or `started`. Bookings are kept across restarts and dropped once their `finish_by` has passed.
+
+| Attribute | Units / values | Meaning |
+|-----------|----------------|---------|
+| `bookings` | list | One entry per booking: `id`, `name`, `start_at` (ISO time to start), `finish_by` (the booking's latest finish), `est_kwh`, `status` (`booked`, `started`, `done` or `cancelled`) and `reason` (text, for display only). |
+
+**Start pick:** the first start in the window where the load fits in the spare solar forecast (solar minus forecast household load, for every 15-minute slot the load runs); otherwise `latest_finish - duration`, so a load never misses its deadline.
+
+##### Services `localshift.book_load` and `localshift.cancel_load`
+
+`localshift.book_load` takes `name`, `duration_min`, `est_kwh` or `est_kw`, `earliest_start` and `latest_finish`, and returns the booking (including its `id` and picked `start_at`) as a service response. Called with `booking_id` and `status` (`started` or `done`) instead, it records that the house started or finished the load. A booking only moves forward: `booked`, `started`, `done`.
+
+`localshift.cancel_load` takes a `booking_id`, or a `name` to cancel every active booking with that name, and returns how many it cancelled.
+
 #### Planned (not available yet)
 
 These are decided or proposed but do not exist. Do not build on them until they move to "Available now".
 
 | Signal | Status |
 |--------|--------|
-| `localshift.book_load` and `localshift.cancel_load` services | Planned. [#1237](https://github.com/jackmcintyre/localshift/issues/1237) (book, persist and pick a start), [#1238](https://github.com/jackmcintyre/localshift/issues/1238) (choose start times from the plan, stagger bookings, honour the demand window), [#1239](https://github.com/jackmcintyre/localshift/issues/1239) (re-plan unstarted bookings, lock started ones). |
-| Per-booking sensor (`start_at`, `finish_by`, `est_kwh`, `status`, `reason`) | Planned in [#1237](https://github.com/jackmcintyre/localshift/issues/1237). The house books a load and reads `start_at`; it never chooses times itself. If LocalShift is unavailable, the house starts the load by `latest_finish - duration`. |
+| Smarter start times for `localshift.book_load` | Planned. [#1238](https://github.com/jackmcintyre/localshift/issues/1238) (choose start times from the plan, stagger bookings, honour the demand window), [#1239](https://github.com/jackmcintyre/localshift/issues/1239) (re-plan unstarted bookings, lock started ones). |
 
 Not planned: a duration-aware headroom figure ([#1235](https://github.com/jackmcintyre/localshift/issues/1235)) and a per-slot marginal-cost sensor ([#1236](https://github.com/jackmcintyre/localshift/issues/1236)) were both closed as superseded by the booking direction above, so they are not part of the contract.
 
@@ -178,6 +195,7 @@ user-facing entities with no category and appear on the main device card.
 | `select.localshift_battery_mode` | `localshift_battery_mode` | `select` | — |
 | `select.localshift_optimization_mode` | `localshift_optimization_mode` | `select` | — |
 | `sensor.localshift_automation_ready` | `localshift_automation_ready` | `sensor` | diagnostic |
+| `sensor.localshift_bookings` | `localshift_bookings` | `sensor` | — |
 | `sensor.localshift_build` | `localshift_build` | `sensor` | diagnostic |
 | `sensor.localshift_cloud_event` | `localshift_cloud_event` | `sensor` | — |
 | `sensor.localshift_comparison_result` | `localshift_comparison_result` | `sensor` | — |

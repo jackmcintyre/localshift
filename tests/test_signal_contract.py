@@ -36,7 +36,11 @@ CONTRACT_ENTITIES = {
     "sensor.localshift_load_shift_signal",
     "binary_sensor.localshift_excess_solar_available",
     "binary_sensor.localshift_demand_window",
+    "sensor.localshift_bookings",
 }
+
+# The decided booking services (issue #1237).
+CONTRACT_SERVICES = {"book_load", "cancel_load"}
 
 # Plan internals the docs must never present as part of the contract.
 NOT_CONTRACT_PREFIXES = ("optimizer_plan", "forecast_")
@@ -140,6 +144,18 @@ class TestSignalContract:
             f"ever added, never renamed or removed): {problems}"
         )
 
+    def test_booking_services_are_documented_and_registered(self):
+        from custom_components.localshift.bookings import async_register_services
+
+        hass = MagicMock()
+        hass.services.has_service.return_value = False
+        async_register_services(hass)
+        registered = {c.args[1] for c in hass.services.async_register.call_args_list}
+        available = _subsection(_section(), "#### Available now")
+        assert registered == CONTRACT_SERVICES
+        for service in CONTRACT_SERVICES:
+            assert f"localshift.{service}" in available
+
     def test_attribute_tables_are_not_empty_where_attributes_exist(self):
         """Guard the parser: a table that parses to nothing proves nothing."""
         signals = _available_signals()
@@ -148,6 +164,7 @@ class TestSignalContract:
             "can_add_load_now"
             in signals["binary_sensor.localshift_excess_solar_available"]
         )
+        assert "bookings" in signals["sensor.localshift_bookings"]
 
     def test_plan_sensors_are_not_in_the_published_list(self):
         for entity_id in _available_signals():

@@ -11,7 +11,8 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import PLATFORMS, SWITCH_SPIKE_DISCHARGE_ENABLED
+from .bookings import async_register_services, async_unregister_services
+from .const import DOMAIN, PLATFORMS, SWITCH_SPIKE_DISCHARGE_ENABLED
 from .coordinator import LocalShiftCoordinator
 from .switch import SWITCH_STATE_PREFIX
 
@@ -61,6 +62,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: LocalShiftConfigEntry) -
     # Forward setup to all platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    async_register_services(hass)
+
     # Listen for options updates
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
@@ -82,6 +85,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: LocalShiftConfigEntry) 
 
     coordinator: LocalShiftCoordinator = entry.runtime_data
     await coordinator.async_stop()
+    if not hass.config_entries.async_loaded_entries(DOMAIN):
+        async_unregister_services(hass)
     return True
 
 
