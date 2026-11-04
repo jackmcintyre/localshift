@@ -35,6 +35,7 @@ from ..const import (
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT,
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT,
     PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
+    READINESS_GATE_INPUTS,
     READINESS_LOSS_CONFIRM_SECONDS,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
     STATE_MACHINE_TRANSITION_GRACE_SECONDS,
@@ -868,6 +869,22 @@ class StateMachine:
         )
         return False
 
+    @staticmethod
+    def _gate_missing(data: CoordinatorData) -> list[str]:
+        """Battery-data inputs that are missing, for the issue #1228 gate.
+
+        The gate covers SOC, prices, operation mode and backup reserve. A
+        forecast outage is deliberately not one: the optimizer handles a missing
+        forecast itself, and falling back to SELF_CONSUMPTION for it mid-day is
+        wrong. ``data.automation_ready`` (the startup check) still includes it.
+        """
+        if data.automation_ready:
+            return []
+        status = data.automation_ready_status
+        if not status:
+            return list(data.automation_ready_missing) or ["unknown"]
+        return [k for k in READINESS_GATE_INPUTS if status.get(k) is False]
+
     async def _handle_readiness_gate(
         self, data: CoordinatorData, now: datetime
     ) -> bool:
@@ -887,7 +904,8 @@ class StateMachine:
 
         Returns True if evaluation should return early.
         """
-        if data.automation_ready:
+        missing = self._gate_missing(data)
+        if not missing:
             return False
 
         if self._readiness_lost_since is None:
@@ -904,13 +922,16 @@ class StateMachine:
                 "Automation readiness lost for %ss - missing: %s. Falling back "
                 "to SELF_CONSUMPTION until inputs are valid.",
                 READINESS_LOSS_CONFIRM_SECONDS,
-                ", ".join(data.automation_ready_missing)
-                if data.automation_ready_missing
-                else "unknown",
+                ", ".join(missing),
             )
 
         # Also retries a fallback write that failed or was blocked.
         if self._commanded_mode != BatteryMode.SELF_CONSUMPTION:
+            if not self.entity_validator.should_allow_automation():
+                # The transition path would warn on every attempt; the outage
+                # has had its one warning.
+                _LOGGER.debug("Readiness fallback blocked by the entity validator")
+                return True
             await self._handle_desired_mode_transition(
                 data, BatteryMode.SELF_CONSUMPTION, now
             )
@@ -924,7 +945,7 @@ class StateMachine:
         one tick late. An outage that cleared inside the confirm window issued
         nothing and needs no re-decision.
         """
-        if not data.automation_ready or self._readiness_lost_since is None:
+        if self._gate_missing(data) or self._readiness_lost_since is None:
             return
         if self._readiness_fallback_done:
             _LOGGER.info(

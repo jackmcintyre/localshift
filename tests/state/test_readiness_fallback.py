@@ -30,6 +30,15 @@ NOW_PATH = "custom_components.localshift.state.machine.dt_util.now"
 CONFIRM = timedelta(seconds=READINESS_LOSS_CONFIRM_SECONDS)
 
 
+_ALL_OK = {
+    "soc": True,
+    "prices_available": True,
+    "operation_mode": True,
+    "backup_reserve": True,
+    "forecast": True,
+}
+
+
 class _Engine:
     """Computation-engine stub that commits ``plan_mode`` when a token is granted."""
 
@@ -97,18 +106,23 @@ class _Rig:
         self.data.prices_available = False
         self.data.automation_ready = False
         self.data.automation_ready_missing = ["Price entities unavailable"]
+        self.data.automation_ready_status = {**_ALL_OK, "prices_available": False}
 
     def restore_prices(self) -> None:
         self.data.prices_available = True
         self.data.automation_ready = True
         self.data.automation_ready_missing = []
+        self.data.automation_ready_status = dict(_ALL_OK)
+
+    def lose_forecast(self) -> None:
+        self.data.automation_ready = False
+        self.data.automation_ready_missing = ["Solcast forecast (status: stale)"]
+        self.data.automation_ready_status = {**_ALL_OK, "forecast": False}
 
     def tick(self, advance: timedelta = timedelta(0)) -> None:
         self.now += advance
         with patch(NOW_PATH, return_value=self.now):
-            asyncio.run(
-                self.machine.evaluate_state_machine(self.data, self.engine)
-            )
+            asyncio.run(self.machine.evaluate_state_machine(self.data, self.engine))
 
     @property
     def writes(self) -> int:
@@ -248,9 +262,7 @@ class TestRecovery:
 
 
 class TestFlappingData:
-    def test_outage_that_clears_inside_the_window_causes_no_churn(
-        self, rig, caplog
-    ):
+    def test_outage_that_clears_inside_the_window_causes_no_churn(self, rig, caplog):
         rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
         rig.engine.plan_mode = BatteryMode.GRID_CHARGING
         with caplog.at_level(logging.WARNING):
@@ -374,3 +386,56 @@ class TestReadinessIsRefreshedEveryEvaluation:
             )
         )
         check.assert_called_once_with(rig.data, suppress_warning=True)
+
+
+class TestScopeOfTheGate:
+    def test_forecast_outage_never_falls_back(self, rig, caplog):
+        rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
+        rig.engine.plan_mode = BatteryMode.GRID_CHARGING
+        rig.lose_forecast()
+        with caplog.at_level(logging.WARNING):
+            rig.tick()
+            rig.tick(CONFIRM * 3)
+            rig.tick(timedelta(seconds=60))
+
+        assert rig.writes == 0
+        assert rig.machine._commanded_mode == BatteryMode.GRID_CHARGING
+        assert not _warnings(caplog, "readiness lost")
+
+    @pytest.mark.parametrize("key", ["soc", "operation_mode", "backup_reserve"])
+    def test_other_battery_inputs_gate_too(self, rig, key):
+        rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
+        rig.data.automation_ready = False
+        rig.data.automation_ready_status = {**_ALL_OK, key: False}
+        rig.tick()
+        rig.tick(CONFIRM)
+
+        rig.controller.set_self_consumption.assert_awaited_once()
+
+    def test_unchecked_status_falls_back_to_the_overall_flag(self, rig):
+        rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
+        rig.data.automation_ready = False
+        rig.data.automation_ready_status = {}
+        rig.tick()
+        rig.tick(CONFIRM)
+
+        rig.controller.set_self_consumption.assert_awaited_once()
+
+
+class TestBlockedFallbackWarnsOnce:
+    def test_validator_block_retries_quietly_then_lands(self, rig, caplog):
+        rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
+        rig.machine.entity_validator.should_allow_automation.return_value = False
+        rig.lose_prices()
+        with caplog.at_level(logging.WARNING):
+            rig.tick()
+            rig.tick(CONFIRM)
+            rig.tick(timedelta(seconds=60))
+            rig.tick(timedelta(seconds=60))
+
+        assert len(_warnings(caplog, "")) == 1
+        assert rig.writes == 0
+
+        rig.machine.entity_validator.should_allow_automation.return_value = True
+        rig.tick(timedelta(seconds=60))
+        rig.controller.set_self_consumption.assert_awaited_once()

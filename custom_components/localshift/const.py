@@ -683,6 +683,9 @@ EXPORT_INVERSION_HOLDOFF_MINUTES = 60
 # is held and no decision is made, so a feed that drops for seconds causes no
 # battery write. Two fast ticks: one missed refresh cannot trip it.
 READINESS_LOSS_CONFIRM_SECONDS = 120
+# The readiness checks (keys of ``automation_ready_status``) that gate decisions
+# after startup. The forecast check is left out on purpose.
+READINESS_GATE_INPUTS = ("soc", "prices_available", "operation_mode", "backup_reserve")
 
 # -----------------------------------------------------------------------------
 # Negative FIT Avoidance Constants (Issue #719)
