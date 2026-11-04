@@ -17,6 +17,7 @@ from custom_components.localshift.const import (
     CONF_MINIMUM_TARGET_SOC,
     DEFAULT_BATTERY_TARGET,
     DEFAULT_MINIMUM_TARGET_SOC,
+    GRID_CHARGING_UNATTENDED_ALERT_SECONDS,
     TESLEMETRY_EXPORT_BATTERY_OK,
     TESLEMETRY_EXPORT_PV_ONLY,
     BatteryMode,
@@ -1953,6 +1954,8 @@ class TestGridChargingListenerCooldown:
         scheduled = []
 
         def _fake_call_later(hass, delay, action):
+            if delay == GRID_CHARGING_UNATTENDED_ALERT_SECONDS:
+                return MagicMock()  # #1211 timer; covered by its own tests
             cancel = MagicMock()
             scheduled.append({"delay": delay, "action": action, "cancel": cancel})
             return cancel
@@ -3964,3 +3967,270 @@ class TestInvalidateDecisionFingerprint:
         asyncio.run(state_machine.evaluate_state_machine(coordinator_data, engine))
         assert engine.last_decision_allowed is True
         assert coordinator_data.active_mode == BatteryMode.GRID_CHARGING
+
+
+# =============================================================================
+# GRID CHARGING LEFT ON WHILE LOCALSHIFT IS NOT IN CONTROL (Issue #1211)
+# =============================================================================
+
+
+class TestGridChargingUnattendedAlert:
+    """One notification when grid charging stays on 15 min unattended (#1211)."""
+
+    _ENTITY = "switch.my_home_allow_charging_from_grid"
+    _CALL_LATER = "custom_components.localshift.state.machine.async_call_later"
+
+    def _arm(
+        self,
+        state_machine,
+        mock_hass,
+        mock_battery_controller,
+        monkeypatch,
+        *,
+        start_state=None,
+        switches=None,
+    ):
+        """Register the listener with a captured callback and fake timer."""
+        mock_battery_controller._get_entity_id.return_value = self._ENTITY
+        mock_hass.async_create_task = asyncio.create_task
+        mock_hass.states = MagicMock()
+        mock_hass.states.get.return_value = (
+            MagicMock(state=start_state) if start_state else None
+        )
+        mock_hass.services.async_call = AsyncMock(return_value=True)
+        switch_states = {"automation_enabled": True, "dry_run": False}
+        switch_states.update(switches or {})
+        state_machine._get_switch_state = lambda key: switch_states.get(key, False)
+        state_machine._commanded_mode = BatteryMode.HOLD
+        state_machine._in_mode_transition = True  # keep the revert path out of it
+        captured = {}
+        scheduled = []
+
+        def _fake_track(hass, entity_ids, callback):
+            captured["callback"] = callback
+            return MagicMock()
+
+        def _fake_call_later(hass, delay, action):
+            cancel = MagicMock()
+            scheduled.append({"delay": delay, "action": action, "cancel": cancel})
+            return cancel
+
+        monkeypatch.setattr(TestGridChargingListener._MACHINE_TRACK, _fake_track)
+        monkeypatch.setattr(self._CALL_LATER, _fake_call_later)
+        state_machine.start_grid_charging_listener(mock_hass)
+        return captured, scheduled, switch_states
+
+    @staticmethod
+    def _event(state):
+        event = MagicMock()
+        event.data = {
+            "new_state": MagicMock(state=state),
+            "old_state": MagicMock(state="off"),
+        }
+        return event
+
+    @staticmethod
+    async def _fire(scheduled, index=-1):
+        scheduled[index]["action"](None)
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    @pytest.fixture
+    def alerts(self, mock_notification_service):
+        mock_notification_service.send_grid_charging_unattended_notification = (
+            AsyncMock()
+        )
+        return mock_notification_service.send_grid_charging_unattended_notification
+
+    @pytest.mark.asyncio
+    async def test_alert_fires_after_15_minutes_when_automation_off(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch, alerts
+    ):
+        captured, scheduled, _ = self._arm(
+            state_machine,
+            mock_hass,
+            mock_battery_controller,
+            monkeypatch,
+            switches={"automation_enabled": False},
+        )
+        captured["callback"](self._event("on"))
+        assert [s["delay"] for s in scheduled] == [15 * 60]
+        alerts.assert_not_called()
+        await self._fire(scheduled)
+        alerts.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reason", ["dry_run", "tesla_override"])
+    async def test_alert_fires_for_each_not_in_control_reason(
+        self,
+        reason,
+        state_machine,
+        mock_hass,
+        mock_battery_controller,
+        monkeypatch,
+        alerts,
+    ):
+        captured, scheduled, _ = self._arm(
+            state_machine,
+            mock_hass,
+            mock_battery_controller,
+            monkeypatch,
+            switches={"dry_run": reason == "dry_run"},
+        )
+        state_machine._tesla_override_detected = reason == "tesla_override"
+        captured["callback"](self._event("on"))
+        await self._fire(scheduled)
+        alerts.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_alert_while_localshift_is_in_control(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch, alerts
+    ):
+        captured, scheduled, _ = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        captured["callback"](self._event("on"))
+        await self._fire(scheduled)
+        alerts.assert_not_called()
+        # Still on and unresolved: the check is re-armed for control being lost.
+        assert len(scheduled) == 2
+        assert scheduled[1]["delay"] == 15 * 60
+
+    @pytest.mark.asyncio
+    async def test_control_lost_later_in_episode_alerts_on_next_check(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch, alerts
+    ):
+        captured, scheduled, switches = self._arm(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        captured["callback"](self._event("on"))
+        await self._fire(scheduled)
+        switches["automation_enabled"] = False
+        await self._fire(scheduled)
+        alerts.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unavailable_blip_neither_restarts_nor_cancels_timer(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch, alerts
+    ):
+        captured, scheduled, _ = self._arm(
+            state_machine,
+            mock_hass,
+            mock_battery_controller,
+            monkeypatch,
+            switches={"automation_enabled": False},
+        )
+        captured["callback"](self._event("on"))
+        captured["callback"](self._event("unavailable"))
+        captured["callback"](self._event("on"))
+        assert len(scheduled) == 1
+        scheduled[0]["cancel"].assert_not_called()
+        await self._fire(scheduled)
+        alerts.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_one_alert_per_episode_and_blip_does_not_rearm(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch, alerts
+    ):
+        captured, scheduled, _ = self._arm(
+            state_machine,
+            mock_hass,
+            mock_battery_controller,
+            monkeypatch,
+            switches={"automation_enabled": False},
+        )
+        captured["callback"](self._event("on"))
+        await self._fire(scheduled)
+        captured["callback"](self._event("unavailable"))
+        captured["callback"](self._event("on"))
+        assert len(scheduled) == 1
+        alerts.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_real_off_ends_episode_and_next_on_starts_a_new_one(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch, alerts
+    ):
+        captured, scheduled, _ = self._arm(
+            state_machine,
+            mock_hass,
+            mock_battery_controller,
+            monkeypatch,
+            switches={"automation_enabled": False},
+        )
+        captured["callback"](self._event("on"))
+        await self._fire(scheduled)
+        captured["callback"](self._event("off"))
+        captured["callback"](self._event("on"))
+        assert len(scheduled) == 2
+        await self._fire(scheduled)
+        assert alerts.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_off_before_15_minutes_cancels_the_timer(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch, alerts
+    ):
+        captured, scheduled, _ = self._arm(
+            state_machine,
+            mock_hass,
+            mock_battery_controller,
+            monkeypatch,
+            switches={"automation_enabled": False},
+        )
+        captured["callback"](self._event("on"))
+        captured["callback"](self._event("off"))
+        scheduled[0]["cancel"].assert_called_once()
+        alerts.assert_not_called()
+
+    def test_timer_starts_at_startup_when_already_on(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        _, scheduled, _ = self._arm(
+            state_machine,
+            mock_hass,
+            mock_battery_controller,
+            monkeypatch,
+            start_state="on",
+        )
+        assert [s["delay"] for s in scheduled] == [15 * 60]
+
+    @pytest.mark.parametrize("start_state", [None, "off", "unavailable"])
+    def test_no_timer_at_startup_unless_on(
+        self, start_state, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        _, scheduled, _ = self._arm(
+            state_machine,
+            mock_hass,
+            mock_battery_controller,
+            monkeypatch,
+            start_state=start_state,
+        )
+        assert scheduled == []
+
+    def test_stopping_the_listener_cancels_the_timer(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch
+    ):
+        _, scheduled, _ = self._arm(
+            state_machine,
+            mock_hass,
+            mock_battery_controller,
+            monkeypatch,
+            start_state="on",
+        )
+        state_machine.stop_grid_charging_listener()
+        scheduled[0]["cancel"].assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_alert_never_writes_to_the_battery(
+        self, state_machine, mock_hass, mock_battery_controller, monkeypatch, alerts
+    ):
+        captured, scheduled, _ = self._arm(
+            state_machine,
+            mock_hass,
+            mock_battery_controller,
+            monkeypatch,
+            switches={"automation_enabled": False},
+        )
+        captured["callback"](self._event("on"))
+        await self._fire(scheduled)
+        mock_hass.services.async_call.assert_not_called()
+        mock_battery_controller.set_self_consumption.assert_not_called()

@@ -31,6 +31,7 @@ from ..const import (
     GRID_CHARGING_LISTENER_BACKOFF_RESET_SECONDS,
     GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS,
     GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS,
+    GRID_CHARGING_UNATTENDED_ALERT_SECONDS,
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT,
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT,
     PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
@@ -167,6 +168,10 @@ class StateMachine:
         # Issue #1208: the listener's own guard and its one pending re-check.
         self._last_listener_correction: datetime | None = None
         self._grid_charging_recheck: Callable | None = None
+        # Issue #1211: the 15-minute unattended-charging timer, and whether this
+        # episode (grid charging on, until a real "off") has already alerted.
+        self._unattended_timer: Callable | None = None
+        self._unattended_alerted: bool = False
         self._listener_guard_seconds: int = GRID_CHARGING_LISTENER_MIN_INTERVAL_SECONDS
         # Issue #510 slice 1: one-shot tag for transitions issued outside the
         # decision path (Tesla re-probe, health-check correction). Set immediately
@@ -2571,6 +2576,7 @@ class StateMachine:
             new_state = event.data.get("new_state")
             if new_state is None or new_state.state not in ("on", "off"):
                 return
+            self._track_unattended_grid_charging(hass, new_state.state)
             # Only react to the switch turning ON (reversion)
             if new_state.state != "on":
                 return
@@ -2599,9 +2605,57 @@ class StateMachine:
             hass, [entity_id], _on_grid_charging_state_change
         )
         _LOGGER.debug("Registered grid_charging state listener on %s (#491)", entity_id)
+        # Issue #1211: already on at startup starts the timer now.
+        current = hass.states.get(entity_id)
+        if current is not None:
+            self._track_unattended_grid_charging(hass, current.state)
+
+    def _track_unattended_grid_charging(self, hass: Any, state: str) -> None:
+        """Run the 15-minute unattended-charging timer off the listener's events.
+
+        Issue #1211: only a real on/off moves the episode. The listener drops
+        unavailable/unknown before it gets here, so a blip neither restarts
+        the timer nor re-arms an alert that already fired.
+        """
+        if state == "off":
+            self._cancel_unattended_timer()
+            self._unattended_alerted = False
+        elif (
+            state == "on"
+            and self._unattended_timer is None
+            and not self._unattended_alerted
+        ):
+            self._arm_unattended_timer(hass)
+
+    def _arm_unattended_timer(self, hass: Any) -> None:
+        @callback
+        def _check(_now: datetime) -> None:
+            self._unattended_timer = None
+            if self._stopped:
+                return
+            if self._get_switch_state("automation_enabled") and not (
+                self._get_switch_state("dry_run") or self.is_tesla_override_active()
+            ):
+                # In control, and still on: look again in case control is lost.
+                self._arm_unattended_timer(hass)
+                return
+            self._unattended_alerted = True
+            hass.async_create_task(
+                self._notification_service.send_grid_charging_unattended_notification()
+            )
+
+        self._unattended_timer = async_call_later(
+            hass, GRID_CHARGING_UNATTENDED_ALERT_SECONDS, _check
+        )
+
+    def _cancel_unattended_timer(self) -> None:
+        if self._unattended_timer is not None:
+            self._unattended_timer()
+            self._unattended_timer = None
 
     def stop_grid_charging_listener(self) -> None:
         """Unregister the reactive grid_charging state listener."""
+        self._cancel_unattended_timer()
         if self._grid_charging_recheck is not None:
             self._grid_charging_recheck()
             self._grid_charging_recheck = None

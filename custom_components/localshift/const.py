@@ -604,6 +604,10 @@ GRID_CHARGING_LISTENER_MAX_INTERVAL_SECONDS = (
 )
 GRID_CHARGING_LISTENER_BACKOFF_RESET_SECONDS = 600
 
+# Issue #1211: how long grid charging may stay on while LocalShift is not in
+# control (automation off, dry run, Tesla override) before one notification.
+GRID_CHARGING_UNATTENDED_ALERT_SECONDS = 15 * 60
+
 # Grace period after successful transition before health checks trigger corrections.
 # Prevents false positives when Tesla API is still propagating state changes.
 STATE_MACHINE_TRANSITION_GRACE_SECONDS = 30

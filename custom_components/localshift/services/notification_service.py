@@ -14,6 +14,7 @@ from ..const import (
     DEFAULT_BATTERY_TARGET,
     DEFAULT_DEMAND_WINDOW_END,
     DEFAULT_DEMAND_WINDOW_START,
+    GRID_CHARGING_UNATTENDED_ALERT_SECONDS,
     SWITCH_NOTIFICATIONS_ENABLED,
     BatteryMode,
 )
@@ -464,6 +465,25 @@ class NotificationService:
         )
 
         await self.send_notification(title, message)
+
+    async def send_grid_charging_unattended_notification(self) -> None:
+        """Notify that grid charging has stayed on while LocalShift isn't in control.
+
+        Issue #1211: nothing undoes Tesla's hourly re-enable when automation is
+        disabled, in dry run, or overridden, so the battery can charge from the
+        grid for hours unnoticed. Notify only; this never writes to the battery.
+        """
+        if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
+            _LOGGER.debug("Notifications disabled, skipping unattended grid charging")
+            return
+
+        minutes = GRID_CHARGING_UNATTENDED_ALERT_SECONDS // 60
+        await self.send_notification(
+            f"{NOTIFICATION_PREFIX}Grid Charging On",
+            f"Grid charging has been on {minutes} min while LocalShift isn't in "
+            f"control (automation off / dry run / Tesla override). Check the "
+            f"Tesla app or turn LocalShift back on.",
+        )
 
     async def send_manual_override_timeout_notification(
         self,
