@@ -35,6 +35,7 @@ from ..const import (
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_PERCENT,
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT,
     PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
+    READINESS_LOSS_CONFIRM_SECONDS,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
     STATE_MACHINE_TRANSITION_GRACE_SECONDS,
     TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES,
@@ -135,6 +136,10 @@ class StateMachine:
         self._commanded_mode: BatteryMode = BatteryMode.SELF_CONSUMPTION
         self._mode_desired_since: dict[BatteryMode, datetime] = {}
         self._startup_grace_until: datetime | None = None
+        # Issue #1228: when automation readiness was first seen lost, and
+        # whether the SELF_CONSUMPTION fallback has been issued for that outage.
+        self._readiness_lost_since: datetime | None = None
+        self._readiness_fallback_done = False
         self._evaluate_lock = asyncio.Lock()
         # Issue #1149: set on unload, see stop().
         self._stopped = False
@@ -847,6 +852,10 @@ class StateMachine:
             # Stay in SELF_CONSUMPTION mode - don't infer from potentially stale hardware state
             self._commanded_mode = BatteryMode.SELF_CONSUMPTION
             self._skip_next_debounce = True
+            # Issue #1228: the per-tick readiness gate carries on from here, so
+            # the outage is already warned about and already in the fallback.
+            self._readiness_lost_since = now
+            self._readiness_fallback_done = True
             return True
 
         self._commanded_mode = self.infer_current_hardware_mode(data)
@@ -858,6 +867,82 @@ class StateMachine:
             self._commanded_mode.value,
         )
         return False
+
+    async def _handle_readiness_gate(
+        self, data: CoordinatorData, now: datetime
+    ) -> bool:
+        """Gate mode decisions on automation readiness, every evaluation.
+
+        Issue #1228: readiness used to be checked once, where the startup grace
+        ends, so a later outage of prices, SOC or the operation mode reached the
+        optimizer as placeholder data (price 0.0, no forecasts).
+
+        While inputs are missing no decision is made and none is acted on. The
+        commanded mode is held for READINESS_LOSS_CONFIRM_SECONDS, so a feed
+        that drops for seconds causes no battery write. If the outage outlasts
+        that, fall back to SELF_CONSUMPTION through the normal transition path
+        (one write; dry run writes nothing) and warn once. When the inputs
+        return, the decision fingerprint is invalidated so the first evaluation
+        re-decides from fresh data instead of waiting for a price change.
+
+        Returns True if evaluation should return early.
+        """
+        if data.automation_ready:
+            return False
+
+        if self._readiness_lost_since is None:
+            self._readiness_lost_since = now
+
+        if not self._readiness_fallback_done:
+            if now - self._readiness_lost_since < timedelta(
+                seconds=READINESS_LOSS_CONFIRM_SECONDS
+            ):
+                _LOGGER.debug("Automation not ready, holding %s", self._commanded_mode)
+                return True
+            self._readiness_fallback_done = True
+            _LOGGER.warning(
+                "Automation readiness lost for %ss - missing: %s. Falling back "
+                "to SELF_CONSUMPTION until inputs are valid.",
+                READINESS_LOSS_CONFIRM_SECONDS,
+                ", ".join(data.automation_ready_missing)
+                if data.automation_ready_missing
+                else "unknown",
+            )
+
+        # Also retries a fallback write that failed or was blocked.
+        if self._commanded_mode != BatteryMode.SELF_CONSUMPTION:
+            await self._handle_desired_mode_transition(
+                data, BatteryMode.SELF_CONSUMPTION, now
+            )
+        return True
+
+    def _note_readiness_restored(self, data: CoordinatorData) -> None:
+        """Close an outage when the inputs are back (issue #1228).
+
+        Runs before the decision token is consumed, so after a fallback the
+        first evaluation with data is itself an allowed decision rather than
+        one tick late. An outage that cleared inside the confirm window issued
+        nothing and needs no re-decision.
+        """
+        if not data.automation_ready or self._readiness_lost_since is None:
+            return
+        if self._readiness_fallback_done:
+            _LOGGER.info(
+                "Automation readiness restored after %s, resuming normal mode "
+                "decisions",
+                dt_util.now() - self._readiness_lost_since,
+            )
+            self.invalidate_decision_fingerprint("readiness restored (#1228)")
+        else:
+            _LOGGER.debug(
+                "Automation readiness restored inside the %ss confirm window",
+                READINESS_LOSS_CONFIRM_SECONDS,
+            )
+        self._reset_readiness_outage()
+
+    def _reset_readiness_outage(self) -> None:
+        self._readiness_lost_since = None
+        self._readiness_fallback_done = False
 
     def _handle_automation_disabled(self) -> bool:
         """Handle automation disabled state.
@@ -1071,9 +1156,12 @@ class StateMachine:
             )
             if read_state_func is not None:
                 read_state_func()
-            if not data.automation_ready and check_automation_ready_func is not None:
-                in_grace = self._startup_grace_until is not None
-                check_automation_ready_func(data, suppress_warning=in_grace)
+            if check_automation_ready_func is not None:
+                # Issue #1228: every evaluation, not only while not ready. The
+                # gate in _evaluate_core owns the one warning per outage.
+                check_automation_ready_func(data, suppress_warning=True)
+
+            self._note_readiness_restored(data)
 
             # #622 gate replacement: consume the decision token at evaluation
             # time, from fresh post-read_state data, BEFORE compute_derived_values
@@ -1341,6 +1429,11 @@ class StateMachine:
         await self._handle_manual_override_timeout(data, now)
 
         if self._handle_automation_disabled():
+            # Not in control: no fallback to write, and no outage to carry over.
+            self._reset_readiness_outage()
+            return
+
+        if await self._handle_readiness_gate(data, now):
             return
 
         # #622 gate replacement: the convergence-while-frozen guarantee rests on

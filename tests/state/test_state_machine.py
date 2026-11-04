@@ -2494,8 +2494,9 @@ class TestEvaluateStateMachineCallbacks:
         self, state_machine, coordinator_data
     ):
         """read_state_func always runs inside the lock; check_automation_ready_func
-        runs (with suppress_warning reflecting grace state) only when automation
-        isn't ready; notify_func always runs in the finally block."""
+        runs on every evaluation (issue #1228) and never warns itself, the state
+        machine owns the one warning per outage; notify_func always runs in the
+        finally block."""
         coordinator_data.automation_ready = False
         read_state = MagicMock()
         check_ready = MagicMock()
@@ -2513,7 +2514,7 @@ class TestEvaluateStateMachineCallbacks:
         )
 
         read_state.assert_called_once()
-        check_ready.assert_called_once_with(coordinator_data, suppress_warning=False)
+        check_ready.assert_called_once_with(coordinator_data, suppress_warning=True)
         notify.assert_called_once()
 
 

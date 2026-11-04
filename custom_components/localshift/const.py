@@ -678,6 +678,12 @@ EXPORT_INVERSION_CONFIRM_SECONDS = 90
 # How long export stays off the table after the watchdog trips.
 EXPORT_INVERSION_HOLDOFF_MINUTES = 60
 
+# Issue #1228: how long automation readiness must stay lost before the state
+# machine falls back to SELF_CONSUMPTION. Inside the window the commanded mode
+# is held and no decision is made, so a feed that drops for seconds causes no
+# battery write. Two fast ticks: one missed refresh cannot trip it.
+READINESS_LOSS_CONFIRM_SECONDS = 120
+
 # -----------------------------------------------------------------------------
 # Negative FIT Avoidance Constants (Issue #719)
 # -----------------------------------------------------------------------------
