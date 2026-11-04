@@ -953,3 +953,28 @@ class TestHelperMethods:
 
         result = service._get_dry_run_prefix()
         assert result == "[Dry Run] "
+
+
+class TestGridChargingUnattendedNotification:
+    """Issue #1211: grid charging left on while LocalShift isn't in control."""
+
+    @pytest.mark.asyncio
+    async def test_sends_one_notification(self, notification_service, mock_hass):
+        await notification_service.send_grid_charging_unattended_notification()
+
+        data = mock_hass.services.async_call.call_args[0][2]
+        assert "Grid Charging" in data["title"]
+        assert "at least 15 min" in data["message"]
+        assert "isn't in control" in data["message"]
+        mock_hass.services.async_call.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_not_gated_by_the_notifications_switch(
+        self, notification_service_with_switches, mock_hass
+    ):
+        service, switches = notification_service_with_switches
+        switches[SWITCH_NOTIFICATIONS_ENABLED] = False
+
+        await service.send_grid_charging_unattended_notification()
+
+        mock_hass.services.async_call.assert_awaited_once()
