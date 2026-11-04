@@ -964,12 +964,12 @@ class TestGridChargingUnattendedNotification:
 
         data = mock_hass.services.async_call.call_args[0][2]
         assert "Grid Charging" in data["title"]
-        assert "15 min" in data["message"]
+        assert "at least 15 min" in data["message"]
         assert "isn't in control" in data["message"]
         mock_hass.services.async_call.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_skipped_when_notifications_disabled(
+    async def test_not_gated_by_the_notifications_switch(
         self, notification_service_with_switches, mock_hass
     ):
         service, switches = notification_service_with_switches
@@ -977,4 +977,4 @@ class TestGridChargingUnattendedNotification:
 
         await service.send_grid_charging_unattended_notification()
 
-        mock_hass.services.async_call.assert_not_called()
+        mock_hass.services.async_call.assert_awaited_once()

@@ -472,15 +472,18 @@ class NotificationService:
         Issue #1211: nothing undoes Tesla's hourly re-enable when automation is
         disabled, in dry run, or overridden, so the battery can charge from the
         grid for hours unnoticed. Notify only; this never writes to the battery.
-        """
-        if not self._is_notification_enabled(SWITCH_NOTIFICATIONS_ENABLED):
-            _LOGGER.debug("Notifications disabled, skipping unattended grid charging")
-            return
 
+        Deliberately NOT gated by the notifications switch: it is once per
+        episode and rare, and it is the only safety net for this case.
+
+        The check runs when the 15 minutes expire, so once grid charging has
+        been on that long the alert fires 0-15 min after control is lost, which
+        is why the message says "at least".
+        """
         minutes = GRID_CHARGING_UNATTENDED_ALERT_SECONDS // 60
         await self.send_notification(
             f"{NOTIFICATION_PREFIX}Grid Charging On",
-            f"Grid charging has been on {minutes} min while LocalShift isn't in "
+            f"Grid charging has been on at least {minutes} min while LocalShift isn't in "
             f"control (automation off / dry run / Tesla override). Check the "
             f"Tesla app or turn LocalShift back on.",
         )
