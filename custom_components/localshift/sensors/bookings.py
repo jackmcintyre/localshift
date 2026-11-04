@@ -13,6 +13,7 @@ class BookingsSensor(LocalShiftSensorBase):
     _attr_unique_id = "localshift_bookings"
     _attr_name = "Bookings"
     _attr_icon = "mdi:washing-machine"
+    _unrecorded_attributes = frozenset({"bookings"})
 
     def _live(self) -> list[dict[str, Any]]:
         store = self.coordinator.bookings

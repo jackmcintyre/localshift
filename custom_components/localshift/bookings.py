@@ -7,6 +7,8 @@ reads the existing forecasts only: the planner is not involved.
 
 from __future__ import annotations
 
+import functools
+import logging
 import secrets
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -21,11 +23,11 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator.data import CoordinatorData
-from .forecast.solar import get_solar_for_15min_slot
 
 if TYPE_CHECKING:
     from .coordinator import LocalShiftCoordinator
 
+_LOGGER = logging.getLogger(__name__)
 STORAGE_VERSION = 1
 SLOT = timedelta(minutes=15)
 # A booking only moves forward: booked -> started -> done, or cancelled.
@@ -37,14 +39,17 @@ ExcessAt = Callable[[datetime], "float | None"]
 
 
 def _aware(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    """UTC, reading a naive time as local; all window arithmetic is in UTC (DST)."""
+    return dt_util.as_utc(
+        value if value.tzinfo else value.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    )
 
 
 BOOK_SCHEMA = vol.Schema({
     vol.Optional("name"): cv.string,
     vol.Optional("duration_min"): vol.All(vol.Coerce(int), vol.Range(min=1)),
-    vol.Optional("est_kwh"): vol.All(vol.Coerce(float), vol.Range(min=0.01)),
-    vol.Optional("est_kw"): vol.All(vol.Coerce(float), vol.Range(min=0.01)),
+    vol.Exclusive("est_kwh", "energy"): vol.All(vol.Coerce(float), vol.Range(min=0.01)),
+    vol.Exclusive("est_kw", "energy"): vol.All(vol.Coerce(float), vol.Range(min=0.01)),
     vol.Optional("earliest_start"): vol.All(cv.datetime, _aware),
     vol.Optional("latest_finish"): vol.All(cv.datetime, _aware),
     # The house reports a start or finish through the same service.
@@ -57,17 +62,21 @@ CANCEL_SCHEMA = vol.Schema({
 })
 
 
-def excess_from_data(data: CoordinatorData, now: datetime) -> ExcessAt:
-    """Spare solar (kW) at a slot: Solcast minus the load forecast, as the plan sees it."""
-    base = now.replace(minute=(now.minute // 5) * 5, second=0, microsecond=0)
-    solcast = [*data.solcast_today, *data.solcast_tomorrow]
+def excess_from_data(data: CoordinatorData) -> ExcessAt:
+    """Exported kW at a time, from the plan's own slots (read-only).
 
-    def excess_at(slot_start: datetime) -> float | None:
-        index = (slot_start - base) // SLOT
-        if not 0 <= index < len(data.load_forecast_slots):
-            return None
-        solar_kw = get_solar_for_15min_slot(solcast, slot_start) * 4
-        return solar_kw - data.load_forecast_slots[index]
+    Export is solar the house and battery did not use: the spare solar a load
+    can absorb. Times outside the plan have no figure.
+    """
+    slots = []
+    for d in data.optimizer_decisions:
+        start = dt_util.as_utc(datetime.fromisoformat(d["timestamp_iso"]))
+        minutes = d["slot_interval_minutes"]
+        end = start + timedelta(minutes=minutes)
+        slots.append((start, end, d["grid_export_kwh"] * 60 / minutes))
+
+    def excess_at(when: datetime) -> float | None:
+        return next((kw for start, end, kw in slots if start <= when < end), None)
 
     return excess_at
 
@@ -102,22 +111,26 @@ class BookingStore:
         self._bookings: dict[str, dict[str, Any]] = {}
 
     async def async_load(self, now: datetime) -> None:
-        self._bookings = (await self._store.async_load() or {}).get("bookings", {})
-        self._prune(now)
+        try:
+            saved = await self._store.async_load() or {}
+            self._bookings = saved.get("bookings", {})
+            self._prune(now)
+        except Exception:  # noqa: BLE001 - a bad file must not stop LocalShift starting
+            _LOGGER.warning("Could not read stored load bookings; starting with none")
+            self._bookings = {}
 
-    def _prune(self, now: datetime) -> None:
-        self._bookings = {
+    def _live(self, now: datetime) -> dict[str, dict[str, Any]]:
+        return {
             key: b
             for key, b in self._bookings.items()
             if datetime.fromisoformat(b["finish_by"]) >= now
         }
 
+    def _prune(self, now: datetime) -> None:
+        self._bookings = self._live(now)
+
     def as_list(self, now: datetime) -> list[dict[str, Any]]:
-        return [
-            b
-            for b in self._bookings.values()
-            if datetime.fromisoformat(b["finish_by"]) >= now
-        ]
+        return list(self._live(now).values())
 
     async def _commit(self, now: datetime) -> None:
         self._prune(now)
@@ -159,7 +172,7 @@ class BookingStore:
         }
         self._bookings[booking["id"]] = booking
         await self._commit(now)
-        return booking
+        return dict(booking)
 
     async def async_cancel(
         self,
@@ -193,29 +206,30 @@ class BookingStore:
             )
         booking["status"] = status
         await self._commit(now)
-        return booking
+        return dict(booking)
 
 
-def _store(hass: HomeAssistant) -> BookingStore:
+def _coordinator(hass: HomeAssistant) -> LocalShiftCoordinator:
     entries = hass.config_entries.async_loaded_entries(DOMAIN)
-    coordinator: LocalShiftCoordinator | None = (
-        entries[0].runtime_data if entries else None
-    )
+    coordinator = entries[0].runtime_data if entries else None
     if coordinator is None or coordinator.bookings is None:
         raise ServiceValidationError("LocalShift is not loaded")
-    return coordinator.bookings
+    return coordinator
 
 
 async def async_book_load(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
     """Book a load, or (with booking_id and status) report that one started or finished."""
-    store, now, d = _store(hass), dt_util.utcnow(), call.data
-    if "booking_id" in d and "status" in d:
-        return await store.async_report(d["booking_id"], d["status"], now)
+    coordinator, now, d = _coordinator(hass), dt_util.utcnow(), call.data
+    if ("booking_id" in d) != ("status" in d):
+        raise ServiceValidationError("booking_id and status go together")
+    if "status" in d:
+        return await coordinator.bookings.async_report(
+            d["booking_id"], d["status"], now
+        )
     missing = {"name", "duration_min", "earliest_start", "latest_finish"} - set(d)
     if missing:
         raise ServiceValidationError(f"Missing: {', '.join(sorted(missing))}")
-    coordinator = hass.config_entries.async_loaded_entries(DOMAIN)[0].runtime_data
-    return await store.async_book(
+    return await coordinator.bookings.async_book(
         name=d["name"],
         duration_min=d["duration_min"],
         earliest_start=d["earliest_start"],
@@ -223,13 +237,13 @@ async def async_book_load(hass: HomeAssistant, call: ServiceCall) -> dict[str, A
         est_kwh=d.get("est_kwh"),
         est_kw=d.get("est_kw"),
         now=now,
-        excess_kw_at=excess_from_data(coordinator.data, now),
+        excess_kw_at=excess_from_data(coordinator.data),
     )
 
 
 async def async_cancel_load(hass: HomeAssistant, call: ServiceCall) -> dict[str, int]:
     """Cancel the active booking with this id, or all active ones with this name."""
-    cancelled = await _store(hass).async_cancel(
+    cancelled = await _coordinator(hass).bookings.async_cancel(
         dt_util.utcnow(),
         booking_id=call.data.get("booking_id"),
         name=call.data.get("name"),
@@ -248,7 +262,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         hass.services.async_register(
             DOMAIN,
             name,
-            lambda call, handler=handler: handler(hass, call),
+            functools.partial(handler, hass),
             schema=schema,
             supports_response=SupportsResponse.OPTIONAL,
         )

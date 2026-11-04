@@ -5,12 +5,15 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 import voluptuous as vol
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.localshift import bookings as bk
+from custom_components.localshift.const import DOMAIN
 from custom_components.localshift.coordinator.data import CoordinatorData
 from custom_components.localshift.sensors.bookings import BookingsSensor
 
@@ -91,22 +94,27 @@ class TestPickStart:
         assert start == latest - timedelta(hours=1)
 
 
+def decision(start, export_kwh, minutes=15):
+    return {
+        "timestamp_iso": start.isoformat(),
+        "slot_interval_minutes": minutes,
+        "grid_export_kwh": export_kwh,
+    }
+
+
 class TestExcessFromData:
-    def test_spare_solar_is_forecast_minus_load(self):
+    def test_spare_solar_is_the_plans_export_as_kw(self):
         data = CoordinatorData()
-        data.solcast_today = [
-            {
-                "period_start": NOW.isoformat(),
-                "pv_estimate": 3.0,
-            }
+        data.optimizer_decisions = [
+            decision(NOW, 0.5),
+            decision(NOW + timedelta(minutes=15), 0.0),
         ]
-        data.load_forecast_slots = [1.0, 1.0]
-        with patch.object(bk, "get_solar_for_15min_slot", return_value=0.5):
-            excess = bk.excess_from_data(data, NOW)
-            assert excess(NOW) == pytest.approx(1.0)  # 0.5 kWh/15min = 2 kW - 1
-            assert excess(NOW + timedelta(minutes=15)) == pytest.approx(1.0)
-            assert excess(NOW + timedelta(minutes=30)) is None
-            assert excess(NOW - timedelta(minutes=15)) is None
+        excess = bk.excess_from_data(data)
+        assert excess(NOW) == pytest.approx(2.0)  # 0.5 kWh in 15 min
+        assert excess(NOW + timedelta(minutes=14)) == pytest.approx(2.0)
+        assert excess(NOW + timedelta(minutes=15)) == 0.0
+        assert excess(NOW + timedelta(minutes=30)) is None
+        assert excess(NOW - timedelta(minutes=1)) is None
 
 
 class TestBookingStore:
@@ -189,6 +197,36 @@ class TestBookingStore:
         b = await store.async_book(**BOOK, now=NOW, excess_kw_at=sunny(11, 14))
         with pytest.raises(ServiceValidationError):
             await store.async_report(b["id"], "booked", NOW)
+
+    async def test_malformed_stored_payload_starts_empty(self, caplog):
+        FakeStore.saved["localshift.bookings.e1"] = {"bookings": {"x": {"bad": 1}}}
+        store = make_store()
+        await store.async_load(NOW)
+        assert store.as_list(NOW) == []
+        assert "starting with none" in caplog.text
+
+    async def test_window_arithmetic_survives_the_dst_start_night(self):
+        # Sydney clocks go 02:00 -> 03:00 on 4 Oct 2026: 03:30 local is only
+        # 90 real minutes after 01:00 local.
+        with patch.object(
+            bk.dt_util, "DEFAULT_TIME_ZONE", ZoneInfo("Australia/Sydney")
+        ):
+            parsed = bk.BOOK_SCHEMA({
+                "latest_finish": "2026-10-04T03:30:00",
+                "earliest_start": "2026-10-03T22:00:00",
+            })
+        store = make_store()
+        booking = await store.async_book(
+            name="washer",
+            duration_min=120,
+            est_kwh=1.0,
+            earliest_start=parsed["earliest_start"],
+            latest_finish=parsed["latest_finish"],
+            now=parsed["earliest_start"],
+            excess_kw_at=lambda _s: None,
+        )
+        start = datetime.fromisoformat(booking["start_at"])
+        assert parsed["latest_finish"] - start == timedelta(minutes=120)
 
     async def test_pruned_after_latest_finish(self):
         store = make_store()
@@ -277,6 +315,48 @@ class TestServices:
         hass = hass_with_store(make_store())
         with pytest.raises(ServiceValidationError):
             await bk.async_book_load(hass, call(name="washer"))
+
+    @pytest.mark.parametrize("extra", [{"booking_id": "ab"}, {"status": "done"}])
+    async def test_booking_id_and_status_go_together(self, extra):
+        hass = hass_with_store(make_store())
+        with pytest.raises(ServiceValidationError, match="go together"):
+            await bk.async_book_load(hass, call(**BOOK, **extra))
+
+    def test_energy_given_once(self):
+        with pytest.raises(vol.Invalid):
+            bk.BOOK_SCHEMA({"est_kwh": 1.0, "est_kw": 1.0})
+
+    async def test_services_run_through_real_home_assistant(self, tmp_path):
+        """Core must accept the handlers: a lambda here was run as an executor job."""
+        hass = HomeAssistant(str(tmp_path))
+        store = make_store()
+        entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(bookings=store, data=CoordinatorData())
+        )
+        data = {
+            "name": "washer",
+            "duration_min": 60,
+            "est_kwh": 1.0,
+            "earliest_start": NOW.isoformat(),
+            "latest_finish": (NOW + timedelta(hours=8)).isoformat(),
+        }
+        bk.async_register_services(hass)
+        hass.config_entries = MagicMock()
+        hass.config_entries.async_loaded_entries.return_value = [entry]
+        with patch.object(bk.dt_util, "utcnow", return_value=NOW):
+            booked = await hass.services.async_call(
+                DOMAIN, "book_load", data, blocking=True, return_response=True
+            )
+            cancelled = await hass.services.async_call(
+                DOMAIN,
+                "cancel_load",
+                {"name": "washer"},
+                blocking=True,
+                return_response=True,
+            )
+        assert booked["status"] == "booked"
+        assert cancelled == {"cancelled": 1}
+        await hass.async_stop(force=True)
 
     def test_register_and_unregister(self):
         hass = MagicMock()
