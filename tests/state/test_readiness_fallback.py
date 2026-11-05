@@ -219,28 +219,29 @@ class TestPriceOutageAfterStartup:
         rig.controller.set_force_charge.assert_not_awaited()
         assert rig.machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
 
-    def test_failing_fallback_is_one_attempt_then_every_five_minutes(self, rig, caplog):
+    def test_failing_fallback_backs_off_quietly(self, rig, caplog):
         """A post-write check that reads dead entities fails every time."""
         rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
         rig.controller.set_self_consumption.return_value = False
         rig.lose_prices()
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG):
             rig.tick()
             rig.tick(CONFIRM)
-            for _ in range(10):
+            for _ in range(70):
                 rig.tick(timedelta(seconds=60))
 
-        # Window end, then +5 min, +10 min: three attempts in 12 minutes.
-        assert rig.controller.set_self_consumption.await_count == 3
+        # Window end (0), +5, +15 (10 later), +35 (20 later), +65 (30, the cap).
+        assert rig.controller.set_self_consumption.await_count == 5
         assert rig.machine._commanded_mode == BatteryMode.GRID_CHARGING
         rig.notifications.send_transition_failed_notification.assert_not_awaited()
         assert len(_warnings(caplog, "")) == 1
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
         rig.controller.set_self_consumption.return_value = True
-        for _ in range(6):
+        for _ in range(35):
             rig.tick(timedelta(seconds=60))
         assert rig.machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
-        assert rig.controller.set_self_consumption.await_count == 4
+        assert rig.controller.set_self_consumption.await_count == 6
 
 
 class TestRecovery:
@@ -507,10 +508,73 @@ class TestTeslaOverrideWhileGated:
         rig.data.storm_watch_active = False
         rig.data.operation_mode = "autonomous"
         rig.tick(CONFIRM)
+        # Released, but inside the release cooldown: still no write.
         rig.tick(timedelta(seconds=60))
-
         assert rig.machine.is_tesla_override_active() is False
+        assert rig.writes == 0
+
+        rig.tick(timedelta(minutes=31))
         rig.controller.set_self_consumption.assert_awaited_once()
+
+    def test_reprobe_mid_outage_never_reissues_a_charge_mode(self, rig):
+        """Override active when the window ends, outage runs past the 30 min
+        re-probe: the probe re-issues SELF_CONSUMPTION, not the pre-outage mode."""
+        rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
+        self._storm(rig)
+        # Uncorroborated (Tesla's own signals unavailable): the only kind of
+        # override that is re-probed rather than yielded to indefinitely.
+        rig.data.storm_watch_active = None
+        rig.data.grid_services_active = None
+        rig.lose_prices()
+        rig.tick()
+        rig.tick(CONFIRM)
+        assert rig.machine.is_tesla_override_active() is True
+        assert rig.writes == 0
+        for _ in range(40):
+            rig.tick(timedelta(seconds=60))
+
+        rig.controller.set_force_charge.assert_not_awaited()
+        assert rig.controller.set_self_consumption.await_count >= 1
+        assert rig.machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
+
+
+class TestHealthCheckWhileGated:
+    def test_prices_only_outage_corrects_drift_after_the_fallback(self, rig):
+        """Tesla flips grid charging on behind a SELF_CONSUMPTION command."""
+        rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
+        rig.lose_prices()
+        rig.tick()
+        rig.tick(CONFIRM)
+        assert rig.machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
+        rig.controller.verify_current_state.reset_mock()
+        rig.controller.verify_current_state.return_value = False
+        rig.controller.set_self_consumption.reset_mock()
+
+        rig.tick(timedelta(minutes=6))
+        rig.tick(timedelta(minutes=1))
+
+        rig.controller.verify_current_state.assert_awaited()
+        rig.controller.set_self_consumption.assert_awaited()
+
+    def test_no_health_check_when_the_battery_data_itself_is_out(self, rig):
+        rig.machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        rig.data.automation_ready = False
+        rig.data.automation_ready_status = {**_ALL_OK, "operation_mode": False}
+        rig.tick()
+        rig.tick(CONFIRM)
+        rig.tick(timedelta(minutes=6))
+
+        rig.controller.verify_current_state.assert_not_awaited()
+
+    def test_dry_run_never_health_checks_while_gated(self):
+        rig = _Rig(switches={"dry_run": True})
+        rig.machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        rig.lose_prices()
+        rig.tick()
+        rig.tick(CONFIRM)
+        rig.tick(timedelta(minutes=6))
+
+        rig.controller.verify_current_state.assert_not_awaited()
 
 
 class TestRecoveryHysteresis:

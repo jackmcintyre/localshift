@@ -36,6 +36,7 @@ from ..const import (
     PROACTIVE_EXPORT_RESERVE_STEP_TRIGGER_SPIKE_PERCENT,
     PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
     READINESS_GATE_INPUTS,
+    READINESS_FALLBACK_RETRY_CAP_MINUTES,
     READINESS_LOSS_CONFIRM_SECONDS,
     READINESS_RECOVERY_CONFIRM_SECONDS,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
@@ -148,6 +149,8 @@ class StateMachine:
         self._readiness_hardware_unverified = False
         self._readiness_ok_since: datetime | None = None
         self._readiness_last_attempt: datetime | None = None
+        self._readiness_failures = 0
+        self._quiet_transition_errors = False
         self._evaluate_lock = asyncio.Lock()
         # Issue #1149: set on unload, see stop().
         self._stopped = False
@@ -917,72 +920,114 @@ class StateMachine:
         missing = self._gate_missing(data)
         if not missing:
             # Inputs are back but the outage has not been closed yet: still in
-            # the recovery confirm window, so keep holding.
+            # the recovery confirm window, so keep holding. Override detection
+            # and health checks are not run in this hold: it lasts about a
+            # minute, and a tick or two of delay in either is harmless.
             return self._readiness_lost_since is not None
 
         self._readiness_ok_since = None
         if self._readiness_lost_since is None:
             self._readiness_lost_since = now
 
-        # The gate skips the health check, which is where Tesla override
-        # detection lives; keep it running.
-        await self._handle_tesla_override_state(data, now)
+        # The gate skips the normal health check, which is where Tesla override
+        # detection lives. When the health check is run from here (below) it
+        # does the detection itself; otherwise run it, probing with
+        # SELF_CONSUMPTION so a re-probe never re-issues a pre-outage charge mode.
+        run_health = self._health_check_possible_while_gated(data)
+        override_skip = False
+        if not run_health:
+            override_skip = await self._handle_tesla_override_state(
+                data, now, probe_mode=BatteryMode.SELF_CONSUMPTION
+            )
 
+        holding = False
         if not self._readiness_fallback_done:
             if now - self._readiness_lost_since < timedelta(
                 seconds=READINESS_LOSS_CONFIRM_SECONDS
             ):
                 _LOGGER.debug("Automation not ready, holding %s", self._commanded_mode)
-                return True
-            self._readiness_fallback_done = True
-            if not self._readiness_warned:
-                self._readiness_warned = True
-                _LOGGER.warning(
-                    "Automation readiness lost for %ss - missing: %s. Falling "
-                    "back to SELF_CONSUMPTION until inputs are valid.",
-                    READINESS_LOSS_CONFIRM_SECONDS,
-                    ", ".join(missing),
-                )
+                holding = True
+            else:
+                self._readiness_fallback_done = True
+                if not self._readiness_warned:
+                    self._readiness_warned = True
+                    _LOGGER.warning(
+                        "Automation readiness lost for %ss - missing: %s. Falling "
+                        "back to SELF_CONSUMPTION until inputs are valid.",
+                        READINESS_LOSS_CONFIRM_SECONDS,
+                        ", ".join(missing),
+                    )
 
-        if (
+        if not holding and (
             self._commanded_mode != BatteryMode.SELF_CONSUMPTION
             or self._readiness_hardware_unverified
         ):
-            await self._attempt_readiness_fallback(data, now)
+            await self._attempt_readiness_fallback(data, now, override_skip)
+        elif run_health:
+            # Nothing else corrects drift during a prices-only outage, e.g.
+            # Tesla re-enabling grid charging behind a SELF_CONSUMPTION command.
+            await self._perform_health_check(data)
         return True
 
+    def _health_check_possible_while_gated(self, data: CoordinatorData) -> bool:
+        """True when the normal health check can run during a gated outage.
+
+        It needs a verified SELF_CONSUMPTION command and readable operation
+        mode and reserve (the two things it compares); prices play no part.
+        """
+        status = data.automation_ready_status
+        return (
+            self._commanded_mode == BatteryMode.SELF_CONSUMPTION
+            and not self._readiness_hardware_unverified
+            and not self._get_switch_state("dry_run")
+            and status.get("operation_mode") is True
+            and status.get("backup_reserve") is True
+        )
+
     async def _attempt_readiness_fallback(
-        self, data: CoordinatorData, now: datetime
+        self, data: CoordinatorData, now: datetime, override_skip: bool
     ) -> None:
         """Write SELF_CONSUMPTION for a readiness outage (issue #1228).
 
         Deliberately not _handle_desired_mode_transition: its failure path
         warns and notifies on every attempt, and with the operation mode or
         reserve unreadable the post-write check fails every time. One attempt
-        when the window ends, then no more often than a health correction;
-        failures are debug-logged, the outage has had its one warning.
+        when the window ends, then backing off (a health-correction interval,
+        doubling, capped at READINESS_FALLBACK_RETRY_CAP_MINUTES); failures are
+        debug-logged, the outage has had its one warning. ``override_skip`` is
+        the Tesla override handler's verdict: no write while Tesla has control
+        or during its release cooldown.
         """
-        if self.is_tesla_override_active():
+        if override_skip:
             return
         last = self._readiness_last_attempt
-        if last is not None and now - last < self._MIN_CORRECTION_INTERVAL:
-            return
+        if last is not None:
+            wait = min(
+                self._MIN_CORRECTION_INTERVAL * 2 ** (self._readiness_failures - 1),
+                timedelta(minutes=READINESS_FALLBACK_RETRY_CAP_MINUTES),
+            )
+            if now - last < wait:
+                return
         if not self.entity_validator.should_allow_automation(log=False):
             _LOGGER.debug("Readiness fallback blocked by the entity validator")
             return
         self._readiness_last_attempt = now
         old_mode = self._commanded_mode
         self._transition_source_override = "backstop"
+        self._quiet_transition_errors = True
         try:
             success = await self._execute_mode_transition(
                 data, BatteryMode.SELF_CONSUMPTION
             )
         finally:
             self._transition_source_override = None
+            self._quiet_transition_errors = False
         if not success:
+            self._readiness_failures += 1
             _LOGGER.debug("Readiness fallback write failed, will retry")
             return
         self._readiness_hardware_unverified = False
+        self._readiness_failures = 0
         await self._finalize_successful_transition(
             data, BatteryMode.SELF_CONSUMPTION, old_mode
         )
@@ -1027,6 +1072,7 @@ class StateMachine:
         self._readiness_warned = False
         self._readiness_hardware_unverified = False
         self._readiness_last_attempt = None
+        self._readiness_failures = 0
 
     def _handle_automation_disabled(self) -> bool:
         """Handle automation disabled state.
@@ -1905,7 +1951,13 @@ class StateMachine:
                         config.backup_reserve,
                     )
                 else:
-                    _LOGGER.error("%s mode transition FAILED", target.value)
+                    _LOGGER.log(
+                        logging.DEBUG
+                        if self._quiet_transition_errors
+                        else logging.ERROR,
+                        "%s mode transition FAILED",
+                        target.value,
+                    )
 
         except Exception as e:
             _LOGGER.error(
@@ -2231,9 +2283,16 @@ class StateMachine:
             return ("", -1, "", False)
 
     async def _handle_tesla_override_state(
-        self, data: CoordinatorData, now: datetime
+        self,
+        data: CoordinatorData,
+        now: datetime,
+        probe_mode: BatteryMode | None = None,
     ) -> bool:
         """Handle Tesla override detection, bounded yield, and cooldown.
+
+        ``probe_mode`` overrides the mode a re-probe re-issues (default: the
+        commanded mode). The readiness gate (#1228) passes SELF_CONSUMPTION so
+        a re-probe mid-outage never re-issues a pre-outage charge mode.
 
         Returns True if health checks should be skipped.
         """
@@ -2294,16 +2353,15 @@ class StateMachine:
                     "[TESLA OVERRIDE] Re-probing after %s: re-issuing commanded mode "
                     "%s to test whether control has returned.",
                     duration,
-                    self._commanded_mode.value,
+                    (probe_mode or self._commanded_mode).value,
                 )
                 # Issue #510 slice 1: tag as backstop — a re-probe is not a
                 # decision-token grant, so _last_grant_source would be stale
                 # here without an explicit override.
                 self._transition_source_override = "backstop"
+                target = probe_mode or self._commanded_mode
                 try:
-                    probe_success = await self._execute_mode_transition(
-                        data, self._commanded_mode
-                    )
+                    probe_success = await self._execute_mode_transition(data, target)
                 finally:
                     # try/finally is load-bearing: _record_transition_metrics only
                     # runs on success, so a failed probe would otherwise leave the
@@ -2315,6 +2373,9 @@ class StateMachine:
                         "restored, resuming health checks.",
                         duration,
                     )
+                    if probe_mode is not None:
+                        self._commanded_mode = probe_mode
+                        self._readiness_hardware_unverified = False
                     self._tesla_override_detected = False
                     self._tesla_override_detected_at = None
                     self._tesla_override_corroborated = False

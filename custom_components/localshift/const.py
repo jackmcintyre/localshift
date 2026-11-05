@@ -686,6 +686,8 @@ READINESS_LOSS_CONFIRM_SECONDS = 120
 # After a fallback, inputs must stay valid this long before decisions resume, so
 # a one-tick blip between two outages does not end the outage.
 READINESS_RECOVERY_CONFIRM_SECONDS = 60
+# A failing fallback write is retried after 5, 10, 20 minutes, then this often.
+READINESS_FALLBACK_RETRY_CAP_MINUTES = 30
 # The readiness checks (keys of ``automation_ready_status``) that gate decisions
 # after startup. The forecast check is left out on purpose.
 READINESS_GATE_INPUTS = ("soc", "prices_available", "operation_mode", "backup_reserve")
