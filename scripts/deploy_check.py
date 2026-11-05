@@ -573,8 +573,17 @@ def check_compiled(
     Measured against the copy, not the latest restart: Python reuses a valid
     ``.pyc`` at later restarts, so a check run after one is still healthy. With
     no build stamp the copy time is unknown, and the older-than-source test
-    (which a restart cannot defeat) is the whole check."""
+    (which a restart cannot defeat) is the whole check; the detail says so.
+    A restart older than the copy means nothing has loaded the new code."""
     swap = _swap_time(component_dir) if expect_recompile else None
+    if swap is not None and restart.timestamp() < swap - 60:
+        # ``restart`` is naive local time (the log's), ``swap`` an absolute UTC
+        # instant: both are epoch seconds here, so they compare correctly.
+        return Check(
+            "compiled files",
+            False,
+            "no restart since the copy: the new code has not been loaded",
+        )
     stale, old, count = [], [], 0
     for src in component_dir.rglob("*.py"):
         compiled = list((src.parent / "__pycache__").glob(f"{src.stem}.cpython-*.pyc"))
@@ -597,6 +606,12 @@ def check_compiled(
             "compiled files",
             False,
             f"{len(old)} pre-date the copy: {', '.join(old[:5])}",
+        )
+    if expect_recompile and swap is None:
+        return Check(
+            "compiled files",
+            True,
+            f"{count} current; no build stamp: copy time unchecked",
         )
     return Check("compiled files", True, f"{count} current")
 
