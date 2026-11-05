@@ -108,9 +108,9 @@ Other Home Assistant automations (a flexible-load queue, climate rules, anything
 
 | Attribute | Units / values | Meaning |
 |-----------|----------------|---------|
-| `bookings` | list | One entry per booking: `id`, `name`, `start_at` (ISO time to start), `finish_by` (the booking's latest finish), `est_kwh`, `status` (`booked`, `started`, `done` or `cancelled`) and `reason` (text, for display only). |
+| `bookings` | list | One entry per booking: `id`, `name`, `duration_min`, `start_at` (ISO time to start), `finish_by` (the booking's latest finish), `est_kwh`, `status` (`booked`, `started`, `done` or `cancelled`) and `reason` (text, for display only). |
 
-**Start pick:** the first start in the window where, for every plan slot the run overlaps, the forecast surplus solar (export, capped at solar minus house load, so a planned battery sell-off does not count) covers the load. Two bookings in the same slot do not yet subtract from each other; otherwise `latest_finish - duration`, so a load never misses its deadline.
+**Start pick:** a booked load counts in the plan as extra consumption (`est_kwh` plus a 20% margin, spread evenly over the run). LocalShift solves one plan for each start on a 15-minute grid between `earliest_start` and `latest_finish - duration` (off the event loop) and takes the cheapest. When a demand window is in the plan, a start that adds grid import before or during it, against the plan without the load, is rejected. If none qualifies, or there is no plan yet, it keeps the earlier pick (first start covered by surplus solar, else `latest_finish - duration`) and `reason` says why. Bookings are placed one at a time and each sees the earlier ones as fixed load.
 
 ##### Services `localshift.book_load` and `localshift.cancel_load`
 
@@ -124,7 +124,7 @@ These are decided or proposed but do not exist. Do not build on them until they 
 
 | Signal | Status |
 |--------|--------|
-| Smarter start times for `localshift.book_load` | Planned. [#1238](https://github.com/jackmcintyre/localshift/issues/1238) (choose start times from the plan, stagger bookings, honour the demand window), [#1239](https://github.com/jackmcintyre/localshift/issues/1239) (re-plan unstarted bookings, lock started ones). |
+| Smarter start times for `localshift.book_load` | [#1238](https://github.com/jackmcintyre/localshift/issues/1238) shipped (plan-chosen starts, staggering, demand-window rule). Planned: [#1239](https://github.com/jackmcintyre/localshift/issues/1239) (re-plan unstarted bookings, lock started ones). |
 
 Not planned: a duration-aware headroom figure ([#1235](https://github.com/jackmcintyre/localshift/issues/1235)) and a per-slot marginal-cost sensor ([#1236](https://github.com/jackmcintyre/localshift/issues/1236)) were both closed as superseded by the booking direction above, so they are not part of the contract.
 

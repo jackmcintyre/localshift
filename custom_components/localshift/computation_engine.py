@@ -244,6 +244,10 @@ class ComputationEngine:
         self._previous_active_mode = None
         self._last_decision_log_time: datetime | None = None
 
+    @property
+    def optimizer_facade(self) -> OptimizerFacade:
+        return self._optimizer_facade
+
     def set_solar_accuracy_tracker(self, tracker: Any) -> None:
         """Set the solar accuracy tracker for bias correction.
 

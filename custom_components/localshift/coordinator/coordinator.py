@@ -333,9 +333,10 @@ class LocalShiftCoordinator:
         await self._daily_totals_store.async_restore(self.data, self._cost_tracker)
         # Issue #1237: bookings survive a restart (each change saves itself).
         self.bookings = BookingStore(
-            self.hass, self.entry.entry_id, self.notify_listeners
+            self.hass, self.entry.entry_id, self._bookings_changed
         )
         await self.bookings.async_load(dt_util.utcnow())
+        self.data.load_bookings = self.bookings.as_list(dt_util.utcnow())
         self._unsub_homeassistant_stop = self.hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_STOP, self._handle_homeassistant_stop
         )
@@ -733,6 +734,12 @@ class LocalShiftCoordinator:
         return remove_listener
 
     @callback
+    def _bookings_changed(self) -> None:
+        """Hand the planner the new bookings (issue #1238), then tell listeners."""
+        if self.bookings is not None:
+            self.data.load_bookings = self.bookings.as_list(dt_util.utcnow())
+        self.notify_listeners()
+
     def notify_listeners(self) -> None:
         """Notify all registered entity listeners of new data."""
         for cb in self._update_callbacks:

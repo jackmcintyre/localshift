@@ -1273,7 +1273,7 @@ def test_wait_restart_old_process_polls_do_not_decide_after_the_restart():
             15,
             up=lambda: next(ups),
             fetch_log=lambda: next(logs),
-            fetch_logbook=lambda s, e: next(books),
+            fetch_logbook=lambda s, e: next(books, []),
             sleep=sleep,
             clock=clock,
         )

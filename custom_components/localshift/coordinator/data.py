@@ -206,6 +206,9 @@ class CoordinatorData:
     # 96 entries, one per 15-min slot starting from the current 5-min boundary.
     load_forecast_slots: list[float] = field(default_factory=list)
 
+    # Deferrable-load bookings the planner counts as extra load (issue #1238).
+    load_bookings: list[dict[str, Any]] = field(default_factory=list)
+
     # Cost accumators
     grid_import_cost: float = 0.0
     grid_export_revenue: float = 0.0
