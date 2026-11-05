@@ -190,11 +190,16 @@ baseline replay is identical on every capture and arm).
   The target floors at `discharge_floor_pct`, which honours the away reserve.
 - Flagged windows and the block (round 2): a window open at slot 0 leaves no
   block. A window further on leaves a block that ends before it standing, unless
-  the window starts within 12 hours of that run's end or the run is already under
-  way at slot 0 (then the window's target stands): Sunday evening's block holds
+  the window starts within 12 hours of that run's end: Sunday evening's block holds
   against Monday's 15:00 flag, a weekday morning peak does not displace the 15:00
-  window. A run under way at slot 0 is displaced by a larger one that starts
-  within 12 hours of its end (a 30-minute blip at 14:00 does not hide tonight).
+  window. A run under way at slot 0 keeps its flags with a window ahead, but the
+  window's target stands (a peak under way is no deadline); it is left alone only
+  when that window is within 12 hours of the run's end or the clock window ended
+  under two hours ago (`OptimizerInputs.minutes_since_window_end`, measured by
+  `SlotBuilder`), which is what keeps weekday 21:30 and midday plans identical.
+  A run under way at slot 0 is displaced by a larger one that starts within 6
+  hours of its end (a 30-minute blip at 14:00 does not hide tonight; tomorrow
+  morning does not displace tonight's peak).
   The in-season replay stays identical to the switch-off clock window.
 - With the switch on and no flagged slot in view the next-window tail (#1033) is
   off (`next_window_tail_status = no_charge_window`): its gap is measured to the

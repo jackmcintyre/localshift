@@ -84,6 +84,12 @@ class SlotBuildMetadata:
     (an unconfirmed sell price kept slot 0 from starting an export) and
     ``live_buy``/``live_sell`` (the price sensors' own states)."""
 
+    minutes_since_window_end: float | None = None
+    """Minutes since the clock demand window last ended, when under six hours
+    ago; None otherwise. The planner has no clock and cannot see back past slot 0.
+    The price block uses it to tell the tail of a window it cannot see from an
+    unflagged peak (``OptimizerInputs.minutes_since_window_end``, #1104)."""
+
     next_demand_window_gap_min: float | None = None
     """Minutes from the end of the last slot to the next demand-window start
     (issue #1033), or None when the last slot is inside a window or there are
@@ -247,6 +253,9 @@ class SlotBuilder:
             all_solcast=all_solcast,
             slot0_price_source=(contexts[0].price_source if contexts else "unknown"),
             slot0_price=slot0_price,
+            minutes_since_window_end=self._minutes_since_window_end(
+                contexts, local_tz, dw_end_time
+            ),
             next_demand_window_gap_min=self._next_demand_window_gap_min(
                 contexts, local_tz, dw_start_time
             ),
@@ -349,6 +358,30 @@ class SlotBuilder:
             return ZoneInfo(self._ha_timezone)
         except Exception:
             return None
+
+    def _minutes_since_window_end(
+        self,
+        contexts: list[SlotContext],
+        local_tz: ZoneInfo | None,
+        dw_end_time: time,
+    ) -> float | None:
+        """Minutes from the clock window's end to slot 0, if that is under 6 hours."""
+        if not contexts:
+            return None
+        try:
+            start = datetime.fromisoformat(contexts[0].timestamp_iso)
+        except (ValueError, TypeError):
+            return None
+        if local_tz is not None and start.tzinfo is not None:
+            start = start.astimezone(local_tz)
+        end = start.replace(
+            hour=dw_end_time.hour,
+            minute=dw_end_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        minutes = (start - end).total_seconds() / 60.0
+        return minutes if 0.0 <= minutes < 360.0 else None
 
     def _next_demand_window_gap_min(
         self,

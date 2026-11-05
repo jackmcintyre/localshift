@@ -373,6 +373,9 @@ class OptimizerFacade:
                 # loudly, not switch the next-window tail off with every test
                 # still green (issue #1033; the #959 shape).
                 next_demand_window_gap_min=slot_metadata.next_demand_window_gap_min,
+                minutes_since_window_end=getattr(
+                    slot_metadata, "minutes_since_window_end", None
+                ),
             )
             self.booking_base = dataclasses.replace(inputs, slots=slots)
             self.booking_base_at = now_dt or dt_util.now()

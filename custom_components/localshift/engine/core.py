@@ -597,6 +597,7 @@ class DPPlanner:
                 inputs.slots,
                 inputs.config,
                 get_forecast_accuracy(inputs.solar_accuracy_tracker),
+                inputs.minutes_since_window_end,
             )
             apply_export_floor(inputs.slots, inputs.config)
             apply_spike_export_admission(inputs.slots, inputs.config)

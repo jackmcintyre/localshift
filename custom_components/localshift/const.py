@@ -778,9 +778,13 @@ PRICE_BLOCK_LOW_PERCENTILE: Final[float] = 0.2
 # Longest stretch (minutes) of not-dear slots a block rides through.
 PRICE_BLOCK_MAX_GAP_MIN: Final[int] = 30
 # A later run replaces the one a plan starts inside only if it begins within this many
-# minutes of that run's end: tonight's block beats a 30-minute blip at 14:00, but tomorrow's
-# evening does not displace the peak the battery is in.
-PRICE_BLOCK_NEXT_RUN_WITHIN_MIN: Final[int] = 720
+# minutes of that run's end: tonight's block beats a 30-minute blip at 14:00 (3 h before
+# it), but tomorrow's morning (9 h or more after the evening peak ends) does not displace
+# the peak the battery is in.
+PRICE_BLOCK_NEXT_RUN_WITHIN_MIN: Final[int] = 360
+# A clock window that ended less than this long ago makes a run under way at slot 0 the
+# tail of that window, which the price block leaves to the window ahead.
+PRICE_BLOCK_WINDOW_TAIL_MIN: Final[int] = 120
 # A flagged window starting sooner than this after a dear run is the deadline for it: a
 # weekday's morning peak does not displace the 15:00 window. A window further off (Sunday
 # evening, Monday's flag at 15:00) leaves the earlier block standing.

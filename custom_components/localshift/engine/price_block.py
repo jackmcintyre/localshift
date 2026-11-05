@@ -24,6 +24,7 @@ from custom_components.localshift.const import (
     PRICE_BLOCK_MIN_SPREAD,
     PRICE_BLOCK_NEXT_RUN_WITHIN_MIN,
     PRICE_BLOCK_WINDOW_CLEARANCE_MIN,
+    PRICE_BLOCK_WINDOW_TAIL_MIN,
 )
 from custom_components.localshift.engine.types import OptimizerConfig, SlotContext
 
@@ -32,14 +33,17 @@ def apply_price_block(
     slots: list[SlotContext],
     config: OptimizerConfig,
     solar_accuracy: float = 1.0,
+    minutes_since_window_end: float | None = None,
 ) -> tuple[int, int] | None:
     """Set the deadline flags on ``slots`` and the target on ``config``.
 
     Does nothing with the switch off, so the plan is exactly what it was. With it
     on, the deadline flags are rebuilt from the charge-window flags on every call
     (the planner may be given the same slots again), then a price block is added
-    when no charge window is in view. Returns the block's (first, last) slot
-    indices, or None when the deadline is the flagged window or there is none.
+    unless a flagged window is the better deadline (open at slot 0, or close behind
+    the run, or the run is the tail of a window that ended ``minutes_since_window_end``
+    ago). Returns the block's (first, last) slot indices, or None when the deadline
+    is the flagged window or there is none.
     """
     if not config.demand_window_from_amber:
         return None
@@ -59,19 +63,27 @@ def apply_price_block(
     block = detect_price_block(slots, before=window_start)
     if block is None:
         return None
-    if window_start is not None and (
-        block[0] == 0
-        or _minutes(slots[block[1] + 1 : window_start])
-        < PRICE_BLOCK_WINDOW_CLEARANCE_MIN
-    ):
-        # A peak already under way is no deadline, and a flagged window close behind
-        # a peak is the deadline for it: either way the window's target stands.
-        return None
     first, last = block
+    if window_start is not None:
+        recent_tail = (
+            minutes_since_window_end is not None
+            and minutes_since_window_end < PRICE_BLOCK_WINDOW_TAIL_MIN
+        )
+        close_behind = (
+            _minutes(slots[last + 1 : window_start]) < PRICE_BLOCK_WINDOW_CLEARANCE_MIN
+        )
+        if close_behind or (first == 0 and recent_tail):
+            # A flagged window close behind a peak is the deadline for it, and a run
+            # under way just after a window is that window's tail.
+            return None
     for slot in slots[first : last + 1]:
         slot.is_demand_window_slot = True
         slot.charge_window_override = False
     slots[first].is_demand_window_entry = True
+    if first == 0 and window_start is not None:
+        # A peak under way is no deadline: the flags stay (useful period, no pre-charge
+        # candidates inside it) but the window ahead keeps its target.
+        return block
     config.demand_window_target_soc_pct = block_target_soc_pct(
         slots[first : last + 1], config, solar_accuracy, ceiling
     )

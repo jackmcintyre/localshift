@@ -677,6 +677,71 @@ def test_a_peak_under_way_does_not_lower_the_target_of_the_window_ahead():
         s.is_demand_window_slot = True
     slots[34].is_demand_window_entry = True
     config = _config(True)
-    assert apply_price_block(slots, config) is None
+    assert apply_price_block(slots, config) == (0, 5)
     assert config.demand_window_target_soc_pct == 95.0
+    assert slots[0].is_demand_window_slot and slots[34].is_charge_window_slot
+
+
+def _sunday_into_monday(start: datetime) -> list[SlotContext]:
+    """An unflagged Sunday evening peak with Monday 15:00-16:00 flagged in view."""
+    slots = _plan_from(start, _day_price, n=48)
+    for i, slot in enumerate(slots):
+        t = datetime.fromisoformat(slot.timestamp_iso)
+        if t.day == 9 and t.hour == 15:
+            slot.is_demand_window_slot = True
+            if not slots[i - 1].is_demand_window_slot:
+                slot.is_demand_window_entry = True
+    return slots
+
+
+@pytest.mark.parametrize("hh,mm", [(17, 30), (18, 0), (19, 0), (20, 30), (21, 0)])
+def test_sunday_peak_keeps_its_block_all_evening_with_mondays_flag_in_view(hh, mm):
+    slots = _sunday_into_monday(datetime(2026, 11, 8, hh, mm))
+    config = _config(True)
+    block = apply_price_block(slots, config)
+    assert block is not None and block[0] == 0
+    assert slots[0].is_demand_window_slot and not slots[0].is_charge_window_slot
+    # The peak under way is no deadline: Monday's window keeps its target.
+    assert config.demand_window_target_soc_pct == 95.0
+    assert any(s.is_charge_window_slot for s in slots)
+
+
+def test_a_peak_just_after_a_window_is_that_windows_tail():
+    slots = _sunday_into_monday(datetime(2026, 11, 8, 21, 0))
+    config = _config(True)
+    assert apply_price_block(slots, config, minutes_since_window_end=30.0) is None
     assert not slots[0].is_demand_window_slot
+    assert config.demand_window_target_soc_pct == 95.0
+    again = _sunday_into_monday(datetime(2026, 11, 8, 21, 0))
+    assert apply_price_block(again, _config(True), minutes_since_window_end=500.0)
+
+
+@pytest.mark.parametrize(
+    "hh,mm", [(17, 30), (18, 30), (19, 30), (20, 0), (20, 30), (21, 0)]
+)
+def test_saturday_peak_is_not_displaced_by_sundays_morning(hh, mm):
+    def price(h: float) -> float:
+        return 0.40 if (7.0 <= h < 9.0 or 17.5 <= h < 21.5) else 0.12
+
+    slots = _plan_from(datetime(2026, 11, 7, hh, mm), price, n=48)
+    block = detect_price_block(slots)
+    assert block is not None and block[0] == 0
+
+
+def test_minutes_since_window_end_is_measured_from_the_clock_window():
+    from datetime import time
+    from zoneinfo import ZoneInfo
+
+    from custom_components.localshift.engine.slots import SlotBuilder
+
+    def since(iso: str, tz: ZoneInfo | None = None) -> float | None:
+        slot = _slots()[0]
+        slot.timestamp_iso = iso
+        return SlotBuilder._minutes_since_window_end(None, [slot], tz, time(21, 0))  # type: ignore[arg-type]
+
+    assert since("2026-11-08T21:30:00") == 30.0
+    assert since("2026-11-08T20:30:00") is None  # before the end
+    assert since("2026-11-09T04:00:00") is None  # six hours or more after
+    assert since("2026-11-08T10:30:00+00:00", ZoneInfo("Australia/Sydney")) == 30.0
+    assert since("not a time") is None
+    assert SlotBuilder._minutes_since_window_end(None, [], None, time(21, 0)) is None  # type: ignore[arg-type]

@@ -1147,6 +1147,11 @@ class OptimizerInputs:
     pre-discharge makes room; it is held until the forecast stops being
     material. See ``negative_fit.assess_negative_fit_avoidance``."""
 
+    minutes_since_window_end: float | None = None
+    """Minutes since the clock demand window last ended, when under six hours;
+    measured by ``SlotBuilder`` (the planner cannot see before slot 0). The price
+    block reads a recent end as "slot 0 is the tail of a window" (#1104)."""
+
     next_demand_window_gap_min: float | None = None
     """Minutes from the end of the last slot to the next demand-window start
     (issue #1033). 0 when the price feed ends as the window opens. None when
