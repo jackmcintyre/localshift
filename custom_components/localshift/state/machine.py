@@ -37,6 +37,7 @@ from ..const import (
     PROACTIVE_EXPORT_SOC_BUFFER_PERCENT,
     READINESS_GATE_INPUTS,
     READINESS_LOSS_CONFIRM_SECONDS,
+    READINESS_RECOVERY_CONFIRM_SECONDS,
     STATE_MACHINE_MIN_CORRECTION_INTERVAL_MINUTES,
     STATE_MACHINE_TRANSITION_GRACE_SECONDS,
     TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES,
@@ -141,6 +142,12 @@ class StateMachine:
         # whether the SELF_CONSUMPTION fallback has been issued for that outage.
         self._readiness_lost_since: datetime | None = None
         self._readiness_fallback_done = False
+        self._readiness_warned = False
+        # Set at grace end: the hardware was never verified, so the fallback
+        # must write even though the commanded mode already reads SELF_CONSUMPTION.
+        self._readiness_hardware_unverified = False
+        self._readiness_ok_since: datetime | None = None
+        self._readiness_last_attempt: datetime | None = None
         self._evaluate_lock = asyncio.Lock()
         # Issue #1149: set on unload, see stop().
         self._stopped = False
@@ -853,10 +860,13 @@ class StateMachine:
             # Stay in SELF_CONSUMPTION mode - don't infer from potentially stale hardware state
             self._commanded_mode = BatteryMode.SELF_CONSUMPTION
             self._skip_next_debounce = True
-            # Issue #1228: the per-tick readiness gate carries on from here, so
-            # the outage is already warned about and already in the fallback.
+            # Issue #1228: the per-tick readiness gate carries on from here. The
+            # warning above is the outage's one warning, but nothing was sent to
+            # the hardware (it may be mid grid-charge after a restart), so the
+            # gate still writes SELF_CONSUMPTION once the confirm window ends.
             self._readiness_lost_since = now
-            self._readiness_fallback_done = True
+            self._readiness_warned = True
+            self._readiness_hardware_unverified = True
             return True
 
         self._commanded_mode = self.infer_current_hardware_mode(data)
@@ -897,19 +907,26 @@ class StateMachine:
         While inputs are missing no decision is made and none is acted on. The
         commanded mode is held for READINESS_LOSS_CONFIRM_SECONDS, so a feed
         that drops for seconds causes no battery write. If the outage outlasts
-        that, fall back to SELF_CONSUMPTION through the normal transition path
-        (one write; dry run writes nothing) and warn once. When the inputs
-        return, the decision fingerprint is invalidated so the first evaluation
-        re-decides from fresh data instead of waiting for a price change.
+        that, warn once and fall back to SELF_CONSUMPTION with one write (see
+        _attempt_readiness_fallback). Once inputs return they must stay valid
+        for READINESS_RECOVERY_CONFIRM_SECONDS before decisions resume
+        (_note_readiness_restored).
 
         Returns True if evaluation should return early.
         """
         missing = self._gate_missing(data)
         if not missing:
-            return False
+            # Inputs are back but the outage has not been closed yet: still in
+            # the recovery confirm window, so keep holding.
+            return self._readiness_lost_since is not None
 
+        self._readiness_ok_since = None
         if self._readiness_lost_since is None:
             self._readiness_lost_since = now
+
+        # The gate skips the health check, which is where Tesla override
+        # detection lives; keep it running.
+        await self._handle_tesla_override_state(data, now)
 
         if not self._readiness_fallback_done:
             if now - self._readiness_lost_since < timedelta(
@@ -918,40 +935,82 @@ class StateMachine:
                 _LOGGER.debug("Automation not ready, holding %s", self._commanded_mode)
                 return True
             self._readiness_fallback_done = True
-            _LOGGER.warning(
-                "Automation readiness lost for %ss - missing: %s. Falling back "
-                "to SELF_CONSUMPTION until inputs are valid.",
-                READINESS_LOSS_CONFIRM_SECONDS,
-                ", ".join(missing),
-            )
+            if not self._readiness_warned:
+                self._readiness_warned = True
+                _LOGGER.warning(
+                    "Automation readiness lost for %ss - missing: %s. Falling "
+                    "back to SELF_CONSUMPTION until inputs are valid.",
+                    READINESS_LOSS_CONFIRM_SECONDS,
+                    ", ".join(missing),
+                )
 
-        # Also retries a fallback write that failed or was blocked.
-        if self._commanded_mode != BatteryMode.SELF_CONSUMPTION:
-            if not self.entity_validator.should_allow_automation():
-                # The transition path would warn on every attempt; the outage
-                # has had its one warning.
-                _LOGGER.debug("Readiness fallback blocked by the entity validator")
-                return True
-            await self._handle_desired_mode_transition(
-                data, BatteryMode.SELF_CONSUMPTION, now
-            )
+        if (
+            self._commanded_mode != BatteryMode.SELF_CONSUMPTION
+            or self._readiness_hardware_unverified
+        ):
+            await self._attempt_readiness_fallback(data, now)
         return True
+
+    async def _attempt_readiness_fallback(
+        self, data: CoordinatorData, now: datetime
+    ) -> None:
+        """Write SELF_CONSUMPTION for a readiness outage (issue #1228).
+
+        Deliberately not _handle_desired_mode_transition: its failure path
+        warns and notifies on every attempt, and with the operation mode or
+        reserve unreadable the post-write check fails every time. One attempt
+        when the window ends, then no more often than a health correction;
+        failures are debug-logged, the outage has had its one warning.
+        """
+        if self.is_tesla_override_active():
+            return
+        last = self._readiness_last_attempt
+        if last is not None and now - last < self._MIN_CORRECTION_INTERVAL:
+            return
+        if not self.entity_validator.should_allow_automation(log=False):
+            _LOGGER.debug("Readiness fallback blocked by the entity validator")
+            return
+        self._readiness_last_attempt = now
+        old_mode = self._commanded_mode
+        self._transition_source_override = "backstop"
+        try:
+            success = await self._execute_mode_transition(
+                data, BatteryMode.SELF_CONSUMPTION
+            )
+        finally:
+            self._transition_source_override = None
+        if not success:
+            _LOGGER.debug("Readiness fallback write failed, will retry")
+            return
+        self._readiness_hardware_unverified = False
+        await self._finalize_successful_transition(
+            data, BatteryMode.SELF_CONSUMPTION, old_mode
+        )
 
     def _note_readiness_restored(self, data: CoordinatorData) -> None:
         """Close an outage when the inputs are back (issue #1228).
 
-        Runs before the decision token is consumed, so after a fallback the
-        first evaluation with data is itself an allowed decision rather than
-        one tick late. An outage that cleared inside the confirm window issued
-        nothing and needs no re-decision.
+        Runs before the decision token is consumed, so the first evaluation
+        after the outage is itself an allowed decision rather than one tick
+        late. An outage that cleared inside the confirm window issued nothing
+        and closes at once. After a fallback the inputs must stay valid for
+        READINESS_RECOVERY_CONFIRM_SECONDS first, so a one-tick blip between
+        two outages neither resumes decisions nor re-arms the fallback.
         """
         if self._gate_missing(data) or self._readiness_lost_since is None:
             return
+        now = dt_util.now()
         if self._readiness_fallback_done:
+            if self._readiness_ok_since is None:
+                self._readiness_ok_since = now
+            if now - self._readiness_ok_since < timedelta(
+                seconds=READINESS_RECOVERY_CONFIRM_SECONDS
+            ):
+                return
             _LOGGER.info(
                 "Automation readiness restored after %s, resuming normal mode "
                 "decisions",
-                dt_util.now() - self._readiness_lost_since,
+                now - self._readiness_lost_since,
             )
             self.invalidate_decision_fingerprint("readiness restored (#1228)")
         else:
@@ -963,7 +1022,11 @@ class StateMachine:
 
     def _reset_readiness_outage(self) -> None:
         self._readiness_lost_since = None
+        self._readiness_ok_since = None
         self._readiness_fallback_done = False
+        self._readiness_warned = False
+        self._readiness_hardware_unverified = False
+        self._readiness_last_attempt = None
 
     def _handle_automation_disabled(self) -> bool:
         """Handle automation disabled state.

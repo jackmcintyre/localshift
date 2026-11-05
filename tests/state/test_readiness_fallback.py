@@ -19,6 +19,7 @@ import pytest
 
 from custom_components.localshift.const import (
     READINESS_LOSS_CONFIRM_SECONDS,
+    READINESS_RECOVERY_CONFIRM_SECONDS,
     BatteryMode,
 )
 from custom_components.localshift.coordinator.data import CoordinatorData
@@ -28,6 +29,7 @@ from custom_components.localshift.utils.validation import IntegrationStatus
 T0 = datetime(2026, 11, 5, 12, 0, 0, tzinfo=timezone(timedelta(hours=11)))
 NOW_PATH = "custom_components.localshift.state.machine.dt_util.now"
 CONFIRM = timedelta(seconds=READINESS_LOSS_CONFIRM_SECONDS)
+RECOVERY = timedelta(seconds=READINESS_RECOVERY_CONFIRM_SECONDS)
 
 
 _ALL_OK = {
@@ -63,7 +65,7 @@ class _Rig:
         ):
             setattr(self.controller, name, AsyncMock(return_value=True))
         self.controller.read_fresh_soc = MagicMock(return_value=None)
-        notifications = MagicMock()
+        notifications = self.notifications = MagicMock()
         for name in (
             "send_transition_notification",
             "send_transition_failed_notification",
@@ -118,6 +120,11 @@ class _Rig:
         self.data.automation_ready = False
         self.data.automation_ready_missing = ["Solcast forecast (status: stale)"]
         self.data.automation_ready_status = {**_ALL_OK, "forecast": False}
+
+    def settle(self) -> None:
+        """Two ticks with good data: past the recovery confirm window."""
+        self.tick(timedelta(seconds=30))
+        self.tick(RECOVERY)
 
     def tick(self, advance: timedelta = timedelta(0)) -> None:
         self.now += advance
@@ -212,20 +219,28 @@ class TestPriceOutageAfterStartup:
         rig.controller.set_force_charge.assert_not_awaited()
         assert rig.machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
 
-    def test_failed_fallback_write_is_retried_until_it_lands(self, rig):
+    def test_failing_fallback_is_one_attempt_then_every_five_minutes(self, rig, caplog):
+        """A post-write check that reads dead entities fails every time."""
         rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
         rig.controller.set_self_consumption.return_value = False
         rig.lose_prices()
-        rig.tick()
-        rig.tick(CONFIRM)
+        with caplog.at_level(logging.WARNING):
+            rig.tick()
+            rig.tick(CONFIRM)
+            for _ in range(10):
+                rig.tick(timedelta(seconds=60))
+
+        # Window end, then +5 min, +10 min: three attempts in 12 minutes.
+        assert rig.controller.set_self_consumption.await_count == 3
         assert rig.machine._commanded_mode == BatteryMode.GRID_CHARGING
+        rig.notifications.send_transition_failed_notification.assert_not_awaited()
+        assert len(_warnings(caplog, "")) == 1
 
         rig.controller.set_self_consumption.return_value = True
-        rig.tick(timedelta(seconds=60))
-        rig.tick(timedelta(seconds=60))
-
+        for _ in range(6):
+            rig.tick(timedelta(seconds=60))
         assert rig.machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
-        assert rig.controller.set_self_consumption.await_count == 2
+        assert rig.controller.set_self_consumption.await_count == 4
 
 
 class TestRecovery:
@@ -239,7 +254,9 @@ class TestRecovery:
         rig.restore_prices()
         rig.engine.plan_mode = BatteryMode.GRID_CHARGING
         with caplog.at_level(logging.INFO):
-            rig.tick(timedelta(seconds=60))
+            rig.tick(timedelta(seconds=30))
+            assert rig.machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
+            rig.tick(RECOVERY)
 
         assert rig.machine._commanded_mode == BatteryMode.GRID_CHARGING
         rig.controller.set_force_charge.assert_awaited_once()
@@ -256,7 +273,7 @@ class TestRecovery:
 
         rig.restore_prices()
         rig.engine.plan_mode = BatteryMode.BOOST_CHARGING
-        rig.tick(timedelta(seconds=60))
+        rig.settle()
 
         rig.controller.set_boost_charge.assert_awaited_once()
 
@@ -299,7 +316,7 @@ class TestFlappingData:
             rig.tick()
             rig.tick(CONFIRM)
             rig.restore_prices()
-            rig.tick(timedelta(seconds=60))
+            rig.settle()
             rig.lose_prices()
             rig.tick(timedelta(seconds=60))
             rig.tick(CONFIRM)
@@ -356,8 +373,9 @@ class TestNeverWritesWhenNotInControl:
 
 
 class TestStartupHandover:
-    def test_not_ready_at_grace_end_is_held_until_ready(self, rig, caplog):
-        """The startup fallback and the per-tick gate are one path, not two."""
+    def test_not_ready_at_grace_end_still_writes_the_fallback(self, rig, caplog):
+        """After a restart the hardware state is unverified (it may be mid grid
+        charge): the commanded mode reads SC, but the gate must still write."""
         rig.machine._startup_grace_until = T0 - timedelta(seconds=1)
         rig.lose_prices()
         rig.engine.plan_mode = BatteryMode.GRID_CHARGING
@@ -365,15 +383,29 @@ class TestStartupHandover:
         with caplog.at_level(logging.WARNING):
             rig.tick()
             rig.tick(timedelta(seconds=60))
+            assert rig.writes == 0
+            rig.tick(timedelta(seconds=60))
+            rig.tick(timedelta(seconds=60))
             rig.tick(timedelta(seconds=60))
 
-        assert rig.writes == 0
-        assert rig.machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
+        rig.controller.set_self_consumption.assert_awaited_once()
+        rig.controller.set_force_charge.assert_not_awaited()
         assert len(_warnings(caplog, "not ready")) == 1
         assert not _warnings(caplog, "readiness lost")
 
         rig.restore_prices()
-        rig.tick(timedelta(seconds=60))
+        rig.settle()
+        rig.controller.set_force_charge.assert_awaited_once()
+
+    def test_recovery_inside_the_window_after_grace_end_is_immediate(self, rig):
+        rig.machine._startup_grace_until = T0 - timedelta(seconds=1)
+        rig.lose_prices()
+        rig.engine.plan_mode = BatteryMode.GRID_CHARGING
+        rig.tick()
+        rig.restore_prices()
+        rig.tick(timedelta(seconds=30))
+
+        rig.controller.set_self_consumption.assert_not_awaited()
         rig.controller.set_force_charge.assert_awaited_once()
 
 
@@ -435,7 +467,82 @@ class TestBlockedFallbackWarnsOnce:
 
         assert len(_warnings(caplog, "")) == 1
         assert rig.writes == 0
+        rig.machine.entity_validator.should_allow_automation.assert_called_with(
+            log=False
+        )
 
         rig.machine.entity_validator.should_allow_automation.return_value = True
         rig.tick(timedelta(seconds=60))
         rig.controller.set_self_consumption.assert_awaited_once()
+
+
+class TestTeslaOverrideWhileGated:
+    def _storm(self, rig) -> None:
+        rig.data.operation_mode = "self_consumption"
+        rig.data.backup_reserve = 80
+        rig.data.storm_watch_active = True
+        rig.data.grid_services_active = False
+
+    def test_no_fallback_write_while_tesla_has_control(self, rig):
+        rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
+        self._storm(rig)
+        rig.lose_prices()
+        rig.tick()
+        rig.tick(CONFIRM)
+        rig.tick(timedelta(seconds=60))
+
+        assert rig.machine.is_tesla_override_active() is True
+        assert rig.writes == 0
+        assert rig.machine._commanded_mode == BatteryMode.GRID_CHARGING
+
+    def test_override_is_detected_while_gated_and_fallback_follows_release(self, rig):
+        rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
+        rig.lose_prices()
+        rig.tick()
+        assert rig.machine.is_tesla_override_active() is False
+        self._storm(rig)
+        rig.tick(timedelta(seconds=30))
+        assert rig.machine.is_tesla_override_active() is True
+
+        rig.data.storm_watch_active = False
+        rig.data.operation_mode = "autonomous"
+        rig.tick(CONFIRM)
+        rig.tick(timedelta(seconds=60))
+
+        assert rig.machine.is_tesla_override_active() is False
+        rig.controller.set_self_consumption.assert_awaited_once()
+
+
+class TestRecoveryHysteresis:
+    def test_one_tick_blip_between_outages_adds_no_write_or_warning(self, rig, caplog):
+        rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
+        rig.engine.plan_mode = BatteryMode.GRID_CHARGING
+        with caplog.at_level(logging.WARNING):
+            rig.lose_prices()
+            rig.tick()
+            rig.tick(CONFIRM)
+            assert rig.writes == 1
+            rig.restore_prices()
+            rig.tick(timedelta(seconds=30))  # the blip
+            rig.lose_prices()
+            rig.tick(timedelta(seconds=30))
+            rig.tick(timedelta(seconds=60))
+
+        assert rig.writes == 1
+        assert rig.machine._commanded_mode == BatteryMode.SELF_CONSUMPTION
+        assert len(_warnings(caplog, "readiness lost")) == 1
+
+    def test_decisions_stay_held_until_inputs_have_held_for_the_window(self, rig):
+        rig.machine._commanded_mode = BatteryMode.GRID_CHARGING
+        rig.lose_prices()
+        rig.tick()
+        rig.tick(CONFIRM)
+        rig.restore_prices()
+        rig.engine.plan_mode = BatteryMode.GRID_CHARGING
+        rig.tick(timedelta(seconds=10))
+        rig.tick(timedelta(seconds=40))
+
+        rig.controller.set_force_charge.assert_not_awaited()
+
+        rig.tick(timedelta(seconds=20))
+        rig.controller.set_force_charge.assert_awaited_once()
