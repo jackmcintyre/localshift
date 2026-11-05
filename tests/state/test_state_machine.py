@@ -4146,3 +4146,265 @@ class TestGridChargingUnattendedAlert:
         await self._fire(timers)
         mock_hass.services.async_call.assert_not_called()
         mock_battery_controller.set_self_consumption.assert_not_called()
+
+
+class TestGridChargingDefenceInManual:
+    """Issue #1216: a manual non-charge pick still means "never grid charge".
+
+    A manual pick turns automation off, so the commanded mode becomes MANUAL
+    and the listener used to skip it. It now corrects a reversion in MANUAL
+    when the picked mode does not charge from the grid, with the same guard and
+    back-off as under automation.
+    """
+
+    _arm_listener = TestGridChargingListenerCooldown._arm
+    _flip = TestGridChargingListenerCooldown._flip
+    _make_event = TestGridChargingListener._make_event
+    _patch_track = TestGridChargingListener._patch_track
+    _MACHINE_TRACK = TestGridChargingListener._MACHINE_TRACK
+    _ENTITY = TestGridChargingListenerCooldown._ENTITY
+    _MACHINE_CALL_LATER = TestGridChargingListenerCooldown._MACHINE_CALL_LATER
+    _MACHINE_NOW = TestGridChargingListenerCooldown._MACHINE_NOW
+
+    NON_CHARGE = [
+        BatteryMode.SELF_CONSUMPTION,
+        BatteryMode.SPIKE_DISCHARGE,
+        BatteryMode.PROACTIVE_EXPORT,
+    ]
+    CHARGING = [BatteryMode.GRID_CHARGING, BatteryMode.BOOST_CHARGING]
+
+    @pytest.fixture
+    def armed(self, state_machine, mock_hass, mock_battery_controller, monkeypatch):
+        """Listener registered, automation off, dry run off, no mode picked yet."""
+        states = {"automation_enabled": False, "dry_run": False}
+        state_machine._get_switch_state = lambda key: states.get(key, False)
+        mock_hass.states = MagicMock()
+        mock_hass.states.get.return_value = None
+        captured, scheduled, clock = self._arm_listener(
+            state_machine, mock_hass, mock_battery_controller, monkeypatch
+        )
+        state_machine._commanded_mode = BatteryMode.MANUAL
+        return captured, scheduled, clock, states
+
+    @staticmethod
+    def _pick(state_machine, mode):
+        """The select's path: command the mode, then the next tick parks MANUAL."""
+        state_machine.set_commanded_mode(mode)
+        assert state_machine._handle_automation_disabled() is True
+        assert state_machine._commanded_mode == BatteryMode.MANUAL
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", NON_CHARGE)
+    async def test_non_charge_pick_is_corrected(
+        self, armed, state_machine, mock_hass, mode
+    ):
+        captured, _, _, _ = armed
+        self._pick(state_machine, mode)
+
+        await self._flip(captured)
+
+        mock_hass.services.async_call.assert_called_once_with(
+            "switch", "turn_off", {"entity_id": self._ENTITY}, blocking=True
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", CHARGING)
+    async def test_charging_pick_is_left_alone(
+        self, armed, state_machine, mock_hass, mode
+    ):
+        captured, _, _, _ = armed
+        self._pick(state_machine, mode)
+
+        await self._flip(captured)
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("persisted", "corrected"),
+        [
+            ("self_consumption", True),
+            ("spike_discharge", True),
+            ("proactive_export", True),
+            (None, True),
+            ("grid_charging", False),
+            ("boost_charging", False),
+            ("automatic", False),
+            ("nonsense", False),
+        ],
+    )
+    async def test_no_pick_this_session_uses_the_persisted_pick(
+        self, armed, state_machine, mock_hass, persisted, corrected
+    ):
+        """After a restart nothing was picked in memory; the persisted pick rules."""
+        captured, _, _, _ = armed
+        options = {} if persisted is None else {"manual_battery_mode": persisted}
+        state_machine._get_option = lambda key, default=None: options.get(key, default)
+        assert state_machine._handle_automation_disabled() is True
+
+        await self._flip(captured)
+
+        assert (mock_hass.services.async_call.await_count == 1) is corrected
+
+    @pytest.mark.asyncio
+    async def test_session_pick_wins_over_stale_persisted_pick(
+        self, armed, state_machine, mock_hass
+    ):
+        captured, _, _, _ = armed
+        state_machine._get_option = lambda key, default=None: {
+            "manual_battery_mode": "grid_charging"
+        }.get(key, default)
+        self._pick(state_machine, BatteryMode.SELF_CONSUMPTION)
+
+        await self._flip(captured)
+
+        mock_hass.services.async_call.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_automation_back_on_forgets_the_pick(
+        self, armed, state_machine, mock_hass
+    ):
+        """A charging pick must not outlive automation and misread a later switch-off."""
+        captured, _, _, states = armed
+        self._pick(state_machine, BatteryMode.GRID_CHARGING)
+        states["automation_enabled"] = True
+        assert state_machine._handle_automation_disabled() is False
+        states["automation_enabled"] = False
+        state_machine._commanded_mode = BatteryMode.MANUAL
+
+        await self._flip(captured)
+
+        mock_hass.services.async_call.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dry_run_writes_nothing(self, armed, state_machine, mock_hass):
+        captured, scheduled, _, states = armed
+        states["dry_run"] = True
+        self._pick(state_machine, BatteryMode.SELF_CONSUMPTION)
+
+        await self._flip(captured)
+
+        mock_hass.services.async_call.assert_not_called()
+        assert scheduled == []
+
+    @pytest.mark.asyncio
+    async def test_tesla_override_is_left_alone(self, armed, state_machine, mock_hass):
+        captured, _, _, _ = armed
+        state_machine._tesla_override_detected = True
+        self._pick(state_machine, BatteryMode.SELF_CONSUMPTION)
+
+        await self._flip(captured)
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_write_in_flight_is_left_alone(self, armed, state_machine, mock_hass):
+        captured, _, _, _ = armed
+        self._pick(state_machine, BatteryMode.SELF_CONSUMPTION)
+        state_machine._in_mode_transition = True
+
+        await self._flip(captured)
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_guard_and_backoff_apply_in_manual(
+        self, armed, state_machine, mock_hass
+    ):
+        """Same cooldown as automation: a bounce inside the guard is re-checked once."""
+        captured, scheduled, clock, _ = armed
+        self._pick(state_machine, BatteryMode.SELF_CONSUMPTION)
+
+        await self._flip(captured)
+        clock["now"] += timedelta(seconds=10)
+        await self._flip(captured)
+
+        assert mock_hass.services.async_call.await_count == 1
+        assert [s["delay"] for s in scheduled] == [50]
+
+        scheduled[0]["action"](None)  # guard expired, switch still on
+        clock["now"] += timedelta(seconds=50)
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert mock_hass.services.async_call.await_count == 2
+        assert state_machine._listener_guard_seconds == 120
+
+    @pytest.mark.asyncio
+    async def test_alert_arms_but_a_held_correction_cancels_it(
+        self, armed, state_machine, mock_hass
+    ):
+        """The #1211 timer still arms in MANUAL; the correction's off event ends it."""
+        captured, _, _, _ = armed
+        unattended = captured["unattended"]
+        self._pick(state_machine, BatteryMode.SELF_CONSUMPTION)
+
+        await self._flip(captured)
+        assert [t["delay"] for t in unattended] == [
+            GRID_CHARGING_UNATTENDED_ALERT_SECONDS
+        ]
+        captured["callback"](self._make_event("off"))
+
+        unattended[0]["cancel"].assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_alert_still_fires_when_the_correction_does_not_hold(
+        self, armed, state_machine, mock_notification_service
+    ):
+        captured, _, _, _ = armed
+        alerts = AsyncMock()
+        mock_notification_service.send_grid_charging_unattended_notification = alerts
+        self._pick(state_machine, BatteryMode.SELF_CONSUMPTION)
+
+        await self._flip(captured)  # corrected, but never reports back off
+        captured["unattended"][-1]["action"](None)
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        alerts.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_saved_charging_pick_survives_a_restart_in_grace(
+        self, armed, state_machine, mock_hass
+    ):
+        """After a restart the commanded mode is still self consumption during
+        startup grace; automation saved off with a saved charging pick must
+        not let the listener switch that pick's grid charging off."""
+        captured, _, _, _ = armed
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._get_option = lambda key, default=None: {
+            "manual_battery_mode": "grid_charging"
+        }.get(key, default)
+
+        await self._flip(captured)
+
+        mock_hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_saved_non_charge_pick_is_defended_during_grace(
+        self, armed, state_machine, mock_hass
+    ):
+        captured, _, _, _ = armed
+        state_machine._commanded_mode = BatteryMode.SELF_CONSUMPTION
+        state_machine._get_option = lambda key, default=None: {
+            "manual_battery_mode": "spike_discharge"
+        }.get(key, default)
+
+        await self._flip(captured)
+
+        mock_hass.services.async_call.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_automation_back_on_with_saved_charging_pick_writes_nothing(
+        self, armed, state_machine, mock_hass
+    ):
+        """Back on, the commanded charging mode rules, not the saved pick (#1216)."""
+        captured, _, _, states = armed
+        states["automation_enabled"] = True
+        state_machine._commanded_mode = BatteryMode.GRID_CHARGING
+        state_machine._get_option = lambda key, default=None: {
+            "manual_battery_mode": "grid_charging"
+        }.get(key, default)
+
+        await self._flip(captured)
+
+        mock_hass.services.async_call.assert_not_called()

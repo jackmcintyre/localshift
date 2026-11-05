@@ -204,6 +204,43 @@ class TestLocalShiftSwitch:
 
         mock_coordinator.async_set_self_consumption.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_turn_off_automation_saves_self_consumption_as_the_pick(
+        self, mock_coordinator, mock_entry
+    ):
+        """Hardware goes to self consumption, so an older saved pick must not win (#1216)."""
+        mock_hass = MagicMock()
+        mock_hass.config_entries.async_update_entry = MagicMock()
+        mock_entry.options = {"manual_battery_mode": "grid_charging"}
+
+        switch = LocalShiftSwitch(mock_coordinator, mock_entry, SWITCH_AUTOMATION_ENABLED)
+        switch.hass = mock_hass
+        switch._attr_entity_id = "switch.localshift_automation_enabled"
+
+        with patch.object(switch, "async_write_ha_state"):
+            await switch.async_turn_off()
+
+        saved = mock_hass.config_entries.async_update_entry.call_args[1]["options"]
+        assert saved["manual_battery_mode"] == "self_consumption"
+
+    @pytest.mark.asyncio
+    async def test_turn_off_other_switch_leaves_the_saved_pick(
+        self, mock_coordinator, mock_entry
+    ):
+        mock_hass = MagicMock()
+        mock_hass.config_entries.async_update_entry = MagicMock()
+        mock_entry.options = {"manual_battery_mode": "grid_charging"}
+
+        switch = LocalShiftSwitch(mock_coordinator, mock_entry, "dry_run")
+        switch.hass = mock_hass
+        switch._attr_entity_id = "switch.localshift_dry_run"
+
+        with patch.object(switch, "async_write_ha_state"):
+            await switch.async_turn_off()
+
+        saved = mock_hass.config_entries.async_update_entry.call_args[1]["options"]
+        assert saved["manual_battery_mode"] == "grid_charging"
+
 
 class TestSwitchKeys:
     """Tests for SWITCH_KEYS constant."""

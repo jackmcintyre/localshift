@@ -77,6 +77,15 @@ _CHARGE_MODES = (BatteryMode.GRID_CHARGING, BatteryMode.BOOST_CHARGING)
 _CHARGE_MODE_VALUES = frozenset(m.value for m in _CHARGE_MODES)
 # Issue #1159: grants the price-boundary charge-start gate never defers.
 _START_GATE_EXEMPT_SOURCES = frozenset({"spike", "demand_window", "soc_floor"})
+# Issue #1216: modes that never charge from the grid, so the grid-charging
+# listener corrects a reversion under them (commanded, or picked while MANUAL).
+_GRID_CHARGING_DEFENDED_MODES = frozenset({
+    BatteryMode.SELF_CONSUMPTION,
+    BatteryMode.DEMAND_BLOCK,
+    BatteryMode.SPIKE_DISCHARGE,
+    BatteryMode.PROACTIVE_EXPORT,
+    BatteryMode.HOLD,
+})
 
 # Issue #508: modes whose physical battery response is observable in the
 # battery power sensor. Charging modes respond by drawing power (negative
@@ -165,6 +174,10 @@ class StateMachine:
         self._last_health_correction: datetime | None = None
         # Listener for reactive grid_charging correction (#491)
         self._grid_charging_listener: Callable | None = None
+        # Issue #1216: the mode last placed by a manual pick this session, so
+        # the listener can tell a non-charge pick from a charging one while
+        # the commanded mode reads MANUAL. None until a pick or after hand-back.
+        self._manual_mode: BatteryMode | None = None
         # Issue #1208: the listener's own guard and its one pending re-check.
         self._last_listener_correction: datetime | None = None
         self._grid_charging_recheck: Callable | None = None
@@ -865,6 +878,7 @@ class StateMachine:
         Returns True if evaluation should return early.
         """
         if self._get_switch_state("automation_enabled"):
+            self._manual_mode = None
             return False
 
         self._commanded_mode = BatteryMode.MANUAL
@@ -2473,6 +2487,7 @@ class StateMachine:
 
         """
         self._commanded_mode = mode
+        self._manual_mode = mode
         self._mode_desired_since.clear()
         # Issue #966: the user has taken over, so the automation's pending
         # retry is void — otherwise the first automated transition at that
@@ -2664,6 +2679,35 @@ class StateMachine:
             self._grid_charging_listener = None
             _LOGGER.debug("Unregistered grid_charging state listener (#491)")
 
+    def _grid_charging_defended_mode(self) -> BatteryMode | None:
+        """Return the mode whose grid charging the listener corrects, else None.
+
+        Issue #1216: under automation that is the commanded mode when it never
+        charges from the grid. In MANUAL (a manual pick turns automation off)
+        it is the picked mode on the same terms, so a self-consumption or
+        export pick still means "never charge from the grid"; a manual
+        grid-charging or boost pick is left alone. After a restart nothing was
+        picked in memory, so the persisted pick on the battery-mode select
+        stands in (self consumption when none was ever saved).
+        """
+        mode = self._commanded_mode
+        # Automation saved off means the pick rules even while the commanded
+        # mode has not reached MANUAL yet (startup grace after a restart).
+        if mode == BatteryMode.MANUAL or not self._get_switch_state(
+            "automation_enabled"
+        ):
+            mode = self._manual_mode
+            if mode is None:
+                try:
+                    mode = BatteryMode(
+                        self._get_option(
+                            "manual_battery_mode", BatteryMode.SELF_CONSUMPTION.value
+                        )
+                    )
+                except ValueError:
+                    return None
+        return mode if mode in _GRID_CHARGING_DEFENDED_MODES else None
+
     async def _reactive_correct_grid_charging(self, hass: Any, entity_id: str) -> None:
         """Turn off grid_charging when it was re-enabled unexpectedly.
 
@@ -2682,13 +2726,8 @@ class StateMachine:
         if self.is_tesla_override_active():
             _LOGGER.debug("[GRID CHARGING LISTENER] Skipping — Tesla override active")
             return
-        if self._commanded_mode not in (
-            BatteryMode.SELF_CONSUMPTION,
-            BatteryMode.DEMAND_BLOCK,
-            BatteryMode.SPIKE_DISCHARGE,
-            BatteryMode.PROACTIVE_EXPORT,
-            BatteryMode.HOLD,
-        ):
+        defended_mode = self._grid_charging_defended_mode()
+        if defended_mode is None:
             return
         last = self._last_listener_correction
         guard = timedelta(seconds=self._listener_guard_seconds)
@@ -2702,7 +2741,7 @@ class StateMachine:
         _LOGGER.warning(
             "[GRID CHARGING LISTENER] Grid charging re-enabled while in "
             "mode %s — correcting immediately",
-            self._commanded_mode.value,
+            defended_mode.value,
         )
         if self._stopped:  # Issue #1149: unloaded since this was queued
             return
