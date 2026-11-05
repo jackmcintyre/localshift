@@ -2691,7 +2691,11 @@ class StateMachine:
         stands in (self consumption when none was ever saved).
         """
         mode = self._commanded_mode
-        if mode == BatteryMode.MANUAL:
+        # Automation saved off means the pick rules even while the commanded
+        # mode has not reached MANUAL yet (startup grace after a restart).
+        if mode == BatteryMode.MANUAL or not self._get_switch_state(
+            "automation_enabled"
+        ):
             mode = self._manual_mode
             if mode is None:
                 try:

@@ -33,6 +33,7 @@ from .const import (
     SWITCH_SPIKE_DISCHARGE_CONSERVATIVE,
     SWITCH_SPIKE_DISCHARGE_ENABLED,
     SWITCH_STALE_SOLAR_CONSERVATIVE,
+    BatteryMode,
 )
 from .coordinator import LocalShiftCoordinator
 
@@ -175,6 +176,10 @@ class LocalShiftSwitch(SwitchEntity):
         # Persist state to config entry options
         option_key = f"{SWITCH_STATE_PREFIX}{self._key}"
         new_options = {**self._entry.options, option_key: False}
+        if self._key == SWITCH_AUTOMATION_ENABLED:
+            # Issue #1216: the write below puts the hardware in self
+            # consumption, so an older saved pick must not outlive it.
+            new_options["manual_battery_mode"] = BatteryMode.SELF_CONSUMPTION.value
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
 
         if self._key == SWITCH_AUTOMATION_ENABLED:

@@ -201,6 +201,8 @@ class BatteryModeSelect(SelectEntity):
             _LOGGER.error("Invalid battery mode selected: %s", option)
             return
 
+        # Issue #1216: on a failed write the pick is saved above but the state
+        # machine keeps its previous pick (set_commanded_mode runs on success).
         success = await self.coordinator.async_set_battery_mode(target_mode)
         if not success:
             _LOGGER.warning(
