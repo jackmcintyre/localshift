@@ -7,7 +7,7 @@ breaking exactly one thing fails exactly that check.
 import copy
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -937,9 +937,9 @@ def test_api_up_means_ha_reports_running(monkeypatch, body, up):
 EPOCH = datetime(2026, 11, 5, 10, 0, 0)  # host-local, as --wait-restart takes it
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def sydney(monkeypatch):
-    """Pin the host zone so zoned log lines convert to a known local time."""
+    """Pin the host zone (CI runs UTC) so local and zoned times line up."""
     import time
 
     monkeypatch.setenv("TZ", "Australia/Sydney")  # +11:00 in November
@@ -993,7 +993,7 @@ def _other(when="2026-11-05T10:05:00+11:00"):
     return {"when": when, "name": "Light", "message": "turned on", "domain": "light"}
 
 
-NOW_AWARE = datetime(2026, 11, 5, 11, 0, 0).astimezone()
+NOW_AWARE = datetime(2026, 11, 5, 11, 0, 0, tzinfo=timezone(timedelta(hours=11)))
 
 
 def _verdict(logbook, log, epoch=EPOCH, now=NOW_AWARE):
