@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from unittest.mock import MagicMock
 
+import pytest
 from homeassistant.util import dt as dt_util
 
 from custom_components.localshift.const import CONF_TESLEMETRY_SOC
@@ -104,3 +106,50 @@ def test_soc_stable_for_45_minutes_is_stale() -> None:
     health = validator.check_entity(CONF_TESLEMETRY_SOC)
 
     assert health.status == EntityStatus.STALE
+
+
+def _blocked_validator(broken: bool) -> EntityValidator:
+    """A validator whose required entities are missing, or all fine but one broken."""
+    now = dt_util.now()
+    validator = _build_validator(
+        MockState(
+            entity_id="sensor.my_home_percentage_charged",
+            state="50.0",
+            attributes={"unit_of_measurement": "%"},
+            last_changed=now,
+            last_updated=now,
+        )
+    )
+    validator.check_all_entities()
+    if broken:
+        for health in validator._entity_health.values():
+            health.status = EntityStatus.OK
+            health.is_broken = False
+        validator._entity_health[CONF_TESLEMETRY_SOC].is_broken = True
+    return validator
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_blocked_automation_warns_by_default(
+    broken: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Every call names the blocking entity unless the caller opts out."""
+    validator = _blocked_validator(broken)
+
+    with caplog.at_level(logging.WARNING):
+        assert validator.should_allow_automation() is False
+
+    assert any("Automation blocked" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_blocked_automation_is_silent_with_log_false(
+    broken: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Issue #1228: a per-tick caller can ask without a warning each time."""
+    validator = _blocked_validator(broken)
+
+    with caplog.at_level(logging.WARNING):
+        assert validator.should_allow_automation(log=False) is False
+
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]

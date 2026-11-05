@@ -1012,6 +1012,10 @@ class StateReader:
         # Overall ready state: all required inputs must be valid
         is_ready = all(status.values())
 
+        # Issue #1228: this now runs on every evaluation, so only a change of
+        # state is worth INFO.
+        was_ready = data.automation_ready
+
         # Update CoordinatorData with results
         data.automation_ready = is_ready
         data.automation_ready_status = status
@@ -1025,6 +1029,9 @@ class StateReader:
                 ", ".join(missing) if missing else "none",
             )
         else:
-            _LOGGER.info("Automation ready - all required inputs valid")
+            _LOGGER.log(
+                logging.DEBUG if was_ready else logging.INFO,
+                "Automation ready - all required inputs valid",
+            )
 
         return is_ready, status, missing

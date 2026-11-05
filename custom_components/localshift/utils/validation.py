@@ -821,8 +821,12 @@ class EntityValidator:
             return f"Warning: {self._cached_warnings[0]}"
         return f"Degraded: {len(self._cached_warnings)} issues detected"
 
-    def should_allow_automation(self) -> bool:
+    def should_allow_automation(self, log: bool = True) -> bool:
         """Check if automation should be allowed based on entity health.
+
+        Args:
+            log: Warn about the blocking entity. Callers that poll every tick
+                and have their own report pass False.
 
         Returns:
             True if automation can proceed, False if critical errors exist
@@ -833,19 +837,21 @@ class EntityValidator:
             if health.category == EntityCategory.REQUIRED:
                 # Block if entity is missing, unavailable, or marked as broken
                 if health.status in (EntityStatus.MISSING, EntityStatus.UNAVAILABLE):
-                    _LOGGER.warning(
-                        "Automation blocked: required entity '%s' is %s",
-                        config_key,
-                        health.status.value,
-                    )
+                    if log:
+                        _LOGGER.warning(
+                            "Automation blocked: required entity '%s' is %s",
+                            config_key,
+                            health.status.value,
+                        )
                     return False
                 if health.is_broken:
-                    _LOGGER.warning(
-                        "Automation blocked: required entity '%s' is marked as BROKEN "
-                        "(%d consecutive failures)",
-                        config_key,
-                        health.consecutive_failures,
-                    )
+                    if log:
+                        _LOGGER.warning(
+                            "Automation blocked: required entity '%s' is marked "
+                            "as BROKEN (%d consecutive failures)",
+                            config_key,
+                            health.consecutive_failures,
+                        )
                     return False
 
         return True

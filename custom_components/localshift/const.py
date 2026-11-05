@@ -678,6 +678,20 @@ EXPORT_INVERSION_CONFIRM_SECONDS = 90
 # How long export stays off the table after the watchdog trips.
 EXPORT_INVERSION_HOLDOFF_MINUTES = 60
 
+# Issue #1228: how long automation readiness must stay lost before the state
+# machine falls back to SELF_CONSUMPTION. Inside the window the commanded mode
+# is held and no decision is made, so a feed that drops for seconds causes no
+# battery write. Two fast ticks: one missed refresh cannot trip it.
+READINESS_LOSS_CONFIRM_SECONDS = 120
+# After a fallback, inputs must stay valid this long before decisions resume, so
+# a one-tick blip between two outages does not end the outage.
+READINESS_RECOVERY_CONFIRM_SECONDS = 60
+# A failing fallback write is retried after 5, 10, 20 minutes, then this often.
+READINESS_FALLBACK_RETRY_CAP_MINUTES = 30
+# The readiness checks (keys of ``automation_ready_status``) that gate decisions
+# after startup. The forecast check is left out on purpose.
+READINESS_GATE_INPUTS = ("soc", "prices_available", "operation_mode", "backup_reserve")
+
 # -----------------------------------------------------------------------------
 # Negative FIT Avoidance Constants (Issue #719)
 # -----------------------------------------------------------------------------
