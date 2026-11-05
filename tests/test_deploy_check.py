@@ -841,6 +841,58 @@ def test_preflight_refuses_backstop_and_thin_runway():
     ]
 
 
+def test_preflight_skips_runway_when_no_precharge_needed():
+    # SOC at target: slack is pure time to the window (30.0 at 14:25 in the field).
+    now = datetime(2026, 10, 14, 14, 25, tzinfo=SYDNEY)
+    ents = _plan_ents(now, ["hold"] * 8, slack=30.0)
+    ents[dc.SUMMARY]["attributes"].update(initial_soc_pct=100.0)
+    assert _failed(dc.preflight(ents, now)) == []
+    runway = dc.preflight(ents, now)[-1]
+    assert runway.ok and "skipped" in runway.detail
+
+
+def _runway(soc, target_opts, slack=7.0):
+    now = datetime(2026, 10, 14, 13, 0, tzinfo=SYDNEY)
+    ents = _plan_ents(now, ["hold"] * 8, slack=slack, opts=target_opts)
+    ents[dc.SUMMARY]["attributes"].update(initial_soc_pct=soc)
+    return _failed(dc.preflight(ents, now))
+
+
+def test_preflight_runway_skip_boundaries():
+    at = {"battery_target": 95.0}
+    assert _runway(95.0, at) == []
+    assert _runway(94.9, at) == ["runway slack over 30 min"]
+    assert _runway(None, at) == ["runway slack over 30 min"]
+    assert _runway(100.0, {}) == ["runway slack over 30 min"]
+
+
+def test_preflight_refuses_just_before_the_demand_window():
+    name = f"over {dc.DW_START_BUFFER_MIN} min before the demand window"
+    for clock, refused in [((14, 49), False), ((14, 51), True), ((14, 58), True)]:
+        now = datetime(2026, 10, 14, *clock, tzinfo=SYDNEY)
+        ents = _plan_ents(now, ["hold"] * 8, slack=90.0)
+        ents[dc.SUMMARY]["attributes"].update(initial_soc_pct=100.0)
+        assert (_failed(dc.preflight(ents, now)) == [name]) is refused
+
+
+def test_preflight_still_checks_runway_when_precharge_needed():
+    now = datetime(2026, 10, 14, 13, 0, tzinfo=SYDNEY)
+    ents = _plan_ents(now, ["hold"] * 8, slack=7.0)
+    ents[dc.SUMMARY]["attributes"].update(initial_soc_pct=60.0)
+    assert _failed(dc.preflight(ents, now)) == ["runway slack over 30 min"]
+
+
+def test_preflight_cli_exits_2_on_an_internal_error(monkeypatch, capsys):
+    def boom():
+        raise RuntimeError("HA unreachable")
+
+    monkeypatch.setattr(dc, "fetch_live_states", boom)
+    assert dc.main(["--preflight"]) == 2
+    err = capsys.readouterr().err
+    assert "RuntimeError: HA unreachable" in err
+    assert "Traceback" in err
+
+
 def test_preflight_uses_the_configured_window():
     opts = {"demand_window_start": "14:55:00", "demand_window_end": "21:00:00"}
     at = datetime(2026, 10, 14, 14, 56, tzinfo=SYDNEY)
@@ -858,7 +910,9 @@ def test_preflight_cli_exit_codes(monkeypatch, capsys):
     monkeypatch.setattr(dc, "fetch_live_states", lambda: _plan_ents(now, ["hold"] * 12))
     code = dc.main(["--preflight"])
     in_dw = "15:00" <= now.strftime("%H:%M") < "21:00"
-    assert code == (1 if in_dw else 0)
+    mins = now.hour * 60 + now.minute
+    near = 15 * 60 - dc.DW_START_BUFFER_MIN < mins < 15 * 60
+    assert code == (1 if in_dw or near else 0)
     monkeypatch.setattr(
         dc, "fetch_live_states", lambda: _plan_ents(now, ["charge_grid_boost"] * 12)
     )

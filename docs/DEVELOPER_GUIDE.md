@@ -423,7 +423,7 @@ shipped it". Code can sit on disk before that restart, and any HA restart (an
 update, a crash) loads whatever has been shipped.
 
 **The scripts the deployer runs are an interface.** Keep the arguments and exit
-codes of `deploy_check.py` (0 pass, 1 fail, 2 usage, 3 not settled yet) and
+codes of `deploy_check.py` (0 pass, 1 fail, 2 usage or error, 3 not settled yet) and
 `write_build_stamp.sh REPO_DIR DEST_DIR` stable, and take every path and
 credential from an argument or the environment (`--component-dir`,
 `HA_URL`/`HA_TOKEN`). Never add a machine-specific default.
