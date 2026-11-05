@@ -327,11 +327,16 @@ def _plan_chooser(
     engine = getattr(coordinator, "computation_engine", None)
     facade = engine.optimizer_facade if engine is not None else None
     base = facade.booking_base if facade is not None else None
-    stale = _stale_reason(facade, base, now)
-    if stale:
+    stale = (
+        "no plan yet"
+        if facade is None or base is None
+        else _stale_reason(facade, base, now)
+    )
+    if facade is None or base is None or stale:
+        why = stale or "no plan yet"
 
         async def unusable(*_: Any) -> tuple[datetime | None, str]:
-            return None, stale
+            return None, why
 
         return unusable
 
