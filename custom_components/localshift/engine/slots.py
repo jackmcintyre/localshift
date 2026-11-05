@@ -537,6 +537,7 @@ class SlotBuilder:
             is_demand_window_slot=in_demand_window,
             price_source=slot.get("price_source", "unknown"),
             export_available=self._export_available(data, slot_start),
+            price_defaulted=buy_raw is None,
         )
 
         return ctx, counts, in_demand_window

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from custom_components.localshift.const import (
     PRICE_BLOCK_HEADROOM_PCT,
+    PRICE_BLOCK_LOW_PERCENTILE,
+    PRICE_BLOCK_MAX_GAP_MIN,
     PRICE_BLOCK_MIN_DURATION_MIN,
     PRICE_BLOCK_MIN_SPREAD,
 )
@@ -57,6 +59,7 @@ def apply_price_block(
     first, last = block
     for slot in slots[first : last + 1]:
         slot.is_demand_window_slot = True
+        slot.charge_window_override = False
     slots[first].is_demand_window_entry = True
     config.demand_window_target_soc_pct = block_target_soc_pct(
         slots[first : last + 1], config, solar_accuracy, ceiling
@@ -68,8 +71,9 @@ def _mirror_charge_window(slots: list[SlotContext]) -> None:
     """Deadline flags = charge-window flags, with an entry on each window's first slot."""
     previous = False
     for slot in slots:
-        in_window = bool(slot.is_charge_window_slot)
+        in_window = slot.is_charge_window_slot
         slot.is_demand_window_slot = in_window
+        slot.charge_window_override = None
         slot.is_demand_window_entry = in_window and not previous
         previous = in_window
 
@@ -89,45 +93,92 @@ def detect_price_block(
     min_spread: float = PRICE_BLOCK_MIN_SPREAD,
     min_duration_min: float = PRICE_BLOCK_MIN_DURATION_MIN,
 ) -> tuple[int, int] | None:
-    """First run of dear slots lasting ``min_duration_min`` or more, as (first, last).
+    """The expensive run to prepare for, as (first, last) slot indices, or None.
 
-    A slot is dear when it costs at least ``min_spread`` more than the cheapest slot
-    before it (the cheapest charge the battery could have taken) and carries a net
-    load. That reference never rises as the horizon advances, so it cannot move a
-    block boundary by itself. A single slot short of the test inside a run is
-    tolerated. Slots in a charge window are never part of a block.
+    A slot is dear when it costs at least ``min_spread`` more than the horizon's low
+    price (see ``_low_price``) and carries a net load. A run is dear slots with
+    not-dear gaps of at most ``PRICE_BLOCK_MAX_GAP_MIN``; it counts when it lasts
+    ``min_duration_min``. The reference is the whole horizon's low, not the cheapest
+    slot before the run: that one would move as ``now`` advances and drop the block
+    on a ramp once the cheap slots are behind it. What is cheap enough to fund it is
+    the planner's to decide (water level, ``max_precharge_price``). The run already
+    under way at slot 0 counts whatever is left of it, so a plan made inside the peak
+    finds tonight's block and not tomorrow's.
+    Of the others the one carrying the most net load wins, because it is the one
+    that needs the preparing; a morning peak does not outrank a larger evening by
+    coming first. Slots in a charge window are never part of a block.
     """
-    reference: float | None = None
-    run_first: int | None = None
-    run_last = 0
-    gap = 0
+    low = _low_price(slots)
+    if low is None:
+        return None
+    best: tuple[float, tuple[int, int]] | None = None
+    for first, last in _dear_runs(slots, low + min_spread):
+        run = slots[first : last + 1]
+        if first == 0:
+            return first, last
+        if _minutes(run) < min_duration_min:
+            continue
+        load = _net_kwh(run, 1.0)
+        if best is None or load > best[0]:
+            best = (load, (first, last))
+    return best[1] if best else None
+
+
+def _is_priced(slot: SlotContext) -> bool:
+    return not slot.price_defaulted
+
+
+def _low_price(slots: list[SlotContext]) -> float | None:
+    """Duration-weighted ``PRICE_BLOCK_LOW_PERCENTILE`` of buy prices, floored at 0.
+
+    Slots that fell back to the 0.0 default (issue #987) are not prices and are left
+    out; a negative price counts as 0, the cheapest a charge can be.
+    """
+    priced = sorted(
+        (max(0.0, s.buy_price), s.slot_interval_minutes) for s in slots if _is_priced(s)
+    )
+    if not priced:
+        return None
+    threshold = sum(minutes for _, minutes in priced) * PRICE_BLOCK_LOW_PERCENTILE
+    elapsed = 0.0
+    for price, minutes in priced:
+        elapsed += minutes
+        if elapsed >= threshold:
+            return price
+    return priced[-1][0]
+
+
+def _dear_runs(slots: list[SlotContext], dear_from: float) -> list[tuple[int, int]]:
+    runs: list[tuple[int, int]] = []
+    first: int | None = None
+    last = 0
+    gap = 0.0
     for idx, slot in enumerate(slots):
         dear = (
-            reference is not None
+            _is_priced(slot)
             and not slot.is_charge_window_slot
-            and slot.buy_price >= reference + min_spread
+            and slot.buy_price >= dear_from
             and slot.consumption_kwh > slot.solar_kwh
         )
         if dear:
-            if run_first is None:
-                run_first = idx
-            run_last = idx
-            gap = 0
-        elif run_first is not None:
-            gap += 1
-            if gap > 1:
-                if _minutes(slots[run_first : run_last + 1]) >= min_duration_min:
-                    return run_first, run_last
-                run_first = None
-                gap = 0
-        reference = (
-            slot.buy_price if reference is None else min(reference, slot.buy_price)
-        )
-    if run_first is not None and _minutes(slots[run_first : run_last + 1]) >= (
-        min_duration_min
-    ):
-        return run_first, run_last
-    return None
+            if first is None:
+                first = idx
+            last = idx
+            gap = 0.0
+        elif first is not None:
+            gap += slot.slot_interval_minutes
+            if gap > PRICE_BLOCK_MAX_GAP_MIN:
+                runs.append((first, last))
+                first = None
+    if first is not None:
+        runs.append((first, last))
+    return runs
+
+
+def _net_kwh(block: list[SlotContext], solar_accuracy: float) -> float:
+    return sum(
+        max(0.0, s.consumption_kwh - s.solar_kwh * solar_accuracy) for s in block
+    )
 
 
 def _minutes(run: list[SlotContext]) -> float:
@@ -144,12 +195,13 @@ def block_target_soc_pct(
 
     Solar in the block is discounted by forecast accuracy as the pre-charge gates
     discount it, and the load is taken out of the battery at discharge efficiency.
-    Clamped between the minimum target SOC and the configured target.
+    Clamped between the discharge floor (which honours the away reserve) and the
+    configured target.
     """
     accuracy = max(0.0, min(1.0, solar_accuracy))
-    net_kwh = sum(max(0.0, s.consumption_kwh - s.solar_kwh * accuracy) for s in block)
+    net_kwh = _net_kwh(block, accuracy)
     needed_pct = (
         net_kwh / config.discharge_efficiency / config.battery_capacity_kwh * 100.0
     )
-    floor = min(config.min_soc_pct, ceiling_pct)
+    floor = min(config.discharge_floor_pct, ceiling_pct)
     return max(floor, min(ceiling_pct, floor + needed_pct + PRICE_BLOCK_HEADROOM_PCT))

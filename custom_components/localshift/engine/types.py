@@ -146,12 +146,13 @@ class SlotContext:
     (Issue #1097: Tesla's stored tariff is below its top rate, or the
     export-inversion hold-off is active)."""
 
-    is_charge_window_slot: bool | None = None
-    """True if this slot falls within the demand-charge window: the only thing that
-    bans grid import and puts the executor in Demand Block mode (#1104). None
-    (the default) takes the value of ``is_demand_window_slot``, so a slot built
-    without the split behaves exactly as before. Differs from it only when the
-    price block, not Amber's flag, is what makes the slot a deadline."""
+    charge_window_override: bool | None = None
+    """Set only where the ban differs from ``is_demand_window_slot``: a price-block
+    slot is a deadline but not a charge window (#1104). None everywhere else."""
+
+    price_defaulted: bool = False
+    """True when the slot had no buy price and ``buy_price`` is the 0.0 stand-in
+    (issue #987). Not a price: the price block ignores it."""
 
     export_floor_pct: float = 0.0
     """Solver-derived (set by ``DPPlanner.plan``): the SOC the EXPORT action may
@@ -166,9 +167,19 @@ class SlotContext:
     it is below the same interval's buy price. Only ever True on slot 0. See
     ``engine/spike_export.py`` (issue #1120)."""
 
-    def __post_init__(self) -> None:
-        if self.is_charge_window_slot is None:
-            self.is_charge_window_slot = self.is_demand_window_slot
+    @property
+    def is_charge_window_slot(self) -> bool:
+        """True if this slot falls within the demand-charge window: the only thing
+        that bans grid import and puts the executor in Demand Block mode (#1104).
+        Read from ``is_demand_window_slot`` unless the price block overrode it, so
+        a slot whose deadline flag is set later, or through ``replace``, bans too."""
+        if self.charge_window_override is not None:
+            return self.charge_window_override
+        return self.is_demand_window_slot
+
+    @is_charge_window_slot.setter
+    def is_charge_window_slot(self, value: bool) -> None:
+        self.charge_window_override = value
 
 
 # -----------------------------------------------------------------------------
@@ -873,6 +884,7 @@ TAIL_APPLIED = "applied"
 TAIL_DISABLED = "disabled"  # OptimizerConfig.next_window_tail_enabled is False
 TAIL_UNDER_TARGET_MODE = "under_target_mode"  # allow_dw_entry_under_target
 TAIL_MAIN_UNSUCCESSFUL = "main_unsuccessful"  # the main solve produced no plan
+TAIL_NO_CHARGE_WINDOW = "no_charge_window"  # switch on, no flagged window in view
 TAIL_NO_GAP = "no_gap"  # no gap supplied: feed ends inside a window, or unknown
 TAIL_NO_TAIL_SLOTS = "no_tail_slots"  # nothing after the handled window
 TAIL_WHOLE_PLAN_SKIPPED = "whole_plan_skipped"  # tail would include slot 0

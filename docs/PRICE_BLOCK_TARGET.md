@@ -180,6 +180,17 @@ baseline replay is identical on every capture and arm).
   window already open at slot 0, switches the block off: that window is no
   deadline, as before, and the next-window tail (#1033) prepares for the one
   after it. The in-season replay is identical to the switch-off clock window.
+- Detection as built differs from the "Block detection" sketch above, after
+  review: a slot is dear against the horizon's duration-weighted 20th-percentile
+  price (floored at 0, defaulted prices left out), not the running minimum, which
+  moved as `now` advanced and let one defaulted or negative price make an ordinary
+  evening a block. Single-slot gaps became at most 30 minutes. The run under way
+  at slot 0 is the block whatever is left of it. Of the others the one with the
+  most net load wins, so a small morning peak does not outrank a bigger evening.
+  The target floors at `discharge_floor_pct`, which honours the away reserve.
+- With the switch on and no flagged slot in view the next-window tail (#1033) is
+  off (`next_window_tail_status = no_charge_window`): its gap is measured to the
+  clock window, which does not exist that day.
 - Knobs are constants for now: `PRICE_BLOCK_MIN_SPREAD` ($0.08/kWh),
   `PRICE_BLOCK_MIN_DURATION_MIN` (120), `PRICE_BLOCK_HEADROOM_PCT` (5).
   `block_min_spread` stays separate from `min_cycle_saving`.
@@ -195,5 +206,6 @@ baseline replay is identical on every capture and arm).
   pins each one.
 - The operator's `max_precharge_price` still bounds the water level, as it does
   in season: an evening whose cheapest earlier slot is above it is not funded.
-- Not built: the flap test across 09:00 to 14:30 captures, the two-evening dry
-  run, and slice 3 (telemetry, UI).
+- Flap test: `test_block_is_the_same_whenever_the_day_is_planned` (09:00, 11:00,
+  13:00, 14:30, 16:00). Not built: the two-evening dry run, which gates turning the
+  switch on, and slice 3 (telemetry, UI).

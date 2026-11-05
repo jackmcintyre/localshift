@@ -1057,6 +1057,7 @@ Attributes:
 - `next_window_tail_status` - Why the plan tail was or was not re-planned for the next demand window (Issue #1033). Set on every successful plan, so a tail that never runs can be told from one with nothing to do. Every value except `applied` means the plan is the main solve's, unchanged:
   - `applied` - the tail from `next_window_tail_start_idx` on was re-planned
   - `gap_too_long` - the next window is far enough past the feed that normal-rate charging in the gap can refill the battery from the floor (about five hours). The usual value outside the afternoon
+  - `no_charge_window` - `switch.localshift_demand_window_from_amber` is on and Amber flags no window anywhere in the horizon (weekend, holiday, off-season), so there is no window for a tail to prepare for; the price block, if one is found, is the only deadline
   - `no_gap` - no gap was measured: the feed ends inside a demand window (the usual value from about 15:30, once tomorrow's entry slot is in the feed), or there were no slots
   - `no_tail_slots` - nothing to re-plan: the window the main solve handled runs to the end of the feed, or a later window is already inside it
   - `whole_plan_skipped` - no demand window in view and the plan does not start inside one, so the tail would be the whole plan including slot 0. Refused, so the tail can never change the executed command. Needs a truncated or stale price feed; if this persists, look at the feed

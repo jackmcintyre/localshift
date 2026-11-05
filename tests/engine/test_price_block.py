@@ -133,9 +133,9 @@ def test_off_season_day_pre_charges_ahead_of_a_dear_evening():
 @pytest.mark.parametrize("day", ["weekend", "holiday"])
 def test_unflagged_weekend_or_holiday_pre_charges_the_same(day):
     """Amber flags neither; the planner sees only prices and flags. The 13 Oct
-    shape, where the block opens right after the trough, plans the same way."""
+    shape, 41c shoulders around a 29c trough, plans the same way."""
     result, config = _plan(_slots(_price_13oct), switch=True)
-    assert config.terminal_penalty_idx == 7, day
+    assert config.terminal_penalty_idx == 9, day
     hours = _charge_hours(result)
     assert hours
     assert all(h < 16.5 for h in hours), hours
@@ -390,3 +390,211 @@ def test_gate_4_tomorrows_solar_does_not_cover_tonights_deficit():
         s.solar_kwh = 3.0
     result, _ = _plan(sunny, switch=True)
     assert _charge_hours(result)
+
+
+# --- review round: robust reference, stable block, tail, ban, target -------------------
+
+
+def _plan_from(
+    start: datetime,
+    price: Callable[[float], float],
+    n: int = 48,
+    consumption: float = 0.5,
+    interval: int = 30,
+) -> list[SlotContext]:
+    """Slots from ``start``, so the same day can be planned at different times."""
+    out = []
+    for i in range(n):
+        t = start + timedelta(minutes=interval * i)
+        h = t.hour + t.minute / 60.0
+        out.append(
+            SlotContext(
+                slot_index=i,
+                timestamp_iso=t.isoformat(),
+                slot_interval_minutes=interval,
+                buy_price=price(h),
+                sell_price=0.05,
+                solar_kwh=0.0,
+                consumption_kwh=consumption,
+            )
+        )
+    return out
+
+
+def _start_time(slots: list[SlotContext], block: tuple[int, int]) -> str:
+    return slots[block[0]].timestamp_iso[11:16]
+
+
+def _day_price(h: float) -> float:
+    """12c overnight and midday, an 18c shoulder, 40c evening 17:30-21:30."""
+    if 17.5 <= h < 21.5:
+        return 0.40
+    if 6.0 <= h < 9.0 or 15.0 <= h < 17.5:
+        return 0.18
+    return 0.12
+
+
+def test_one_defaulted_price_is_not_the_cheapest_slot():
+    """A missing buy price becomes 0.0 (#987); it is not a price to measure against."""
+    slots = _plan_from(datetime(2026, 11, 3, 22, 0), lambda h: 0.15)
+    slots[1].buy_price = 0.0
+    slots[1].price_defaulted = True
+    assert detect_price_block(slots) is None
+
+
+def test_defaulted_slot_is_never_dear():
+    slots = _plan_from(datetime(2026, 11, 3, 13, 0), _day_price)
+    slots[12].price_defaulted = True
+    slots[12].buy_price = 9.9
+    assert detect_price_block(slots) is not None
+    assert detect_price_block(slots)[0] != 12
+
+
+def test_all_prices_defaulted_finds_nothing():
+    slots = _plan_from(datetime(2026, 11, 3, 13, 0), _day_price)
+    for s in slots:
+        s.price_defaulted = True
+    assert detect_price_block(slots) is None
+
+
+def test_negative_midday_price_does_not_turn_a_shoulder_into_a_block():
+    def price(h: float) -> float:
+        return -0.02 if 11 <= h < 13 else 0.06
+
+    slots = _plan_from(datetime(2026, 11, 3, 9, 0), price)
+    assert detect_price_block(slots) is None
+
+
+def test_negative_midday_price_still_funds_a_dear_evening():
+    def price(h: float) -> float:
+        if 11 <= h < 14:
+            return -0.02
+        return 0.40 if 17.5 <= h < 21.5 else 0.10
+
+    slots = _plan_from(datetime(2026, 11, 3, 9, 0), price)
+    assert _start_time(slots, detect_price_block(slots)) == "17:30"
+
+
+def test_block_is_the_same_whenever_the_day_is_planned():
+    """The design's flap test: one day planned at 09:00, 11:00, 13:00, 14:30, 16:00."""
+    seen = []
+    for hh, mm in [(9, 0), (11, 0), (13, 0), (14, 30), (16, 0)]:
+        slots = _plan_from(datetime(2026, 11, 3, hh, mm), _day_price)
+        config = _config(True)
+        block = apply_price_block(slots, config)
+        assert block is not None, (hh, mm)
+        seen.append((_start_time(slots, block), config.demand_window_target_soc_pct))
+    assert {start for start, _ in seen} == {"17:30"}
+    targets = [t for _, t in seen]
+    assert all(b <= a + 1e-9 for a, b in zip(targets, targets[1:], strict=False))
+
+
+def test_ramp_is_found_from_15_and_from_16():
+    def ramp(h: float) -> float:
+        if 17.0 <= h < 21.5:
+            return 0.27
+        if 16.5 <= h < 17.0:
+            return 0.21
+        if 15.0 <= h < 16.5:
+            return 0.18
+        if 14.0 <= h < 15.0:
+            return 0.14
+        return 0.12
+
+    starts = set()
+    for hh in (15, 16):
+        slots = _plan_from(datetime(2026, 11, 3, hh, 0), ramp)
+        starts.add(_start_time(slots, detect_price_block(slots)))
+    assert starts == {"16:30"}
+
+
+def test_plan_started_inside_the_block_finds_tonights_block():
+    slots = _plan_from(datetime(2026, 11, 3, 20, 30), _day_price)
+    assert detect_price_block(slots) == (0, 1)
+
+
+def test_started_inside_a_short_remainder_does_not_jump_to_tomorrow():
+    slots = _plan_from(datetime(2026, 11, 3, 21, 0), _day_price)
+    block = detect_price_block(slots)
+    assert block is not None and block[0] == 0
+
+
+def test_larger_evening_beats_an_earlier_smaller_morning():
+    def price(h: float) -> float:
+        if 6.0 <= h < 8.0:
+            return 0.30
+        return 0.45 if 17.5 <= h < 21.5 else 0.10
+
+    slots = _plan_from(datetime(2026, 11, 3, 22, 0), price)
+    for s in slots:
+        if 6 <= datetime.fromisoformat(s.timestamp_iso).hour < 8:
+            s.consumption_kwh = 0.3
+    block = detect_price_block(slots)
+    assert _start_time(slots, block) == "17:30"
+
+
+def test_gap_allowance_is_minutes_not_slots():
+    def price(gap_hours: tuple[float, ...]) -> Callable[[float], float]:
+        return lambda h: 0.10 if (h < 17.5 or h >= 21.5 or h in gap_hours) else 0.45
+
+    five = lambda gap: _plan_from(  # noqa: E731
+        datetime(2026, 11, 3, 13, 0),
+        price(gap),
+        n=100,
+        interval=5,
+    )
+    short = tuple(19 + k / 12 for k in range(5))  # 25 minutes
+    long = tuple(19 + k / 12 for k in range(7))  # 35 minutes
+    assert detect_price_block(five(short)) is not None
+    # 35 minutes ends the run; each half is under two hours.
+    assert detect_price_block(five(long)) is None
+
+
+def test_target_floor_follows_the_away_reserve():
+    block = _slots()[9:17]
+    config = _config(True, away_reserve_floor_pct=40.0)
+    assert config.discharge_floor_pct == 40.0
+    assert block_target_soc_pct(block, config, 1.0, 95.0) > 40.0
+
+
+def test_replace_keeps_the_ban_in_step_with_the_flag():
+    from dataclasses import replace
+
+    slot = _slots()[0]
+    assert not slot.is_charge_window_slot
+    assert replace(slot, is_demand_window_slot=True).is_charge_window_slot
+    slot.is_demand_window_slot = True
+    assert slot.is_charge_window_slot
+    slot.is_charge_window_slot = False
+    assert slot.is_demand_window_slot and not slot.is_charge_window_slot
+
+
+# --- next-window tail ------------------------------------------------------------------
+
+
+def _tail_status(slots: list[SlotContext], switch: bool) -> str | None:
+    config = _config(switch)
+    result = DPPlanner().plan(
+        OptimizerInputs(
+            cycle_id="tail",
+            initial_soc_pct=40.0,
+            slots=slots,
+            config=config,
+            next_demand_window_gap_min=300.0,
+        )
+    )
+    return result.next_window_tail_status
+
+
+def test_tail_does_not_chase_a_clock_window_amber_never_flagged():
+    assert _tail_status(_slots(), switch=True) == "no_charge_window"
+
+
+def test_tail_still_runs_when_amber_flags_a_window():
+    assert _tail_status(_slots(flagged=(17.5, 21.0)), switch=True) != (
+        "no_charge_window"
+    )
+
+
+def test_tail_with_the_switch_off_is_untouched():
+    assert _tail_status(_slots(), switch=False) != "no_charge_window"

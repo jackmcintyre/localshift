@@ -771,5 +771,11 @@ TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES = 30
 PRICE_BLOCK_MIN_SPREAD: Final[float] = 0.08
 # Shortest run of dear slots (minutes) that counts as a block worth a deadline.
 PRICE_BLOCK_MIN_DURATION_MIN: Final[int] = 120
+# A dear slot is measured against this share of the horizon's cheapest priced time (a
+# duration-weighted percentile of buy prices, floored at 0), not against one slot: a
+# single defaulted or negative price must not make an ordinary evening a "block".
+PRICE_BLOCK_LOW_PERCENTILE: Final[float] = 0.2
+# Longest stretch (minutes) of not-dear slots a block rides through.
+PRICE_BLOCK_MAX_GAP_MIN: Final[int] = 30
 # SOC points held above the block's forecast net load: the load forecast runs low.
 PRICE_BLOCK_HEADROOM_PCT: Final[float] = 5.0
