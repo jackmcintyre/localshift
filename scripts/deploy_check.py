@@ -72,7 +72,8 @@ Usage
                                the after dump only once this exits 0
 
 Exit codes: 0 all invariants hold, 1 an invariant failed, 2 usage error,
-3 not settled yet (only without --wait-settled).
+3 not settled yet (only without --wait-settled). --wait-restart also exits 2
+when HA's start time cannot be read at all (a missing verdict, never a FAIL).
 """
 
 from __future__ import annotations
@@ -84,7 +85,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SUMMARY = "sensor.localshift_optimizer_summary"
@@ -115,7 +116,16 @@ EXPECTED_CHANGES_FILE = (
 )
 
 UNAVAILABLE = {"unavailable", "unknown"}
-LOG_TS = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ ")
+# Issue #1254: a line's timestamp is read leniently, because HA does not promise
+# a log format: optional leading "[", a space or T separator, an optional
+# [.,] fraction, an optional Z / +HH:MM / +HHMM zone. No zone means host-local.
+LOG_TS = re.compile(
+    r"^\[?(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:[.,]\d+)?"
+    r"(Z|[+-]\d{2}:?\d{2})?(?=[\]\s]|$)"
+)
+# The logbook is read in windows of at most this long, and not past this age.
+LOGBOOK_WINDOW = timedelta(hours=6)
+LOGBOOK_LIMIT = timedelta(days=14)
 # Start-up warnings seen on every healthy restart: (pattern, max count, seconds
 # after the restart within which they are tolerated).
 BENIGN_WARNINGS: list[tuple[re.Pattern, int, int]] = [
@@ -423,8 +433,21 @@ def _window_passed_between(before, after) -> bool:
 
 
 def _log_time(line: str) -> datetime | None:
+    """A line's time as naive host-local time (a zone is converted exactly)."""
     m = LOG_TS.match(line)
-    return datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S") if m else None
+    if not m:
+        return None
+    ts = datetime.strptime(f"{m.group(1)} {m.group(2)}", "%Y-%m-%d %H:%M:%S")
+    if m.group(3) is None:
+        return ts
+    zone = m.group(3)
+    if zone == "Z":
+        offset = timedelta(0)
+    else:
+        sign = -1 if zone[0] == "-" else 1
+        digits = zone[1:].replace(":", "")
+        offset = sign * timedelta(hours=int(digits[:2]), minutes=int(digits[2:]))
+    return ts.replace(tzinfo=timezone(offset)).astimezone().replace(tzinfo=None)
 
 
 def _records(lines: list[str]):
@@ -701,6 +724,94 @@ def _log_restart_time(lines: list[str]) -> datetime | None:
     return next((t for line in lines if (t := _log_time(line))), None)
 
 
+class StartTimeUnknown(Exception):
+    """Neither the logbook nor the log says when HA started: no verdict."""
+
+
+def _ha_credentials() -> tuple[str, str]:
+    import types
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from ha_entity_dump import resolve_credentials
+
+    return resolve_credentials(types.SimpleNamespace(url=None, token=None))
+
+
+def fetch_live_logbook(start: datetime, end: datetime) -> list[dict]:
+    """The logbook between two aware times (needs no admin token)."""
+    import urllib.parse
+    import urllib.request
+
+    url, token = _ha_credentials()
+    req = urllib.request.Request(
+        f"{url}/api/logbook/{start.isoformat()}"
+        f"?end_time={urllib.parse.quote(end.isoformat(), safe='')}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode())
+
+
+def _logbook_started_since(epoch: datetime, now: datetime, fetch_logbook):
+    """True if the logbook shows HA started at or after ``epoch``; False if it
+    is recording (shows other entries after ``epoch``) but no start; else None.
+
+    Read in windows of at most LOGBOOK_WINDOW, newest first, stopping at a hit.
+    An epoch older than LOGBOOK_LIMIT is not read from the logbook.
+    """
+    if now - epoch > LOGBOOK_LIMIT:
+        return None
+    recording = False
+    end = now
+    while end > epoch:
+        start = max(end - LOGBOOK_WINDOW, epoch)
+        try:
+            entries = fetch_logbook(start, end)
+        except (OSError, ValueError, http.client.HTTPException):
+            return None
+        for entry in entries:
+            try:
+                when = datetime.fromisoformat(entry["when"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if when.tzinfo is None:
+                when = when.astimezone()
+            if when < epoch:
+                continue
+            if entry.get("domain") == "homeassistant" and (
+                entry.get("message") == "started"
+            ):
+                return True
+            recording = True
+        end = start
+    return False if recording else None
+
+
+def ha_started_since(
+    epoch: datetime, now: datetime, *, fetch_logbook=None, fetch_log=None
+) -> bool | None:
+    """Did HA start at or after ``epoch``? None means cannot tell (never a FAIL).
+
+    The logbook decides. A logbook "no" holds only if it does not disagree with
+    the log; with no usable logbook the log's first timestamp stands in.
+    """
+    fetch_logbook = fetch_logbook or fetch_live_logbook
+    fetch_log = fetch_log or fetch_live_log
+    epoch = epoch.astimezone()  # naive means host-local
+    now = now.astimezone()
+    verdict = _logbook_started_since(epoch, now, fetch_logbook)
+    if verdict is True:
+        return True
+    try:
+        logged = _log_restart_time(fetch_log())
+    except (OSError, ValueError, http.client.HTTPException):
+        logged = None
+    logged_after = None if logged is None else logged.astimezone() >= epoch
+    if verdict is False:
+        return None if logged_after else False
+    return logged_after
+
+
 def restart_issued_at(value: str, now: datetime) -> datetime:
     """Parse the restart time: "YYYY-MM-DD HH:MM:SS", or "HH:MM:SS" meaning today.
 
@@ -725,33 +836,46 @@ def wait_restart(
     *,
     up=None,
     fetch_log=None,
+    fetch_logbook=None,
     sleep=time.sleep,
     clock=time.monotonic,
 ) -> str | None:
     """Wait for HA to go down and come back after a restart issued at ``started``.
 
     A snapshot taken while HA is shutting down reads every entity as missing,
-    and one taken just before the restart lands judges the old process. So
-    this waits for HA to stop reporting RUNNING, then to report it again, and then
-    requires the log's first timestamp (the new process's start) to be no
-    earlier than ``started``. A restart fast enough to be missed between polls
-    still passes on the log alone. Returns None when restarted, else why not.
+    and one taken just before the restart lands judging the old process. So
+    this waits for HA to stop reporting RUNNING, then to report it again, and
+    then requires HA's start time (``ha_started_since``: the logbook first, the
+    log's first timestamp as the fallback) to be no earlier than ``started``. A
+    restart fast enough to be missed between polls still passes on that alone.
+    Returns None when restarted, else why not. Raises StartTimeUnknown when HA
+    came back but its start time could never be read: no verdict, not a FAIL.
     """
     up = up or _api_up
-    fetch_log = fetch_log or fetch_live_log
     deadline = clock() + timeout_s
-    seen_down = False
+    seen_down = definite_no = inconclusive = False
     while clock() < deadline:
         if not up():
             seen_down = True
         else:
-            try:
-                restart = _log_restart_time(fetch_log())
-            except (OSError, ValueError, http.client.HTTPException):
-                restart = None
-            if restart is not None and restart >= started:
+            restarted = ha_started_since(
+                started,
+                datetime.now(),
+                fetch_logbook=fetch_logbook,
+                fetch_log=fetch_log,
+            )
+            if restarted:
                 return None
+            if restarted is None:
+                inconclusive = True
+            else:
+                definite_no = True
         sleep(RESTART_POLL_S)
+    if inconclusive and not definite_no:
+        raise StartTimeUnknown(
+            f"cannot tell when HA started (logbook and log both unreadable "
+            f"or disagreeing) within {timeout_s:.0f} s"
+        )
     return f"no restart after {started:%H:%M:%S} within {timeout_s:.0f} s" + (
         " (API went down but the log never showed a new start)" if seen_down else ""
     )
@@ -773,6 +897,24 @@ def wait_settled(
     return after
 
 
+def _run_wait_restart(ap: argparse.ArgumentParser, value: str, timeout: float) -> int:
+    """Run --wait-restart: 0 restarted, 1 not restarted, 2 cannot tell."""
+    try:
+        started = restart_issued_at(value, datetime.now())
+    except ValueError as exc:
+        ap.error(str(exc))
+    try:
+        reason = wait_restart(started, timeout)
+    except StartTimeUnknown as exc:
+        print(str(exc))
+        return 2
+    print(
+        reason
+        or f"restarted: HA came back with a log starting after {started:%H:%M:%S}"
+    )
+    return 0 if reason is None else 1
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -792,16 +934,7 @@ def main(argv=None) -> int:
     ap.add_argument("--timeout", type=float, default=900.0)
     args = ap.parse_args(argv)
     if args.wait_restart:
-        try:
-            started = restart_issued_at(args.wait_restart, datetime.now())
-        except ValueError as exc:
-            ap.error(str(exc))
-        reason = wait_restart(started, args.timeout)
-        print(
-            reason
-            or f"restarted: HA came back with a log starting after {started:%H:%M:%S}"
-        )
-        return 0 if reason is None else 1
+        return _run_wait_restart(ap, args.wait_restart, args.timeout)
     if args.preflight:
         checks = preflight(fetch_live_states(), datetime.now().astimezone())
         print(render(checks))
