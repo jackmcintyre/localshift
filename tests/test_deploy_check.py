@@ -535,10 +535,39 @@ def test_compiled_older_than_source_fails(tmp_path):
     assert not dc.check_compiled(comp, RESTART, expect_recompile=False).ok
 
 
-def test_compiled_before_restart_fails_only_when_recompile_expected(tmp_path):
+def _stamp(comp, when):
+    (comp / "BUILD").mkdir()
+    iso = datetime.fromtimestamp(when, timezone.utc).isoformat()
+    (comp / "BUILD" / "build.json").write_text(json.dumps({"build_time": iso}))
+
+
+def test_compiled_before_copy_fails_only_when_recompile_expected(tmp_path):
     comp = _component(tmp_path, RESTART.timestamp() - 5000, RESTART.timestamp() - 4000)
+    _stamp(comp, RESTART.timestamp() - 3000)
     assert dc.check_compiled(comp, RESTART, expect_recompile=False).ok
     assert not dc.check_compiled(comp, RESTART, expect_recompile=True).ok
+
+
+def test_compiled_after_two_later_restarts_passes(tmp_path):
+    # ship, first restart compiles, two more restarts reuse the .pyc untouched
+    shipped = RESTART.timestamp() - 12 * 86400
+    comp = _component(tmp_path, shipped - 100, shipped + 30)
+    _stamp(comp, shipped)
+    assert dc.check_compiled(comp, RESTART, expect_recompile=True).ok
+
+
+def test_compiled_stale_still_fails_after_later_restart(tmp_path):
+    shipped = RESTART.timestamp() - 12 * 86400
+    comp = _component(tmp_path, shipped + 100, shipped + 30)
+    _stamp(comp, shipped)
+    assert not dc.check_compiled(comp, RESTART, expect_recompile=True).ok
+
+
+def test_compiled_without_stamp_relies_on_source_comparison(tmp_path):
+    old = _component(tmp_path / "a", RESTART.timestamp() - 5000, RESTART.timestamp() - 4000)
+    assert dc.check_compiled(old, RESTART, expect_recompile=True).ok
+    stale = _component(tmp_path / "b", RESTART.timestamp() + 50, RESTART.timestamp() - 4000)
+    assert not dc.check_compiled(stale, RESTART, expect_recompile=True).ok
 
 
 def test_no_compiled_files_fails(tmp_path):
