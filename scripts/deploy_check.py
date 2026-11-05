@@ -63,7 +63,8 @@ Usage
                                manual runs, see "Intended config changes")
   --allow-dw-entry-move        the change is meant to move the projected entry
                                (a different window between the dumps passes without it)
-  --expect-recompile           code was copied: every compiled file must post-date the restart
+  --expect-recompile           code was copied: every compiled file must post-date the copy
+                               (BUILD/build.json build_time; later restarts reuse them)
   --wait-settled SECONDS       re-fetch the after state every 20 s until settled,
                                then judge (cannot be combined with --log)
   --wait-restart TIME          wait (up to --timeout, default 900 s) until HA has gone
@@ -551,11 +552,38 @@ def check_log(lines: list[str], now: datetime) -> tuple[list[Check], datetime | 
     ], restart
 
 
+def _swap_time(component_dir: Path) -> float | None:
+    """When the deployer copied the files: the build stamp's ``build_time``."""
+    try:
+        stamp = json.loads((component_dir / "BUILD" / "build.json").read_text())
+        built = datetime.fromisoformat(str(stamp["build_time"]).replace("Z", "+00:00"))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if built.tzinfo is None:
+        built = built.replace(tzinfo=timezone.utc)
+    return built.timestamp()
+
+
 def check_compiled(
     component_dir: Path, restart: datetime, expect_recompile: bool
 ) -> Check:
     """Compiled files must not be older than their source; after a copy they
-    must also post-date the restart, which proves the new code was loaded."""
+    must also post-date the copy, which proves the new code was loaded.
+
+    Measured against the copy, not the latest restart: Python reuses a valid
+    ``.pyc`` at later restarts, so a check run after one is still healthy. With
+    no build stamp the copy time is unknown, and the older-than-source test
+    (which a restart cannot defeat) is the whole check; the detail says so.
+    A restart older than the copy means nothing has loaded the new code."""
+    swap = _swap_time(component_dir) if expect_recompile else None
+    if swap is not None and restart.timestamp() < swap - 60:
+        # ``restart`` is naive local time (the log's), ``swap`` an absolute UTC
+        # instant: both are epoch seconds here, so they compare correctly.
+        return Check(
+            "compiled files",
+            False,
+            "no restart since the copy: the new code has not been loaded",
+        )
     stale, old, count = [], [], 0
     for src in component_dir.rglob("*.py"):
         compiled = list((src.parent / "__pycache__").glob(f"{src.stem}.cpython-*.pyc"))
@@ -565,7 +593,7 @@ def check_compiled(
         newest = max(p.stat().st_mtime for p in compiled)
         if newest < src.stat().st_mtime:
             stale.append(src.name)
-        if expect_recompile and newest < restart.timestamp() - 60:
+        if swap is not None and newest < swap - 60:
             old.append(src.name)
     if count == 0:
         return Check("compiled files", False, f"none found under {component_dir}")
@@ -577,7 +605,13 @@ def check_compiled(
         return Check(
             "compiled files",
             False,
-            f"{len(old)} pre-date the restart: {', '.join(old[:5])}",
+            f"{len(old)} pre-date the copy: {', '.join(old[:5])}",
+        )
+    if expect_recompile and swap is None:
+        return Check(
+            "compiled files",
+            True,
+            f"{count} current; no build stamp: copy time unchecked",
         )
     return Check("compiled files", True, f"{count} current")
 
