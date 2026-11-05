@@ -78,7 +78,8 @@ class GridOnlyPlanner:
     def plan(self, inputs):
         self.seen.append(inputs)
         decisions = [
-            SimpleNamespace(grid_import_kwh=s.consumption_kwh) for s in inputs.slots
+            SimpleNamespace(grid_import_kwh=s.consumption_kwh, predicted_soc_pct=50.0)
+            for s in inputs.slots
         ]
         cost = sum(s.consumption_kwh * s.buy_price for s in inputs.slots)
         return SimpleNamespace(
@@ -353,7 +354,9 @@ class TestRealHomeAssistantServiceCall:
         base = inputs_from(slots_from(prices, dw=range(14, 18)))
         hass = HomeAssistant(str(tmp_path))
         store = make_store()
-        facade = SimpleNamespace(booking_base=base, planner=DPPlanner())
+        facade = SimpleNamespace(
+            booking_base=base, booking_base_at=NOW, planner=DPPlanner()
+        )
         entry = SimpleNamespace(
             runtime_data=SimpleNamespace(
                 bookings=store,
@@ -370,10 +373,16 @@ class TestRealHomeAssistantServiceCall:
             "earliest_start": NOW.isoformat(),
             "latest_finish": (NOW + 7 * HOUR).isoformat(),
         }
-        with patch.object(bk.dt_util, "utcnow", return_value=NOW):
+        with (
+            patch.object(bk.dt_util, "utcnow", return_value=NOW),
+            patch.object(
+                hass, "async_add_executor_job", wraps=hass.async_add_executor_job
+            ) as offloaded,
+        ):
             booked = await hass.services.async_call(
                 DOMAIN, "book_load", data, blocking=True, return_response=True
             )
+        assert offloaded.call_args.args[0] is bk.choose_start
         assert booked["reason"] == "lowest plan cost"
         start = datetime.fromisoformat(booked["start_at"])
         assert NOW <= start <= NOW + 6 * HOUR
@@ -382,7 +391,9 @@ class TestRealHomeAssistantServiceCall:
 
     async def test_before_any_plan_exists_the_deadline_pick_is_kept(self, tmp_path):
         hass = HomeAssistant(str(tmp_path))
-        facade = SimpleNamespace(booking_base=None, planner=DPPlanner())
+        facade = SimpleNamespace(
+            booking_base=None, booking_base_at=None, planner=DPPlanner()
+        )
         entry = SimpleNamespace(
             runtime_data=SimpleNamespace(
                 bookings=make_store(),
@@ -468,3 +479,175 @@ class TestWiring:
         me.bookings = None
         LocalShiftCoordinator._bookings_changed(me)
         assert me.notify_listeners.call_count == 2
+
+
+class ShapedPlanner:
+    """A fake DP whose import timing and final SOC follow the load's placement."""
+
+    def __init__(self, shape):
+        self.shape = shape
+
+    def plan(self, inputs):
+        return self.shape(inputs)
+
+
+def _extra(inputs):
+    return [round(s.consumption_kwh - 0.2, 6) for s in inputs.slots]
+
+
+class TestReviewRound:
+    def test_in_window_import_cannot_be_paid_for_by_pre_window_savings(self):
+        # Slots 4-5 are the window. Baseline imports 1.0 before and 1.0 inside.
+        # A load in the window "saves" pre-window import by the same amount the
+        # window gains: the single sum is unchanged, the parts are not.
+        def shape(inputs):
+            inside = sum(_extra(inputs)[4:6])
+            # Load in the window: the planner stops charging beforehand (pre 1.0
+            # -> 0.0) and the window imports 0.8 more. Sum through the window
+            # falls from 2.0 to 1.8; the window part alone rises from 1.0 to 1.8.
+            imports = [0.25] * 4 + [0.5] * 2 + [0.0] * 2
+            if inside:
+                imports = [0.0] * 4 + [0.9] * 2 + [0.0] * 2
+            decisions = [
+                SimpleNamespace(grid_import_kwh=v, predicted_soc_pct=50.0)
+                for v in imports
+            ]
+            return SimpleNamespace(
+                success=True, decisions=decisions, projected_net_cost=0.0
+            )
+
+        base = inputs_from(slots_from([0.2] * 8, dw=range(4, 6)))
+        start, why = choose_start(
+            ShapedPlanner(shape), base, [], NOW + 2 * HOUR, NOW + 3 * HOUR, HOUR, 1.0
+        )
+        assert start is None
+        assert "demand window" in why
+
+    def test_terminal_value_counts_when_ranking(self):
+        # Draining the battery in the last slots wins on net cost (cheaper
+        # prices there) but loses once the energy left in the pack is valued.
+        prices = [0.30] * 6 + [0.29] * 2
+        base = inputs_from(slots_from(prices))
+
+        def shape(inputs):
+            extra = _extra(inputs)
+            late = sum(extra[-2:]) > 0
+            decisions = [
+                SimpleNamespace(
+                    grid_import_kwh=0.0, predicted_soc_pct=40.0 if late else 70.0
+                )
+            ]
+            cost = sum(
+                e * s.buy_price for e, s in zip(extra, inputs.slots, strict=True)
+            )
+            return SimpleNamespace(
+                success=True, decisions=decisions, projected_net_cost=cost
+            )
+
+        # Net cost alone prefers the late start...
+        costs = {}
+        for hours in range(0, 4):
+            r = shape(
+                dataclasses.replace(
+                    base,
+                    slots=with_booked_load(
+                        base.slots,
+                        [(NOW + hours * HOUR, NOW + (hours + 1) * HOUR, 1.0)],
+                    ),
+                )
+            )
+            costs[hours] = r.projected_net_cost
+        # ...ranked with the pack's value, the full-pack start wins.
+        start, _ = choose_start(
+            ShapedPlanner(shape), base, [], NOW, NOW + 4 * HOUR, HOUR, 1.0
+        )
+        assert start + HOUR <= NOW + 3 * HOUR
+        assert costs[3] < costs[0]
+
+    def test_every_failed_solve_has_its_own_reason(self):
+        calls = []
+
+        def shape(inputs):
+            calls.append(1)
+            ok = len(calls) == 1
+            return SimpleNamespace(
+                success=ok,
+                decisions=[SimpleNamespace(grid_import_kwh=0, predicted_soc_pct=50)],
+                projected_net_cost=0.0,
+            )
+
+        base = inputs_from(slots_from([0.2] * 6))
+        assert choose_start(
+            ShapedPlanner(shape), base, [], NOW, NOW + 2 * HOUR, HOUR, 1.0
+        ) == (None, "every candidate plan failed")
+
+    def test_starts_sit_on_clock_boundaries_and_are_capped(self):
+        planner = GridOnlyPlanner()
+        base = inputs_from(slots_from([0.2] * 96))
+        earliest = NOW + timedelta(minutes=7)
+        choose_start(planner, base, [], earliest, NOW + 48 * HOUR, HOUR, 1.0)
+        assert len(planner.seen) == 1 + 48
+        first = planner.seen[1]
+        # 09:15, not 09:07: a quarter hour of the run falls in the first slot
+        assert first.slots[0].consumption_kwh == pytest.approx(0.2 + 0.3)
+
+    def test_candidate_solves_get_their_own_config(self):
+        planner = GridOnlyPlanner()
+        base = inputs_from(slots_from([0.2] * 6))
+        choose_start(planner, base, [], NOW, NOW + 3 * HOUR, HOUR, 1.0)
+        assert all(p.config is not base.config for p in planner.seen)
+
+    async def test_a_planner_error_falls_back_to_the_deadline_pick(self):
+        async def choose(*_):
+            raise RuntimeError("boom")
+
+        store = make_store()
+        b = await store.async_book(
+            "washer",
+            60,
+            NOW,
+            NOW + 8 * HOUR,
+            NOW,
+            excess_kw_at=lambda s, e: None,
+            est_kwh=1.0,
+            choose=choose,
+        )
+        assert b["start_at"] == (NOW + 7 * HOUR).isoformat()
+        assert b["reason"].startswith("plan evaluation failed")
+
+
+class TestStalePlan:
+    def _facade(self, made, base):
+        return SimpleNamespace(booking_base=base, booking_base_at=made)
+
+    def test_fresh_plan_is_usable(self):
+        base = inputs_from(slots_from([0.2] * 4))
+        assert bk._stale_reason(self._facade(NOW, base), base, NOW) is None
+
+    def test_old_plan_is_not(self):
+        base = inputs_from(slots_from([0.2] * 4))
+        later = NOW + timedelta(minutes=20)
+        assert "out of date" in bk._stale_reason(self._facade(NOW, base), base, later)
+
+    def test_plan_whose_first_slot_is_over_is_not(self):
+        base = inputs_from(slots_from([0.2] * 4))
+        later = NOW + timedelta(minutes=31)
+        facade = self._facade(later, base)
+        assert "no longer covers" in bk._stale_reason(facade, base, later)
+
+    def test_no_plan_yet(self):
+        assert bk._stale_reason(self._facade(None, None), None, NOW) == "no plan yet"
+        base = inputs_from(slots_from([0.2] * 4))
+        assert "out of date" in bk._stale_reason(self._facade(None, base), base, NOW)
+
+    async def test_a_stale_plan_gives_the_deadline_pick_with_the_reason(self):
+        base = inputs_from(slots_from([0.2] * 4))
+        facade = self._facade(NOW - timedelta(hours=1), base)
+        coordinator = SimpleNamespace(
+            computation_engine=SimpleNamespace(optimizer_facade=facade)
+        )
+        choose = bk._plan_chooser(None, coordinator, make_store(), NOW)
+        assert await choose(NOW, NOW + HOUR, HOUR, 1.0) == (
+            None,
+            "latest plan is out of date",
+        )

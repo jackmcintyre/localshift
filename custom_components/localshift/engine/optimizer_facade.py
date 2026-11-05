@@ -110,6 +110,7 @@ class OptimizerFacade:
         self._planner = planner or DPPlanner()
         # The latest planning inputs before any booked load is laid on (#1238).
         self.booking_base: OptimizerInputs | None = None
+        self.booking_base_at: datetime | None = None
         self._slot_builder_cls = slot_builder_cls
         self._solar_accuracy_tracker: Any = None
         # True while a forced BOOST from the pre-charge execution backstop is the
@@ -374,6 +375,7 @@ class OptimizerFacade:
                 next_demand_window_gap_min=slot_metadata.next_demand_window_gap_min,
             )
             self.booking_base = dataclasses.replace(inputs, slots=slots)
+            self.booking_base_at = now_dt or dt_util.now()
             result = self._planner.plan(inputs)
 
             # Issue #1103: carry the window's open/closed state to the next

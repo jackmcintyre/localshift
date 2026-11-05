@@ -195,7 +195,11 @@ class BookingStore:
                 earliest, latest_finish, duration, kwh / hours, excess_kw_at
             )
             if choose is not None:
-                planned, why = await choose(earliest, latest_finish, duration, kwh)
+                try:
+                    planned, why = await choose(earliest, latest_finish, duration, kwh)
+                except Exception:  # noqa: BLE001 - a booking must not fail on the planner
+                    _LOGGER.exception("Planning a start for %s failed", name)
+                    planned, why = None, "plan evaluation failed"
                 if planned is not None:
                     start, reason = planned, why
                 else:
@@ -294,18 +298,42 @@ async def async_book_load(hass: HomeAssistant, call: ServiceCall) -> ServiceResp
     )
 
 
+# The plan is rebuilt every cycle; a base older than this was not refreshed.
+MAX_PLAN_AGE = timedelta(minutes=10)
+
+
+def _stale_reason(facade: Any, base: Any, now: datetime) -> str | None:
+    """Why the latest planning inputs cannot be trusted for a booking, if so."""
+    if base is None:
+        return "no plan yet"
+    made = facade.booking_base_at
+    first = datetime.fromisoformat(base.slots[0].timestamp_iso) if base.slots else None
+    if made is None or now - made > MAX_PLAN_AGE:
+        return "latest plan is out of date"
+    if first is None or now >= first + timedelta(
+        minutes=base.slots[0].slot_interval_minutes
+    ):
+        return "latest plan no longer covers now"
+    return None
+
+
 def _plan_chooser(
     hass: HomeAssistant,
     coordinator: LocalShiftCoordinator,
     store: BookingStore,
     now: datetime,
-) -> ChooseStart | None:
-    """Evaluate starts against the live plan, off the event loop; None before one exists."""
+) -> ChooseStart:
+    """Evaluate starts against the live plan, off the event loop."""
     engine = getattr(coordinator, "computation_engine", None)
     facade = engine.optimizer_facade if engine is not None else None
     base = facade.booking_base if facade is not None else None
-    if base is None:
-        return None
+    stale = _stale_reason(facade, base, now)
+    if stale:
+
+        async def unusable(*_: Any) -> tuple[datetime | None, str]:
+            return None, stale
+
+        return unusable
 
     async def choose(
         earliest: datetime, latest_finish: datetime, duration: timedelta, kwh: float
