@@ -416,6 +416,8 @@ def _coordinator_data(payload: dict[str, Any]) -> CoordinatorData:
         _price_slot(e) for e in payload.get("feed_in_forecast", [])
     ]
     data.target_reached_today = payload.get("target_reached_today", False)
+    # Booked loads (#1238) are planner input, so a capture carries them.
+    data.load_bookings = payload.get("bookings", [])
     data.forecast_ready = True
     data.forecast_status = "ready"
     return data

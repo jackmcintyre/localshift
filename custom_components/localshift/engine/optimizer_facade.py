@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import uuid
 from datetime import datetime, timedelta
@@ -17,6 +18,7 @@ from ..const import (
 from ..const import BatteryMode as _BatteryMode
 from ..coordinator.data import CoordinatorData
 from ..forecast.solar import get_solar_for_slot_by_interval
+from .booked_load import active_loads, with_booked_load
 from .core import DPPlanner
 from .optimizer_runner import (
     OptimizerSafetyGate,
@@ -106,6 +108,8 @@ class OptimizerFacade:
 
         """
         self._planner = planner or DPPlanner()
+        # The latest planning inputs before any booked load is laid on (#1238).
+        self.booking_base: OptimizerInputs | None = None
         self._slot_builder_cls = slot_builder_cls
         self._solar_accuracy_tracker: Any = None
         # True while a forced BOOST from the pre-charge execution backstop is the
@@ -129,6 +133,10 @@ class OptimizerFacade:
         self._runway_holding: bool = False
         # When run_inline first ran, for _STARTUP_SOC_GRACE.
         self._first_run_at: datetime | None = None
+
+    @property
+    def planner(self) -> DPPlanner:
+        return self._planner
 
     def set_solar_accuracy_tracker(self, tracker: Any) -> None:
         """Set the solar accuracy tracker for bias correction."""
@@ -344,7 +352,11 @@ class OptimizerFacade:
             inputs = OptimizerInputs(
                 cycle_id=cycle_id,
                 initial_soc_pct=initial_soc,
-                slots=slots,
+                # Booked loads (#1238) are known extra consumption; with none,
+                # these are the very slots the builder made.
+                slots=with_booked_load(
+                    slots, active_loads(getattr(data, "load_bookings", None))
+                ),
                 config=optimizer_config,
                 current_action=current_action,
                 all_solcast=slot_metadata.all_solcast,
@@ -361,6 +373,7 @@ class OptimizerFacade:
                 # still green (issue #1033; the #959 shape).
                 next_demand_window_gap_min=slot_metadata.next_demand_window_gap_min,
             )
+            self.booking_base = dataclasses.replace(inputs, slots=slots)
             result = self._planner.plan(inputs)
 
             # Issue #1103: carry the window's open/closed state to the next

@@ -7,10 +7,11 @@ reads the existing forecasts only: the planner is not involved.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 import secrets
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +29,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator.data import CoordinatorData
+from .engine.booked_load import choose_start
 
 if TYPE_CHECKING:
     from .coordinator import LocalShiftCoordinator
@@ -42,6 +44,10 @@ SERVICE_CANCEL = "cancel_load"
 
 # Spare kW a load can count on across a window; None if the plan does not cover it.
 ExcessAt = Callable[[datetime, datetime], "float | None"]
+# Picks a start from the plan: (start, why), start None when the plan cannot say.
+ChooseStart = Callable[
+    [datetime, datetime, timedelta, float], Awaitable["tuple[datetime | None, str]"]
+]
 _REQUIRED = ("id", "name", "status", "finish_by")
 
 
@@ -129,6 +135,8 @@ class BookingStore:
         self._store = Store(hass, STORAGE_VERSION, f"localshift.bookings.{entry_id}")
         self._on_change = on_change
         self._bookings: dict[str, dict[str, Any]] = {}
+        # Bookings are placed one at a time, each seeing the earlier ones.
+        self._placing = asyncio.Lock()
 
     async def async_load(self, now: datetime) -> None:
         saved = await self._store.async_load()
@@ -170,6 +178,7 @@ class BookingStore:
         excess_kw_at: ExcessAt,
         est_kwh: float | None = None,
         est_kw: float | None = None,
+        choose: ChooseStart | None = None,
     ) -> dict[str, Any]:
         hours = duration_min / 60
         kwh = est_kwh if est_kwh is not None else (est_kw or 0) * hours
@@ -181,12 +190,34 @@ class BookingStore:
         duration = timedelta(minutes=duration_min)
         if latest_finish - earliest < duration:
             raise ServiceValidationError("The window is shorter than the duration")
-        start, reason = pick_start(
-            earliest, latest_finish, duration, kwh / hours, excess_kw_at
-        )
+        async with self._placing:
+            start, reason = pick_start(
+                earliest, latest_finish, duration, kwh / hours, excess_kw_at
+            )
+            if choose is not None:
+                planned, why = await choose(earliest, latest_finish, duration, kwh)
+                if planned is not None:
+                    start, reason = planned, why
+                else:
+                    reason = f"{why}; {reason}"
+            return await self._add(
+                name, duration_min, start, latest_finish, kwh, reason, now
+            )
+
+    async def _add(
+        self,
+        name: str,
+        duration_min: int,
+        start: datetime,
+        latest_finish: datetime,
+        kwh: float,
+        reason: str,
+        now: datetime,
+    ) -> dict[str, Any]:
         booking = {
             "id": secrets.token_hex(4),
             "name": name,
+            "duration_min": duration_min,
             "start_at": start.isoformat(),
             "finish_by": latest_finish.isoformat(),
             "est_kwh": round(kwh, 2),
@@ -259,7 +290,38 @@ async def async_book_load(hass: HomeAssistant, call: ServiceCall) -> ServiceResp
         est_kw=d.get("est_kw"),
         now=now,
         excess_kw_at=excess_from_data(coordinator.data),
+        choose=_plan_chooser(hass, coordinator, store, now),
     )
+
+
+def _plan_chooser(
+    hass: HomeAssistant,
+    coordinator: LocalShiftCoordinator,
+    store: BookingStore,
+    now: datetime,
+) -> ChooseStart | None:
+    """Evaluate starts against the live plan, off the event loop; None before one exists."""
+    engine = getattr(coordinator, "computation_engine", None)
+    facade = engine.optimizer_facade if engine is not None else None
+    base = facade.booking_base if facade is not None else None
+    if base is None:
+        return None
+
+    async def choose(
+        earliest: datetime, latest_finish: datetime, duration: timedelta, kwh: float
+    ) -> tuple[datetime | None, str]:
+        return await hass.async_add_executor_job(
+            choose_start,
+            facade.planner,
+            base,
+            store.as_list(now),
+            earliest,
+            latest_finish,
+            duration,
+            kwh,
+        )
+
+    return choose
 
 
 async def async_cancel_load(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
