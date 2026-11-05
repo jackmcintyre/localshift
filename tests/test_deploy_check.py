@@ -7,7 +7,7 @@ breaking exactly one thing fails exactly that check.
 import copy
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -490,8 +490,24 @@ def test_planner_gone_quiet_fails():
     assert _failed(checks) == ["planner running"]
 
 
-def test_unreadable_log_fails():
-    assert _failed(_run(log=["no timestamps here"])) == ["log readable"]
+def test_unreadable_log_is_no_verdict_not_a_failure():
+    with pytest.raises(dc.StartTimeUnknown, match="no timestamped lines"):
+        _run(log=["no timestamps here"])
+
+
+def test_main_unreadable_log_exits_2(tmp_path, capsys):
+    dump = tmp_path / "d.json"
+    dump.write_text(
+        json.dumps({
+            "meta": {},
+            "groups": {"g": [{"entity_id": e, **v} for e, v in _dump().items()]},
+        })
+    )
+    log = tmp_path / "ha.log"
+    log.write_text("")
+    code = dc.main(["--before", str(dump), "--after", str(dump), "--log", str(log)])
+    assert code == 2
+    assert "cannot tell" in capsys.readouterr().out
 
 
 def _component(tmp_path, src_mtime, pyc_mtime):
@@ -803,6 +819,10 @@ def _fake_clock(step=3.0):
     return clock, sleep
 
 
+def _no_logbook(start, end):
+    return []
+
+
 def _log_starting(ts: datetime) -> list[str]:
     return [f"{ts:%Y-%m-%d %H:%M:%S}.123 WARNING (MainThread) [x] first line"]
 
@@ -816,6 +836,7 @@ def test_wait_restart_passes_after_down_and_up():
         60,
         up=lambda: next(ups),
         fetch_log=lambda: next(logs),
+        fetch_logbook=_no_logbook,
         sleep=sleep,
         clock=clock,
     )
@@ -834,6 +855,7 @@ def test_wait_restart_refuses_the_old_process_log():
         30,
         up=lambda: True,
         fetch_log=lambda: old_log,
+        fetch_logbook=_no_logbook,
         sleep=sleep,
         clock=clock,
     )
@@ -848,6 +870,7 @@ def test_wait_restart_reports_down_without_new_log():
         30,
         up=lambda: next(ups),
         fetch_log=lambda: [],
+        fetch_logbook=_no_logbook,
         sleep=sleep,
         clock=clock,
     )
@@ -859,15 +882,16 @@ def test_wait_restart_unreadable_log_keeps_waiting():
         raise OSError("connection reset")
 
     clock, sleep = _fake_clock()
-    reason = dc.wait_restart(
-        STARTED,
-        9,
-        up=lambda: True,
-        fetch_log=boom,
-        sleep=sleep,
-        clock=clock,
-    )
-    assert reason is not None
+    with pytest.raises(dc.StartTimeUnknown):
+        dc.wait_restart(
+            STARTED,
+            9,
+            up=lambda: True,
+            fetch_log=boom,
+            fetch_logbook=_no_logbook,
+            sleep=sleep,
+            clock=clock,
+        )
 
 
 def test_wait_restart_down_then_old_process_answering_still_fails():
@@ -879,6 +903,7 @@ def test_wait_restart_down_then_old_process_answering_still_fails():
         30,
         up=lambda: next(ups),
         fetch_log=lambda: _log_starting(STARTED - timedelta(hours=13)),
+        fetch_logbook=_no_logbook,
         sleep=sleep,
         clock=clock,
     )
@@ -921,3 +946,349 @@ def test_api_up_means_ha_reports_running(monkeypatch, body, up):
     monkeypatch.setenv("HA_URL", "http://ha.invalid:8123")
     monkeypatch.setenv("HA_TOKEN", "t")
     assert dc._api_up(urlopen=lambda req, timeout: _Resp(body)) is up
+
+
+# --- #1254: HA's start time comes from the logbook, the log is the fallback ---
+
+EPOCH = datetime(2026, 11, 5, 10, 0, 0)  # host-local, as --wait-restart takes it
+
+
+@pytest.fixture(autouse=True)
+def sydney(monkeypatch):
+    """Pin the host zone (CI runs UTC) so local and zoned times line up."""
+    import time
+
+    monkeypatch.setenv("TZ", "Australia/Sydney")  # +11:00 in November
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "2026-11-05 10:00:07.123456 WARNING (MainThread) [x] old format",
+        "2026-11-05T10:00:07.123456 WARNING (MainThread) [x] ISO T, no zone",
+        "[2026-11-05 10:00:07.123] WARNING bracketed",
+        "2026-11-05 10:00:07,123 WARNING comma fraction",
+        "2026-11-05 10:00:07 WARNING no fraction",
+    ],
+)
+def test_log_time_reads_unzoned_formats_as_host_local(line):
+    assert dc._log_time(line) == datetime(2026, 11, 5, 10, 0, 7)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "2026-11-04T23:00:07.123456+00:00 WARNING utc offset",
+        "2026-11-04T23:00:07.123456Z WARNING zulu",
+        "2026-11-05T10:00:07.123456+1100 WARNING compact offset",
+        "[2026-11-05 10:00:07+11:00] WARNING bracketed, offset, no fraction",
+        "2026-11-04 23:00:07,5Z WARNING space separator, comma, zulu",
+    ],
+)
+def test_log_time_reads_a_zone_exactly(line, sydney):
+    assert dc._log_time(line) == datetime(2026, 11, 5, 10, 0, 7)
+
+
+@pytest.mark.parametrize(
+    "line", ["", "  continuation", "Traceback (most recent call last):", "2026-11-05"]
+)
+def test_log_time_ignores_non_timestamp_lines(line):
+    assert dc._log_time(line) is None
+
+
+def _started(when="2026-11-05T10:00:30+11:00"):
+    return {
+        "when": when,
+        "name": "Home Assistant",
+        "message": "started",
+        "domain": "homeassistant",
+    }
+
+
+def _other(when="2026-11-05T10:05:00+11:00"):
+    return {"when": when, "name": "Light", "message": "turned on", "domain": "light"}
+
+
+NOW_AWARE = datetime(2026, 11, 5, 11, 0, 0, tzinfo=timezone(timedelta(hours=11)))
+
+
+def _verdict(logbook, log, epoch=EPOCH, now=NOW_AWARE):
+    return dc.ha_started_since(
+        epoch,
+        now,
+        fetch_logbook=logbook if callable(logbook) else (lambda s, e: logbook),
+        fetch_log=lambda: log,
+    )
+
+
+OLD_LOG = ["2026-11-05 10:00:07.123456 INFO (MainThread) [x] first"]
+STALE_LOG = ["2026-11-05 03:00:07.123456 INFO (MainThread) [x] first"]
+
+
+def test_logbook_start_decides_even_with_an_empty_log():
+    assert _verdict([_started()], []) is True
+
+
+def test_logbook_start_before_the_epoch_does_not_count():
+    assert _verdict([_started("2026-11-05T09:00:00+11:00"), _other()], []) is False
+
+
+def test_logbook_no_with_other_entries_and_a_quiet_log_is_a_no():
+    assert _verdict([_other()], STALE_LOG) is False
+
+
+def test_logbook_no_with_other_entries_and_an_empty_log_is_a_no():
+    assert _verdict([_other()], []) is False
+
+
+def test_logbook_no_that_disagrees_with_the_log_is_cannot_tell():
+    # Logbook recorded other entries but no start; the log says HA started
+    # after the epoch. One of them is wrong, so no verdict.
+    assert _verdict([_other()], OLD_LOG) is None
+
+
+def test_empty_logbook_falls_back_to_the_log():
+    assert _verdict([], OLD_LOG) is True
+    assert _verdict([], STALE_LOG) is False
+
+
+def test_empty_logbook_and_empty_log_is_cannot_tell():
+    assert _verdict([], []) is None
+
+
+def test_logbook_entries_before_the_epoch_alone_are_not_a_recording():
+    assert _verdict([_other("2026-11-05T09:30:00+11:00")], []) is None
+
+
+def test_logbook_error_falls_back_to_the_log():
+    def boom(start, end):
+        raise OSError("refused")
+
+    assert _verdict(boom, OLD_LOG) is True
+    assert _verdict(boom, []) is None
+
+
+def test_unreadable_log_alone_does_not_hide_a_logbook_start():
+    def boom():
+        raise OSError("reset")
+
+    assert (
+        dc.ha_started_since(
+            EPOCH, NOW_AWARE, fetch_logbook=lambda s, e: [_started()], fetch_log=boom
+        )
+        is True
+    )
+
+
+def test_logbook_is_read_in_6h_windows_newest_first_and_stops_at_a_hit():
+    epoch = datetime(2026, 11, 4, 20, 0, 0)  # 15 h before now: three windows
+    seen = []
+
+    def logbook(start, end):
+        seen.append((start, end))
+        return [_started("2026-11-05T05:00:00+11:00")] if len(seen) == 2 else []
+
+    assert _verdict(logbook, [], epoch=epoch) is True
+    assert len(seen) == 2
+    assert seen[0][1] == NOW_AWARE
+    assert seen[0][0] == NOW_AWARE - timedelta(hours=6)
+    assert seen[1][1] == seen[0][0]
+    assert all(end - start <= timedelta(hours=6) for start, end in seen)
+
+
+def test_logbook_windows_end_at_the_epoch():
+    epoch = datetime(2026, 11, 5, 4, 30, 0)
+    seen = []
+
+    def logbook(start, end):
+        seen.append((start, end))
+        return [_other()]
+
+    assert _verdict(logbook, [], epoch=epoch) is False
+    assert seen[-1][0] == epoch.astimezone()
+    assert len(seen) == 2
+
+
+def test_epoch_older_than_14_days_is_not_read_from_the_logbook():
+    calls = []
+
+    def logbook(start, end):
+        calls.append(1)
+        return [_started()]
+
+    september = ["2026-09-01 00:00:00.1 INFO (MainThread) [x] first"]
+    assert _verdict(logbook, september, epoch=datetime(2026, 10, 1)) is False
+    assert calls == []
+    assert _verdict(logbook, [], epoch=datetime(2026, 10, 1, 0, 0, 0)) is None
+
+
+def test_fetch_live_logbook_requests_the_window(monkeypatch):
+    import io
+
+    captured = {}
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["auth"] = req.get_header("Authorization")
+        return Resp(json.dumps([_started()]).encode())
+
+    monkeypatch.setattr(dc, "_ha_credentials", lambda: ("http://ha.invalid", "tok"))
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    start = datetime(2026, 11, 5, 5, 0, 0, tzinfo=dc.timezone.utc)
+    end = start + timedelta(hours=6)
+    assert dc.fetch_live_logbook(start, end) == [_started()]
+    assert captured["url"].startswith(
+        "http://ha.invalid/api/logbook/2026-11-05T05:00:00+00:00?end_time="
+    )
+    assert "2026-11-05T11%3A00%3A00%2B00%3A00" in captured["url"]
+    assert captured["auth"] == "Bearer tok"
+
+
+def test_wait_restart_passes_on_a_logbook_start_with_an_empty_log():
+    clock, sleep = _fake_clock()
+    started = datetime(2026, 11, 5, 10, 0, 0)
+    reason = dc.wait_restart(
+        started,
+        30,
+        up=lambda: True,
+        fetch_log=lambda: [],
+        fetch_logbook=lambda s, e: [_started()],
+        sleep=sleep,
+        clock=clock,
+    )
+    assert reason is None
+
+
+def test_wait_restart_a_definite_no_is_a_failure_not_cannot_tell():
+    clock, sleep = _fake_clock()
+    reason = dc.wait_restart(
+        datetime(2026, 11, 5, 10, 0, 0),
+        9,
+        up=lambda: True,
+        fetch_log=lambda: STALE_LOG,
+        fetch_logbook=lambda s, e: [_other()],
+        sleep=sleep,
+        clock=clock,
+    )
+    assert reason is not None and "no restart after" in reason
+
+
+def test_wait_restart_inconclusive_throughout_raises_cannot_tell():
+    clock, sleep = _fake_clock()
+    with pytest.raises(dc.StartTimeUnknown, match="cannot tell"):
+        dc.wait_restart(
+            datetime(2026, 11, 5, 10, 0, 0),
+            9,
+            up=lambda: True,
+            fetch_log=lambda: [],
+            fetch_logbook=_no_logbook,
+            sleep=sleep,
+            clock=clock,
+        )
+
+
+def test_wait_restart_never_up_is_a_plain_timeout():
+    clock, sleep = _fake_clock()
+    reason = dc.wait_restart(
+        datetime(2026, 11, 5, 10, 0, 0),
+        9,
+        up=lambda: False,
+        fetch_log=lambda: [],
+        fetch_logbook=_no_logbook,
+        sleep=sleep,
+        clock=clock,
+    )
+    assert reason is not None and "no restart after" in reason
+
+
+def test_main_wait_restart_cannot_tell_exits_2(monkeypatch, capsys):
+    def unknown(started, timeout):
+        raise dc.StartTimeUnknown("cannot tell when HA started")
+
+    monkeypatch.setattr(dc, "wait_restart", unknown)
+    assert dc.main(["--wait-restart", "00:00:00"]) == 2
+    assert "cannot tell" in capsys.readouterr().out
+
+
+def test_ha_credentials_come_from_the_entity_dump_resolver(monkeypatch):
+    monkeypatch.setenv("HA_URL", "http://ha.invalid/")
+    monkeypatch.setenv("HA_TOKEN", "tok")
+    assert dc._ha_credentials() == ("http://ha.invalid", "tok")
+
+
+def test_logbook_entries_without_a_usable_time_are_skipped():
+    entries = [{"message": "started", "domain": "homeassistant"}, {"when": "junk"}]
+    assert _verdict(entries, []) is None
+
+
+def test_logbook_time_without_a_zone_is_host_local():
+    assert _verdict([_started("2026-11-05T10:00:30")], []) is True
+    assert _verdict([_started("2026-11-05T09:00:30")], []) is None
+
+
+def test_main_wait_restart_reports_restarted(monkeypatch, capsys):
+    monkeypatch.setattr(dc, "wait_restart", lambda started, timeout: None)
+    assert dc.main(["--wait-restart", "2026-01-01 00:00:00"]) == 0
+    assert "restarted: HA came back" in capsys.readouterr().out
+
+
+def test_main_wait_restart_reports_not_restarted(monkeypatch, capsys):
+    monkeypatch.setattr(dc, "wait_restart", lambda started, timeout: "no restart")
+    assert dc.main(["--wait-restart", "2026-01-01 00:00:00"]) == 1
+    assert "no restart" in capsys.readouterr().out
+
+
+def test_main_wait_restart_refuses_a_future_time():
+    with pytest.raises(SystemExit) as exc:
+        dc.main(["--wait-restart", "2099-01-01 00:00:00"])
+    assert exc.value.code == 2
+
+
+def test_logbook_json_that_is_not_a_list_is_unusable():
+    assert _verdict({"message": "oops"}, OLD_LOG) is True  # log fallback decides
+    assert _verdict({"message": "oops"}, []) is None
+
+
+def test_wait_restart_old_process_polls_do_not_decide_after_the_restart():
+    # Old process answers first (its log says "not yet"), then HA goes down and
+    # comes back unreadable: nothing after the restart says "no", so no verdict.
+    ups = iter([True, False, True, True, True, True])
+    logs = iter([STALE_LOG, [], [], [], []])
+    books = iter([[_other()], [], [], [], []])
+    clock, sleep = _fake_clock()
+    with pytest.raises(dc.StartTimeUnknown):
+        dc.wait_restart(
+            datetime(2026, 11, 5, 10, 0, 0),
+            15,
+            up=lambda: next(ups),
+            fetch_log=lambda: next(logs),
+            fetch_logbook=lambda s, e: next(books),
+            sleep=sleep,
+            clock=clock,
+        )
+
+
+def test_wait_restart_a_no_after_the_restart_still_fails():
+    ups = iter([True, False] + [True] * 20)
+    clock, sleep = _fake_clock()
+    reason = dc.wait_restart(
+        datetime(2026, 11, 5, 10, 0, 0),
+        15,
+        up=lambda: next(ups),
+        fetch_log=lambda: STALE_LOG,
+        fetch_logbook=lambda s, e: [_other()],
+        sleep=sleep,
+        clock=clock,
+    )
+    assert reason is not None and "API went down" in reason
