@@ -598,3 +598,85 @@ def test_tail_still_runs_when_amber_flags_a_window():
 
 def test_tail_with_the_switch_off_is_untouched():
     assert _tail_status(_slots(), switch=False) != "no_charge_window"
+
+
+# --- round 2 ----------------------------------------------------------------------------
+
+
+def test_sunday_evening_block_stands_when_mondays_window_is_in_the_horizon():
+    """From 16:00 on a Sunday the 24 h horizon reaches Monday's 15:00 flag. Tonight's
+    block is the earlier deadline; the flagged window stays the deadline after it."""
+    slots = _plan_from(datetime(2026, 11, 8, 16, 0), _day_price, n=48)
+    for s in slots[46:]:
+        s.is_demand_window_slot = True
+    slots[46].is_demand_window_entry = True
+    config = _config(True)
+    block = apply_price_block(slots, config)
+    assert block is not None and _start_time(slots, block) == "17:30"
+    assert slots[block[0]].is_demand_window_entry
+    assert not slots[block[0]].is_charge_window_slot
+    assert slots[46].is_charge_window_slot and slots[46].is_demand_window_entry
+    assert 10.0 < config.demand_window_target_soc_pct < 95.0
+
+
+def test_a_window_that_opens_before_the_run_leaves_no_block():
+    slots = _plan_from(datetime(2026, 11, 3, 13, 0), _day_price, n=20)
+    for s in slots[2:4]:
+        s.is_demand_window_slot = True
+    slots[2].is_demand_window_entry = True
+    config = _config(True)
+    assert apply_price_block(slots, config) is None
+    assert config.demand_window_target_soc_pct == 95.0
+
+
+def test_a_run_never_spans_a_charge_window():
+    slots = _plan_from(datetime(2026, 11, 3, 13, 0), _day_price, n=20)
+    for s in slots[11:13]:
+        s.is_demand_window_slot = True
+    # 17:30-18:30 is under two hours once the window cuts it; 20:00-22:00 stands.
+    assert detect_price_block(slots) == (13, 16)
+
+
+def test_a_short_blip_at_slot_zero_does_not_hide_tonights_block():
+    def price(h: float) -> float:
+        if 14.0 <= h < 14.5:
+            return 0.45
+        return 0.40 if 17.5 <= h < 21.5 else 0.12
+
+    slots = _plan_from(datetime(2026, 11, 3, 14, 0), price, n=40)
+    block = detect_price_block(slots)
+    assert block is not None and _start_time(slots, block) == "17:30"
+
+
+def test_a_longer_peak_at_slot_zero_keeps_its_block():
+    """Round 1 behaviour: a plan started inside tonight's peak stays on it, even with
+    tomorrow's larger evening in the horizon."""
+    slots = _plan_from(datetime(2026, 11, 3, 18, 30), _day_price, n=48)
+    assert detect_price_block(slots) == (0, 5)
+
+
+def test_a_weekday_morning_peak_does_not_displace_the_window_after_it():
+    """A flagged 15:00 window six hours after a morning run stays the deadline."""
+
+    def price(h: float) -> float:
+        return 0.40 if 7.0 <= h < 9.0 else 0.12
+
+    slots = _plan_from(datetime(2026, 11, 3, 5, 0), price, n=40)
+    for s in slots[20:26]:
+        s.is_demand_window_slot = True
+    slots[20].is_demand_window_entry = True
+    config = _config(True)
+    assert apply_price_block(slots, config) is None
+    assert config.demand_window_target_soc_pct == 95.0
+    assert not slots[4].is_demand_window_slot
+
+
+def test_a_peak_under_way_does_not_lower_the_target_of_the_window_ahead():
+    slots = _plan_from(datetime(2026, 11, 3, 18, 30), _day_price, n=48)
+    for s in slots[34:]:
+        s.is_demand_window_slot = True
+    slots[34].is_demand_window_entry = True
+    config = _config(True)
+    assert apply_price_block(slots, config) is None
+    assert config.demand_window_target_soc_pct == 95.0
+    assert not slots[0].is_demand_window_slot

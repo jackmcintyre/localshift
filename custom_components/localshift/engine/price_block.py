@@ -22,6 +22,8 @@ from custom_components.localshift.const import (
     PRICE_BLOCK_MAX_GAP_MIN,
     PRICE_BLOCK_MIN_DURATION_MIN,
     PRICE_BLOCK_MIN_SPREAD,
+    PRICE_BLOCK_NEXT_RUN_WITHIN_MIN,
+    PRICE_BLOCK_WINDOW_CLEARANCE_MIN,
 )
 from custom_components.localshift.engine.types import OptimizerConfig, SlotContext
 
@@ -50,11 +52,20 @@ def apply_price_block(
     config.demand_window_target_soc_pct = ceiling
 
     _mirror_charge_window(slots)
-    if _charge_window_in_view(slots):
+    window_start = _first_charge_window(slots)
+    if window_start == 0:
         return None
 
-    block = detect_price_block(slots)
+    block = detect_price_block(slots, before=window_start)
     if block is None:
+        return None
+    if window_start is not None and (
+        block[0] == 0
+        or _minutes(slots[block[1] + 1 : window_start])
+        < PRICE_BLOCK_WINDOW_CLEARANCE_MIN
+    ):
+        # A peak already under way is no deadline, and a flagged window close behind
+        # a peak is the deadline for it: either way the window's target stands.
         return None
     first, last = block
     for slot in slots[first : last + 1]:
@@ -78,20 +89,24 @@ def _mirror_charge_window(slots: list[SlotContext]) -> None:
         previous = in_window
 
 
-def _charge_window_in_view(slots: list[SlotContext]) -> bool:
-    """Any charge-window slot in the horizon, open now or ahead.
+def _first_charge_window(slots: list[SlotContext]) -> int | None:
+    """Index of the first charge-window slot, or None when Amber flags none.
 
-    A window open at slot 0 is not a deadline, but it is not a day without one either:
-    the next-window tail (#1033) prepares for the window that follows it, and a price
-    block set up beside that would give the same evening two targets.
+    A window open at slot 0 (0) is not a deadline, but it is not a day without one
+    either: the next-window tail (#1033) prepares for the window that follows it, and
+    a price block set up beside that would give the same evening two targets. A window
+    further on leaves a block that ends before it in place: that evening comes first
+    and the flagged window stays the deadline after it (Sunday evening into Monday's
+    flag).
     """
-    return any(slot.is_charge_window_slot for slot in slots)
+    return next((i for i, s in enumerate(slots) if s.is_charge_window_slot), None)
 
 
 def detect_price_block(
     slots: list[SlotContext],
     min_spread: float = PRICE_BLOCK_MIN_SPREAD,
     min_duration_min: float = PRICE_BLOCK_MIN_DURATION_MIN,
+    before: int | None = None,
 ) -> tuple[int, int] | None:
     """The expensive run to prepare for, as (first, last) slot indices, or None.
 
@@ -103,25 +118,40 @@ def detect_price_block(
     on a ramp once the cheap slots are behind it. What is cheap enough to fund it is
     the planner's to decide (water level, ``max_precharge_price``). The run already
     under way at slot 0 counts whatever is left of it, so a plan made inside the peak
-    finds tonight's block and not tomorrow's.
-    Of the others the one carrying the most net load wins, because it is the one
-    that needs the preparing; a morning peak does not outrank a larger evening by
-    coming first. Slots in a charge window are never part of a block.
+    finds tonight's block and not tomorrow's; but a later run that starts within
+    ``PRICE_BLOCK_NEXT_RUN_WITHIN_MIN`` of its end and carries more load replaces it
+    (a 30-minute blip at 14:00 does not hide tonight's 17:00 block). Of the others the
+    one carrying the most net load wins, because it is the one that needs the
+    preparing; a morning peak does not outrank a larger evening by coming first.
+    Slots in a charge window are never part of a block, and ``before`` keeps only runs
+    that start ahead of that slot index.
     """
     low = _low_price(slots)
     if low is None:
         return None
-    best: tuple[float, tuple[int, int]] | None = None
+    current: tuple[int, int] | None = None
+    later: list[tuple[int, int]] = []
     for first, last in _dear_runs(slots, low + min_spread):
-        run = slots[first : last + 1]
-        if first == 0:
-            return first, last
-        if _minutes(run) < min_duration_min:
+        if before is not None and first >= before:
             continue
-        load = _net_kwh(run, 1.0)
-        if best is None or load > best[0]:
-            best = (load, (first, last))
-    return best[1] if best else None
+        if first == 0:
+            current = (first, last)
+        elif _minutes(slots[first : last + 1]) >= min_duration_min:
+            later.append((first, last))
+    if current is not None:
+        end = current[1] + 1
+        later = [
+            run
+            for run in later
+            if _minutes(slots[end : run[0]]) <= PRICE_BLOCK_NEXT_RUN_WITHIN_MIN
+        ]
+        if not later or _load(slots, current) >= max(_load(slots, r) for r in later):
+            return current
+    return max(later, key=lambda run: _load(slots, run), default=None)
+
+
+def _load(slots: list[SlotContext], run: tuple[int, int]) -> float:
+    return _net_kwh(slots[run[0] : run[1] + 1], 1.0)
 
 
 def _is_priced(slot: SlotContext) -> bool:
@@ -154,9 +184,14 @@ def _dear_runs(slots: list[SlotContext], dear_from: float) -> list[tuple[int, in
     last = 0
     gap = 0.0
     for idx, slot in enumerate(slots):
+        if slot.is_charge_window_slot:
+            # A window ends the run: its slots must never be marked as the block's.
+            if first is not None:
+                runs.append((first, last))
+                first = None
+            continue
         dear = (
             _is_priced(slot)
-            and not slot.is_charge_window_slot
             and slot.buy_price >= dear_from
             and slot.consumption_kwh > slot.solar_kwh
         )
