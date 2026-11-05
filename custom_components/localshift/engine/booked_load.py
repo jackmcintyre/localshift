@@ -25,6 +25,7 @@ LOAD_MARGIN = 1.2
 MAX_CANDIDATES = 48
 # Grid import below this is solver noise, not extra import.
 _IMPORT_EPS_KWH = 0.01
+_SOC_EPS_PCT = 0.5
 _ACTIVE = ("booked", "started")
 
 BookedLoad = tuple[datetime, datetime, float]
@@ -93,6 +94,21 @@ def _adds_window_import(
     return any(g > c + _IMPORT_EPS_KWH for g, c in zip(got, ceiling, strict=True))
 
 
+def _worse_at_window_entry(result: Any, plain: Any) -> bool:
+    """True if the load leaves the battery shorter at a demand window's entry.
+
+    Covers a window just past the horizon, where no slot is a window slot and
+    the import checks cannot see it. A value the result lacks counts as no change.
+    """
+    short = getattr(result, "terminal_shortfall_pct", None)
+    short0 = getattr(plain, "terminal_shortfall_pct", None)
+    if short is not None and short0 is not None and short > short0 + _SOC_EPS_PCT:
+        return True
+    soc = getattr(result, "next_window_entry_soc_pct", None)
+    soc0 = getattr(plain, "next_window_entry_soc_pct", None)
+    return soc is not None and soc0 is not None and soc < soc0 - _SOC_EPS_PCT
+
+
 def _objective(result: Any, base: OptimizerInputs) -> float:
     """Net cost less the DP's own salvage credit for battery left at the horizon end.
 
@@ -138,7 +154,7 @@ def _why_none(candidates: int, solved: int) -> str:
         return "no start fits inside the planning horizon"
     if not solved:
         return "every candidate plan failed"
-    return "every start adds grid import before or during the demand window"
+    return "every start adds grid import around the demand window or leaves the battery short at its entry"
 
 
 def choose_start(
@@ -155,7 +171,9 @@ def choose_start(
     ``base`` carries the slots before any booking; earlier bookings are laid on
     as fixed load. One plan is solved per candidate, so call this off the event
     loop. When the demand window is in force, a candidate that adds grid import
-    before it, or during it, against the plan without this load, is rejected
+    before it, or during it, against the plan without this load, is rejected,
+    as is one that leaves a larger shortfall, or a lower state of charge, at the
+    entry of a window just past the horizon
     (each checked on its own, so a pre-window saving cannot pay for in-window
     import). A run that would end past the planning horizon is not a candidate:
     its tail would be invisible and so look free. Candidates are ranked on net
@@ -194,7 +212,9 @@ def choose_start(
             continue
         solved += 1
         imported = _window_imports(result, slots)
-        if _adds_window_import(imported, ceiling):
+        if _adds_window_import(imported, ceiling) or _worse_at_window_entry(
+            result, plain
+        ):
             continue
         cost = _objective(result, base)
         if best is None or cost < best[0]:

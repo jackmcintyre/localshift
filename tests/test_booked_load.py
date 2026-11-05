@@ -651,3 +651,72 @@ class TestStalePlan:
             None,
             "latest plan is out of date",
         )
+
+
+class TestWindowJustPastTheHorizon:
+    """No window slot in the plan; the next window's entry is what a load can hurt."""
+
+    def _planner(self, capped=True):
+        def shape(inputs):
+            extra = _extra(inputs)
+            late = sum(extra[-2:]) > 0
+            # Capped pre-charge cannot refill, so a late drain arrives short.
+            entry = 80.0 - (25.0 if late and capped else 0.0)
+            decisions = [SimpleNamespace(grid_import_kwh=0.0, predicted_soc_pct=entry)]
+            cost = sum(
+                e * s.buy_price for e, s in zip(extra, inputs.slots, strict=True)
+            )
+            return SimpleNamespace(
+                success=True,
+                decisions=decisions,
+                projected_net_cost=cost,
+                terminal_shortfall_pct=10.0 if late and capped else 0.0,
+                next_window_entry_soc_pct=entry,
+            )
+
+        return ShapedPlanner(shape)
+
+    def _base(self):
+        # Late slots are the cheapest, so draining there ranks best on cost.
+        config = OptimizerConfig(soc_bins=20, terminal_salvage_enabled=False)
+        return dataclasses.replace(
+            inputs_from(slots_from([0.30] * 6 + [0.10] * 2)), config=config
+        )
+
+    def test_a_late_drain_that_leaves_the_next_window_short_is_rejected(self):
+        start, _ = choose_start(
+            self._planner(), self._base(), [], NOW, NOW + 4 * HOUR, HOUR, 1.0
+        )
+        assert start + HOUR <= NOW + 3 * HOUR
+
+    def test_when_every_start_leaves_it_short_none_is_chosen(self):
+        start, why = choose_start(
+            self._planner(),
+            self._base(),
+            [],
+            NOW + 2 * HOUR + timedelta(minutes=30),
+            NOW + 4 * HOUR,
+            HOUR,
+            1.0,
+        )
+        assert start is None
+        assert "short at its entry" in why
+
+    def test_without_the_cap_the_cheap_late_start_wins(self):
+        start, _ = choose_start(
+            self._planner(capped=False),
+            self._base(),
+            [],
+            NOW,
+            NOW + 4 * HOUR,
+            HOUR,
+            1.0,
+        )
+        assert start + HOUR > NOW + 3 * HOUR
+
+    def test_a_result_without_the_fields_counts_as_no_change(self):
+        from custom_components.localshift.engine.booked_load import (
+            _worse_at_window_entry,
+        )
+
+        assert not _worse_at_window_entry(SimpleNamespace(), SimpleNamespace())
