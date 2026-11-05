@@ -609,6 +609,20 @@ def preflight(ents: dict[str, dict], now: datetime) -> list[Check]:
 
     slack = _as_float(summary.get("precharge_runway_slack_min"))
     backstop = bool(summary.get("precharge_backstop_active"))
+    soc = _as_float(summary.get("initial_soc_pct"))
+    target = _as_float(summary.get("dw_entry_actual_target_pct"))
+    if target is None:
+        target = _as_float(opts.get("battery_target"))
+    # At or above target the slack is pure time to the window, which protects
+    # nothing: the demand-window check already covers it. Unknown SOC or
+    # target keeps the check.
+    no_precharge = soc is not None and target is not None and soc >= target
+    runway_ok = no_precharge or slack is None or slack > RESTART_CLEAR_MIN
+    runway_detail = (
+        f"skipped: SOC {soc} at or above target {target}"
+        if no_precharge
+        else f"{slack} min"
+    )
     return [
         Check("outside the demand window", not in_dw, f"{clock}, window {start}-{end}"),
         Check(
@@ -619,8 +633,8 @@ def preflight(ents: dict[str, dict], now: datetime) -> list[Check]:
         Check("backstop not active", not backstop, f"active={backstop}"),
         Check(
             f"runway slack over {RESTART_CLEAR_MIN} min",
-            slack is None or slack > RESTART_CLEAR_MIN,
-            f"{slack} min",
+            runway_ok,
+            runway_detail,
         ),
     ]
 
@@ -956,6 +970,15 @@ def _run_wait_restart(ap: argparse.ArgumentParser, value: str, timeout: float) -
 
 
 def main(argv=None) -> int:
+    """Exit 0 pass, 1 a check failed, 2 an error: no verdict was reached."""
+    try:
+        return _main(argv)
+    except Exception as exc:  # noqa: BLE001 - any crash must read as exit 2
+        print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+
+
+def _main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

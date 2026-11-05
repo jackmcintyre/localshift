@@ -777,6 +777,32 @@ def test_preflight_refuses_backstop_and_thin_runway():
     ]
 
 
+def test_preflight_skips_runway_when_no_precharge_needed():
+    # SOC at target: slack is pure time to the window (30.0 at 14:25 in the field).
+    now = datetime(2026, 10, 14, 14, 25, tzinfo=SYDNEY)
+    ents = _plan_ents(now, ["hold"] * 8, slack=30.0)
+    ents[dc.SUMMARY]["attributes"].update(initial_soc_pct=100.0)
+    assert _failed(dc.preflight(ents, now)) == []
+    runway = dc.preflight(ents, now)[-1]
+    assert runway.ok and "skipped" in runway.detail
+
+
+def test_preflight_still_checks_runway_when_precharge_needed():
+    now = datetime(2026, 10, 14, 13, 0, tzinfo=SYDNEY)
+    ents = _plan_ents(now, ["hold"] * 8, slack=7.0)
+    ents[dc.SUMMARY]["attributes"].update(initial_soc_pct=60.0)
+    assert _failed(dc.preflight(ents, now)) == ["runway slack over 30 min"]
+
+
+def test_preflight_cli_exits_2_on_an_internal_error(monkeypatch, capsys):
+    def boom():
+        raise RuntimeError("HA unreachable")
+
+    monkeypatch.setattr(dc, "fetch_live_states", boom)
+    assert dc.main(["--preflight"]) == 2
+    assert "RuntimeError: HA unreachable" in capsys.readouterr().err
+
+
 def test_preflight_uses_the_configured_window():
     opts = {"demand_window_start": "14:55:00", "demand_window_end": "21:00:00"}
     at = datetime(2026, 10, 14, 14, 56, tzinfo=SYDNEY)
