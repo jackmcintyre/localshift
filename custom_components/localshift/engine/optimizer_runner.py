@@ -52,6 +52,7 @@ def _build_optimizer_config(
         CONF_BATTERY_TARGET,
         CONF_CHARGE_TAPER_MIN_FACTOR,
         CONF_CHARGE_TAPER_START_PCT,
+        CONF_DEMAND_WINDOW_FROM_AMBER,
         CONF_EXPORT_PRICE_MARGIN,
         CONF_MAX_PRECHARGE_PRICE,
         CONF_MIN_CYCLE_SAVING,
@@ -220,6 +221,9 @@ def _build_optimizer_config(
         # Issue #779: Previously auto-computed from tariff, now user-configurable
         target_shortfall_penalty_per_pct=target_penalty,
         min_cycle_saving=min_cycle_saving,
+        demand_window_from_amber=bool(
+            config_options.get(CONF_DEMAND_WINDOW_FROM_AMBER, False)
+        ),
         # Issue #1103: a constant, not the slider above. See const.py.
         negative_fit_min_spill_cost=NEGATIVE_FIT_MIN_SPILL_COST,
         min_hold_saving=min_hold_saving,

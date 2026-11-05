@@ -762,3 +762,14 @@ TESLA_OVERRIDE_REPROBE_INTERVAL_MINUTES = 30
 # After Tesla releases control (signature clears on its own), wait this long
 # before resuming health-check corrections so a genuinely-ending event settles.
 TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES = 30
+
+# Price-block target (#1104, docs/PRICE_BLOCK_TARGET.md). With the demand window taken
+# from Amber (switch on) and no flagged slot ahead, the expensive evening is found from
+# the price and load forecast instead. A slot is "dear" when it costs at least this much
+# more than the cheapest slot before it. Deliberately not min_cycle_saving: that hurdle
+# governs speculative arbitrage; this answers "is the evening dear enough to prepare for".
+PRICE_BLOCK_MIN_SPREAD: Final[float] = 0.08
+# Shortest run of dear slots (minutes) that counts as a block worth a deadline.
+PRICE_BLOCK_MIN_DURATION_MIN: Final[int] = 120
+# SOC points held above the block's forecast net load: the load forecast runs low.
+PRICE_BLOCK_HEADROOM_PCT: Final[float] = 5.0

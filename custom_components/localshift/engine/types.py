@@ -134,7 +134,9 @@ class SlotContext:
     """True if this slot is the demand-window entry boundary."""
 
     is_demand_window_slot: bool = False
-    """True if this slot falls within the demand window."""
+    """True if this slot falls within the demand window, or within the price block
+    standing in for it as the deadline (#1104). Drives the deadline, target and
+    useful period, not the import ban."""
 
     price_source: str = "unknown"
     """Source of price data (e.g. 'forecast_current', '5min', '30min', 'synthetic')."""
@@ -143,6 +145,13 @@ class SlotContext:
     """False when selecting export in this slot would not physically export
     (Issue #1097: Tesla's stored tariff is below its top rate, or the
     export-inversion hold-off is active)."""
+
+    is_charge_window_slot: bool | None = None
+    """True if this slot falls within the demand-charge window: the only thing that
+    bans grid import and puts the executor in Demand Block mode (#1104). None
+    (the default) takes the value of ``is_demand_window_slot``, so a slot built
+    without the split behaves exactly as before. Differs from it only when the
+    price block, not Amber's flag, is what makes the slot a deadline."""
 
     export_floor_pct: float = 0.0
     """Solver-derived (set by ``DPPlanner.plan``): the SOC the EXPORT action may
@@ -156,6 +165,10 @@ class SlotContext:
     genuine spike, so EXPORT is feasible in self_consumption mode even though
     it is below the same interval's buy price. Only ever True on slot 0. See
     ``engine/spike_export.py`` (issue #1120)."""
+
+    def __post_init__(self) -> None:
+        if self.is_charge_window_slot is None:
+            self.is_charge_window_slot = self.is_demand_window_slot
 
 
 # -----------------------------------------------------------------------------
@@ -391,6 +404,16 @@ class OptimizerConfig:
     """Solver-derived (set by ``DPPlanner.plan``): slot 0's spike-export verdict
     and the rebuy price it was judged against, for the summary sensor and the
     state machine's debounce (issue #1120)."""
+
+    demand_window_from_amber: bool = False
+    """``switch.localshift_demand_window_from_amber`` (#1104 / #1201). On: Amber's flag
+    alone bans import, and the deadline and target come from the flagged window when
+    one is ahead, else from the price block (``engine/price_block.py``)."""
+
+    price_block_target_ceiling_pct: float | None = None
+    """The configured target, kept while ``demand_window_target_soc_pct`` is lowered to
+    a load-sized price-block target, so a re-plan on the same config sizes from the
+    ceiling and not from its own last answer. None until the price block first sizes."""
 
     spike_funding_slots: frozenset[int] | None = None
     """Solver-derived (set by ``DPPlanner.plan``): slots whose grid charge is admitted to

@@ -44,6 +44,7 @@ from custom_components.localshift.engine.penalties import (
     get_futile_cycling_penalty_factor,
     get_solar_opportunity_penalty_factor,
 )
+from custom_components.localshift.engine.price_block import apply_price_block
 from custom_components.localshift.engine.reason_codes import classify_reason
 from custom_components.localshift.engine.solar import (
     can_solar_reach_target,
@@ -583,6 +584,12 @@ class DPPlanner:
         start = time.monotonic()
 
         try:
+            # Before anything reads the deadline flags or the target (#1104).
+            apply_price_block(
+                inputs.slots,
+                inputs.config,
+                get_forecast_accuracy(inputs.solar_accuracy_tracker),
+            )
             apply_export_floor(inputs.slots, inputs.config)
             apply_spike_export_admission(inputs.slots, inputs.config)
             result = self._solve_guarded(inputs)
