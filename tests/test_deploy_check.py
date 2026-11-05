@@ -490,8 +490,24 @@ def test_planner_gone_quiet_fails():
     assert _failed(checks) == ["planner running"]
 
 
-def test_unreadable_log_fails():
-    assert _failed(_run(log=["no timestamps here"])) == ["log readable"]
+def test_unreadable_log_is_no_verdict_not_a_failure():
+    with pytest.raises(dc.StartTimeUnknown, match="no timestamped lines"):
+        _run(log=["no timestamps here"])
+
+
+def test_main_unreadable_log_exits_2(tmp_path, capsys):
+    dump = tmp_path / "d.json"
+    dump.write_text(
+        json.dumps({
+            "meta": {},
+            "groups": {"g": [{"entity_id": e, **v} for e, v in _dump().items()]},
+        })
+    )
+    log = tmp_path / "ha.log"
+    log.write_text("")
+    code = dc.main(["--before", str(dump), "--after", str(dump), "--log", str(log)])
+    assert code == 2
+    assert "cannot tell" in capsys.readouterr().out
 
 
 def _component(tmp_path, src_mtime, pyc_mtime):
@@ -985,8 +1001,12 @@ def test_log_time_ignores_non_timestamp_lines(line):
 
 
 def _started(when="2026-11-05T10:00:30+11:00"):
-    return {"when": when, "name": "Home Assistant", "message": "started",
-            "domain": "homeassistant"}
+    return {
+        "when": when,
+        "name": "Home Assistant",
+        "message": "started",
+        "domain": "homeassistant",
+    }
 
 
 def _other(when="2026-11-05T10:05:00+11:00"):
@@ -1123,9 +1143,7 @@ def test_fetch_live_logbook_requests_the_window(monkeypatch):
         captured["auth"] = req.get_header("Authorization")
         return Resp(json.dumps([_started()]).encode())
 
-    monkeypatch.setattr(
-        dc, "_ha_credentials", lambda: ("http://ha.invalid", "tok")
-    )
+    monkeypatch.setattr(dc, "_ha_credentials", lambda: ("http://ha.invalid", "tok"))
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     start = datetime(2026, 11, 5, 5, 0, 0, tzinfo=dc.timezone.utc)
     end = start + timedelta(hours=6)
@@ -1235,3 +1253,42 @@ def test_main_wait_restart_refuses_a_future_time():
     with pytest.raises(SystemExit) as exc:
         dc.main(["--wait-restart", "2099-01-01 00:00:00"])
     assert exc.value.code == 2
+
+
+def test_logbook_json_that_is_not_a_list_is_unusable():
+    assert _verdict({"message": "oops"}, OLD_LOG) is True  # log fallback decides
+    assert _verdict({"message": "oops"}, []) is None
+
+
+def test_wait_restart_old_process_polls_do_not_decide_after_the_restart():
+    # Old process answers first (its log says "not yet"), then HA goes down and
+    # comes back unreadable: nothing after the restart says "no", so no verdict.
+    ups = iter([True, False, True, True, True, True])
+    logs = iter([STALE_LOG, [], [], [], []])
+    books = iter([[_other()], [], [], [], []])
+    clock, sleep = _fake_clock()
+    with pytest.raises(dc.StartTimeUnknown):
+        dc.wait_restart(
+            datetime(2026, 11, 5, 10, 0, 0),
+            15,
+            up=lambda: next(ups),
+            fetch_log=lambda: next(logs),
+            fetch_logbook=lambda s, e: next(books),
+            sleep=sleep,
+            clock=clock,
+        )
+
+
+def test_wait_restart_a_no_after_the_restart_still_fails():
+    ups = iter([True, False] + [True] * 20)
+    clock, sleep = _fake_clock()
+    reason = dc.wait_restart(
+        datetime(2026, 11, 5, 10, 0, 0),
+        15,
+        up=lambda: next(ups),
+        fetch_log=lambda: STALE_LOG,
+        fetch_logbook=lambda s, e: [_other()],
+        sleep=sleep,
+        clock=clock,
+    )
+    assert reason is not None and "API went down" in reason

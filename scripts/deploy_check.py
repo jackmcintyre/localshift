@@ -72,8 +72,8 @@ Usage
                                the after dump only once this exits 0
 
 Exit codes: 0 all invariants hold, 1 an invariant failed, 2 usage error,
-3 not settled yet (only without --wait-settled). --wait-restart also exits 2
-when HA's start time cannot be read at all (a missing verdict, never a FAIL).
+3 not settled yet (only without --wait-settled). Exit 2 also means no verdict: the
+log has no timestamped lines, or --wait-restart cannot read HA's start time.
 """
 
 from __future__ import annotations
@@ -433,7 +433,12 @@ def _window_passed_between(before, after) -> bool:
 
 
 def _log_time(line: str) -> datetime | None:
-    """A line's time as naive host-local time (a zone is converted exactly)."""
+    """A line's time as naive host-local time (a zone is converted exactly).
+
+    Naive local time loses the repeated hour when clocks go back (DST fall-back
+    fold); a restart inside that hour is read as the earlier of the two, which
+    only ever errs towards "not yet restarted".
+    """
     m = LOG_TS.match(line)
     if not m:
         return None
@@ -513,7 +518,9 @@ def check_log(lines: list[str], now: datetime) -> tuple[list[Check], datetime | 
     """Check the log written since the restart. ``now`` is local wall time."""
     records = list(_records(lines))
     if not records:
-        return [Check("log readable", False, "no timestamped lines")], None
+        # No verdict, not a FAIL: an empty log is what a restart or a changed
+        # line format looks like, and neither says the change is bad.
+        raise StartTimeUnknown("cannot tell: the log has no timestamped lines")
     restart = records[0][0]
 
     errors, plan_times, warnings = [], [], _WarningTally(restart)
@@ -769,6 +776,8 @@ def _logbook_started_since(epoch: datetime, now: datetime, fetch_logbook):
             entries = fetch_logbook(start, end)
         except (OSError, ValueError, http.client.HTTPException):
             return None
+        if not isinstance(entries, list):
+            return None
         for entry in entries:
             try:
                 when = datetime.fromisoformat(entry["when"])
@@ -856,6 +865,9 @@ def wait_restart(
     seen_down = definite_no = inconclusive = False
     while clock() < deadline:
         if not up():
+            if not seen_down:
+                # Polls before the API went down read the old process.
+                definite_no = inconclusive = False
             seen_down = True
         else:
             restarted = ha_started_since(
@@ -895,6 +907,34 @@ def wait_settled(
         except (OSError, ValueError) as exc:  # HA still coming up
             print(f"waiting: fetch failed: {exc}", file=sys.stderr)
     return after
+
+
+def _judge(before, after, args, expected_config) -> int:
+    """Run every check and print the table: 0 pass, 1 a check failed, 2 no verdict."""
+    log_lines = (
+        args.log.read_text(errors="replace").splitlines()
+        if args.log
+        else fetch_live_log()
+    )
+    try:
+        checks = run_checks(
+            before,
+            after,
+            log_lines,
+            datetime.now(),
+            component_dir=args.component_dir,
+            allow_removed_attrs=frozenset(args.allow_removed_attr),
+            allow_removed_entities=frozenset(args.allow_removed_entity),
+            allow_dw_entry_move=args.allow_dw_entry_move,
+            expect_recompile=args.expect_recompile,
+            expected_config=expected_config,
+            allow_config_changes=frozenset(args.allow_config_change),
+        )
+    except StartTimeUnknown as exc:
+        print(str(exc))
+        return 2
+    print(render(checks))
+    return 0 if all(c.ok for c in checks) else 1
 
 
 def _run_wait_restart(ap: argparse.ArgumentParser, value: str, timeout: float) -> int:
@@ -962,23 +1002,7 @@ def main(argv=None) -> int:
         print(f"NOT SETTLED: re-run later\n  {reason}")
         return NOT_SETTLED_EXIT
 
-    checks = run_checks(
-        before,
-        after,
-        args.log.read_text(errors="replace").splitlines()
-        if args.log
-        else fetch_live_log(),
-        datetime.now(),
-        component_dir=args.component_dir,
-        allow_removed_attrs=frozenset(args.allow_removed_attr),
-        allow_removed_entities=frozenset(args.allow_removed_entity),
-        allow_dw_entry_move=args.allow_dw_entry_move,
-        expect_recompile=args.expect_recompile,
-        expected_config=expected_config,
-        allow_config_changes=frozenset(args.allow_config_change),
-    )
-    print(render(checks))
-    return 0 if all(c.ok for c in checks) else 1
+    return _judge(before, after, args, expected_config)
 
 
 if __name__ == "__main__":
