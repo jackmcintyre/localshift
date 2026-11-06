@@ -1,7 +1,9 @@
 # Price-driven target blocks
 
-**Status:** design, 2026-09-08. Not built. Evidence in
-`simulations/replay-nodw/README.md`; harness `scripts/replay_no_dw.py`.
+**Status:** design, 2026-09-08. Built 2026-11-06 (#1104) behind
+`switch.localshift_demand_window_from_amber` (ships off); see "As built" at the
+end. Evidence in `simulations/replay-nodw/README.md`; harness
+`scripts/replay_no_dw.py`.
 
 ## The problem
 
@@ -158,3 +160,65 @@ block. This is the "where we sourced it and the UI" work deferred from the
   the event side. With a price block wearing the same flags, a spike inside
   the block is funded by the block target instead. That is the intended
   precedence, and it should be stated in the spike-funding tests.
+
+## As built (#1104)
+
+One switch, not two. `switch.localshift_demand_window_from_amber` (#1201) now
+means both halves of the split, and with it off nothing changes (the plan
+baseline replay is identical on every capture and arm).
+
+- **Import ban** reads `SlotContext.is_charge_window_slot`: Amber's per-slot
+  flag, or the clock window where the feed has none. It gates `feasible_actions`
+  (no grid charge, no `HOLD_STRICT`) and the negative-FIT demand-window export
+  guard. A slot built without the split takes the value of
+  `is_demand_window_slot`, so every pre-existing caller bans as before.
+- **Deadline and target** read `is_demand_window_slot`, which
+  `engine/price_block.py` rebuilds at the top of `DPPlanner.plan`: the flagged
+  window when one opens ahead (target `battery_target`, as today), otherwise the
+  first run of dear slots (`detect_price_block`) with a load-sized target
+  (`block_target_soc_pct`). Any flagged slot in the horizon, including a
+  window already open at slot 0, switches the block off: that window is no
+  deadline, as before, and the next-window tail (#1033) prepares for the one
+  after it. The in-season replay is identical to the switch-off clock window.
+- Detection as built differs from the "Block detection" sketch above, after
+  review: a slot is dear against the horizon's duration-weighted 20th-percentile
+  price (floored at 0, defaulted prices left out), not the running minimum, which
+  moved as `now` advanced and let one defaulted or negative price make an ordinary
+  evening a block. Single-slot gaps became at most 30 minutes. The run under way
+  at slot 0 is the block whatever is left of it. Of the others the one with the
+  most net load wins, so a small morning peak does not outrank a bigger evening.
+  The target floors at `discharge_floor_pct`, which honours the away reserve.
+- Flagged windows and the block (round 2): a window open at slot 0 leaves no
+  block. A window further on leaves a block that ends before it standing, unless
+  the window starts within 12 hours of that run's end: Sunday evening's block holds
+  against Monday's 15:00 flag, a weekday morning peak does not displace the 15:00
+  window. A run under way at slot 0 keeps its flags with a window ahead, but the
+  window's target stands (a peak under way is no deadline); it is left alone only
+  when that window is within 12 hours of the run's end or the clock window ended
+  under two hours ago (`OptimizerInputs.minutes_since_window_end`, measured by
+  `SlotBuilder`), which is what keeps weekday 21:30 and midday plans identical.
+  A run under way at slot 0 is displaced by a larger one that starts within 6
+  hours of its end (a 30-minute blip at 14:00 does not hide tonight; tomorrow
+  morning does not displace tonight's peak).
+  The in-season replay stays identical to the switch-off clock window.
+- With the switch on and no flagged slot in view the next-window tail (#1033) is
+  off (`next_window_tail_status = no_charge_window`): its gap is measured to the
+  clock window, which does not exist that day.
+- Knobs are constants for now: `PRICE_BLOCK_MIN_SPREAD` ($0.08/kWh),
+  `PRICE_BLOCK_MIN_DURATION_MIN` (120), `PRICE_BLOCK_HEADROOM_PCT` (5).
+  `block_min_spread` stays separate from `min_cycle_saving`.
+- The block flags slots; nothing below them was edited. That is what closes the
+  four gates the 15 Oct study (`study/1104-offseason-gates`) found shut when no
+  flagged slot is in view. A deadline puts `terminal_penalty_idx` in play, which
+  (1) lets the water level raise the cheap-price gate for pre-block slots,
+  (2) brings in the min-cycle-saving exemption for pre-block slots at or below
+  the water level, so the $0.25 hurdle stays as it is, (3) makes the block a
+  useful period that stops the futile-cycling drain, and (4) stops the global
+  solar-sufficiency gate simulating to the end of the horizon, where tomorrow's
+  midday solar had been covering tonight's deficit. `tests/engine/test_price_block.py`
+  pins each one.
+- The operator's `max_precharge_price` still bounds the water level, as it does
+  in season: an evening whose cheapest earlier slot is above it is not funded.
+- Flap test: `test_block_is_the_same_whenever_the_day_is_planned` (09:00, 11:00,
+  13:00, 14:30, 16:00). Not built: the two-evening dry run, which gates turning the
+  switch on, and slice 3 (telemetry, UI).

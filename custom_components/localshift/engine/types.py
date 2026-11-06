@@ -134,7 +134,9 @@ class SlotContext:
     """True if this slot is the demand-window entry boundary."""
 
     is_demand_window_slot: bool = False
-    """True if this slot falls within the demand window."""
+    """True if this slot falls within the demand window, or within the price block
+    standing in for it as the deadline (#1104). Drives the deadline, target and
+    useful period, not the import ban."""
 
     price_source: str = "unknown"
     """Source of price data (e.g. 'forecast_current', '5min', '30min', 'synthetic')."""
@@ -143,6 +145,14 @@ class SlotContext:
     """False when selecting export in this slot would not physically export
     (Issue #1097: Tesla's stored tariff is below its top rate, or the
     export-inversion hold-off is active)."""
+
+    charge_window_override: bool | None = None
+    """Set only where the ban differs from ``is_demand_window_slot``: a price-block
+    slot is a deadline but not a charge window (#1104). None everywhere else."""
+
+    price_defaulted: bool = False
+    """True when the slot had no buy price and ``buy_price`` is the 0.0 stand-in
+    (issue #987). Not a price: the price block ignores it."""
 
     export_floor_pct: float = 0.0
     """Solver-derived (set by ``DPPlanner.plan``): the SOC the EXPORT action may
@@ -156,6 +166,20 @@ class SlotContext:
     genuine spike, so EXPORT is feasible in self_consumption mode even though
     it is below the same interval's buy price. Only ever True on slot 0. See
     ``engine/spike_export.py`` (issue #1120)."""
+
+    @property
+    def is_charge_window_slot(self) -> bool:
+        """True if this slot falls within the demand-charge window: the only thing
+        that bans grid import and puts the executor in Demand Block mode (#1104).
+        Read from ``is_demand_window_slot`` unless the price block overrode it, so
+        a slot whose deadline flag is set later, or through ``replace``, bans too."""
+        if self.charge_window_override is not None:
+            return self.charge_window_override
+        return self.is_demand_window_slot
+
+    @is_charge_window_slot.setter
+    def is_charge_window_slot(self, value: bool) -> None:
+        self.charge_window_override = value
 
 
 # -----------------------------------------------------------------------------
@@ -391,6 +415,16 @@ class OptimizerConfig:
     """Solver-derived (set by ``DPPlanner.plan``): slot 0's spike-export verdict
     and the rebuy price it was judged against, for the summary sensor and the
     state machine's debounce (issue #1120)."""
+
+    demand_window_from_amber: bool = False
+    """``switch.localshift_demand_window_from_amber`` (#1104 / #1201). On: Amber's flag
+    alone bans import, and the deadline and target come from the flagged window when
+    one is ahead, else from the price block (``engine/price_block.py``)."""
+
+    price_block_target_ceiling_pct: float | None = None
+    """The configured target, kept while ``demand_window_target_soc_pct`` is lowered to
+    a load-sized price-block target, so a re-plan on the same config sizes from the
+    ceiling and not from its own last answer. None until the price block first sizes."""
 
     spike_funding_slots: frozenset[int] | None = None
     """Solver-derived (set by ``DPPlanner.plan``): slots whose grid charge is admitted to
@@ -850,6 +884,7 @@ TAIL_APPLIED = "applied"
 TAIL_DISABLED = "disabled"  # OptimizerConfig.next_window_tail_enabled is False
 TAIL_UNDER_TARGET_MODE = "under_target_mode"  # allow_dw_entry_under_target
 TAIL_MAIN_UNSUCCESSFUL = "main_unsuccessful"  # the main solve produced no plan
+TAIL_NO_CHARGE_WINDOW = "no_charge_window"  # switch on, no flagged window in view
 TAIL_NO_GAP = "no_gap"  # no gap supplied: feed ends inside a window, or unknown
 TAIL_NO_TAIL_SLOTS = "no_tail_slots"  # nothing after the handled window
 TAIL_WHOLE_PLAN_SKIPPED = "whole_plan_skipped"  # tail would include slot 0
@@ -1111,6 +1146,11 @@ class OptimizerInputs:
     battery would see now, because that figure falls as the window's own
     pre-discharge makes room; it is held until the forecast stops being
     material. See ``negative_fit.assess_negative_fit_avoidance``."""
+
+    minutes_since_window_end: float | None = None
+    """Minutes since the clock demand window last ended, when under six hours;
+    measured by ``SlotBuilder`` (the planner cannot see before slot 0). The price
+    block reads a recent end as "slot 0 is the tail of a window" (#1104)."""
 
     next_demand_window_gap_min: float | None = None
     """Minutes from the end of the last slot to the next demand-window start

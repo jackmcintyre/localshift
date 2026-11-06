@@ -77,7 +77,7 @@ def _determine_export_actions(
 
     if use_avoidance and negative_fit_avoidance_context is not None:
         if slot.sell_price > 0:
-            if slot.is_demand_window_slot:
+            if slot.is_charge_window_slot:
                 from custom_components.localshift.const import (
                     NEGATIVE_FIT_DW_EXPORT_MIN_BENEFIT_PER_KWH,
                 )
@@ -199,7 +199,7 @@ def feasible_actions(
     # the operator has configured a positive min_hold_saving threshold. With the
     # default of 0.0 the action is omitted from the feasible set so behaviour is
     # identical to the pre-#906 planner.
-    if not slot.is_demand_window_slot and config.min_hold_saving > 0.0:
+    if not slot.is_charge_window_slot and config.min_hold_saving > 0.0:
         actions.append(PlannerAction.HOLD_STRICT)
 
     _solar_covers_deficit = False
@@ -211,7 +211,7 @@ def feasible_actions(
 
     if (
         can_charge
-        and not slot.is_demand_window_slot
+        and not slot.is_charge_window_slot
         and not (_solar_covers_deficit or _global_solar_covers)
     ):
         if config.optimization_mode == "self_consumption":
