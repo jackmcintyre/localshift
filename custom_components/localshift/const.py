@@ -762,3 +762,32 @@ TESLA_OVERRIDE_REPROBE_INTERVAL_MINUTES = 30
 # After Tesla releases control (signature clears on its own), wait this long
 # before resuming health-check corrections so a genuinely-ending event settles.
 TESLA_OVERRIDE_RELEASE_COOLDOWN_MINUTES = 30
+
+# Price-block target (#1104, docs/PRICE_BLOCK_TARGET.md). With the demand window taken
+# from Amber (switch on) and no flagged slot ahead, the expensive evening is found from
+# the price and load forecast instead. A slot is "dear" when it costs at least this much
+# more than the cheapest slot before it. Deliberately not min_cycle_saving: that hurdle
+# governs speculative arbitrage; this answers "is the evening dear enough to prepare for".
+PRICE_BLOCK_MIN_SPREAD: Final[float] = 0.08
+# Shortest run of dear slots (minutes) that counts as a block worth a deadline.
+PRICE_BLOCK_MIN_DURATION_MIN: Final[int] = 120
+# A dear slot is measured against this share of the horizon's cheapest priced time (a
+# duration-weighted percentile of buy prices, floored at 0), not against one slot: a
+# single defaulted or negative price must not make an ordinary evening a "block".
+PRICE_BLOCK_LOW_PERCENTILE: Final[float] = 0.2
+# Longest stretch (minutes) of not-dear slots a block rides through.
+PRICE_BLOCK_MAX_GAP_MIN: Final[int] = 30
+# A later run replaces the one a plan starts inside only if it begins within this many
+# minutes of that run's end: tonight's block beats a 30-minute blip at 14:00 (3 h before
+# it), but tomorrow's morning (9 h or more after the evening peak ends) does not displace
+# the peak the battery is in.
+PRICE_BLOCK_NEXT_RUN_WITHIN_MIN: Final[int] = 360
+# A clock window that ended less than this long ago makes a run under way at slot 0 the
+# tail of that window, which the price block leaves to the window ahead.
+PRICE_BLOCK_WINDOW_TAIL_MIN: Final[int] = 120
+# A flagged window starting sooner than this after a dear run is the deadline for it: a
+# weekday's morning peak does not displace the 15:00 window. A window further off (Sunday
+# evening, Monday's flag at 15:00) leaves the earlier block standing.
+PRICE_BLOCK_WINDOW_CLEARANCE_MIN: Final[int] = 720
+# SOC points held above the block's forecast net load: the load forecast runs low.
+PRICE_BLOCK_HEADROOM_PCT: Final[float] = 5.0

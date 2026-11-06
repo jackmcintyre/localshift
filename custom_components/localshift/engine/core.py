@@ -44,6 +44,7 @@ from custom_components.localshift.engine.penalties import (
     get_futile_cycling_penalty_factor,
     get_solar_opportunity_penalty_factor,
 )
+from custom_components.localshift.engine.price_block import apply_price_block
 from custom_components.localshift.engine.reason_codes import classify_reason
 from custom_components.localshift.engine.solar import (
     can_solar_reach_target,
@@ -64,6 +65,7 @@ from custom_components.localshift.engine.types import (
     TAIL_FAILED,
     TAIL_GAP_TOO_LONG,
     TAIL_MAIN_UNSUCCESSFUL,
+    TAIL_NO_CHARGE_WINDOW,
     TAIL_NO_GAP,
     TAIL_NO_TAIL_SLOTS,
     TAIL_SOLVE_UNSUCCESSFUL,
@@ -546,6 +548,13 @@ def _log_tail_failure(slots: list[SlotContext], exc: Exception) -> None:
     )
 
 
+def _no_flagged_window(config: OptimizerConfig, slots: list[SlotContext]) -> bool:
+    """Switch on and Amber flags no window anywhere in the horizon (#1104)."""
+    return config.demand_window_from_amber and not any(
+        slot.is_charge_window_slot for slot in slots
+    )
+
+
 class DPPlanner:
     """Deterministic dynamic-programming battery optimizer.
 
@@ -583,6 +592,13 @@ class DPPlanner:
         start = time.monotonic()
 
         try:
+            # Before anything reads the deadline flags or the target (#1104).
+            apply_price_block(
+                inputs.slots,
+                inputs.config,
+                get_forecast_accuracy(inputs.solar_accuracy_tracker),
+                inputs.minutes_since_window_end,
+            )
             apply_export_floor(inputs.slots, inputs.config)
             apply_spike_export_admission(inputs.slots, inputs.config)
             result = self._solve_guarded(inputs)
@@ -778,7 +794,13 @@ class DPPlanner:
         """
         gap_min = inputs.next_demand_window_gap_min
         try:
-            status, result = self._solve_next_window_tail(inputs, main)
+            if _no_flagged_window(inputs.config, inputs.slots):
+                # Off-season, a weekend or a holiday: Amber flags no window, so the
+                # clock gap measures the distance to one that will not open (#1104).
+                # The price block, if any, is the only deadline.
+                status, result = TAIL_NO_CHARGE_WINDOW, main
+            else:
+                status, result = self._solve_next_window_tail(inputs, main)
         except Exception as exc:  # noqa: BLE001
             _log_tail_failure(inputs.slots, exc)
             status, result = TAIL_FAILED, main
