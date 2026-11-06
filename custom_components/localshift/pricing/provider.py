@@ -18,6 +18,17 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
+def missing_price_log_level(startup_grace_active: Callable[[], bool] | None) -> int:
+    """Log level for missing price data (Issue #1205).
+
+    DEBUG while HA is still starting (the price integration may not have
+    created its entities yet), WARNING otherwise so a real outage stands out.
+    """
+    if startup_grace_active is not None and startup_grace_active():
+        return logging.DEBUG
+    return logging.WARNING
+
+
 class PricingProvider(Protocol):
     """Protocol for pricing data providers.
 
@@ -72,9 +83,8 @@ class _ProviderMixin:
 
     def _log_no_forecasts(self, entity_id: str) -> None:
         """Log a missing forecast: DEBUG during start-up grace, else WARNING."""
-        in_grace = self.startup_grace_active is not None and self.startup_grace_active()
         _LOGGER.log(
-            logging.DEBUG if in_grace else logging.WARNING,
+            missing_price_log_level(self.startup_grace_active),
             "No forecasts found for %s",
             entity_id,
         )

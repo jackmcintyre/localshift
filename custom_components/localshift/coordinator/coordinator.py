@@ -324,7 +324,6 @@ class LocalShiftCoordinator:
 
         _pricing_provider = create_provider(pricing_source)
         # Issue #1205: price entities may not exist yet right after an HA restart
-        _pricing_provider.startup_grace_active = self._is_in_startup_grace
         self._state_reader = StateReader(
             self.hass,
             self.entry,
