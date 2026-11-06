@@ -78,12 +78,22 @@ class StateReader:
         entry: ConfigEntry,
         entity_validator: EntityValidator,
         pricing_provider: PricingProvider | None = None,
+        startup_grace_active: Callable[[], bool] | None = None,
     ) -> None:
         """Initialize the state reader."""
         self.hass = hass
         self.entry = entry
         self.entity_validator = entity_validator
         self.pricing_provider = pricing_provider
+        # Issue #1205: True while HA is still starting and price entities may
+        # not exist yet; missing-price warnings drop to DEBUG until it ends.
+        self._startup_grace_active = startup_grace_active
+
+    def _price_missing_level(self) -> int:
+        """Log level for an unavailable price entity (Issue #1205)."""
+        if self._startup_grace_active is not None and self._startup_grace_active():
+            return logging.DEBUG
+        return logging.WARNING
 
     def _get_entity_id(self, key: str) -> str:
         """Get a configured external entity ID by config key.
@@ -736,7 +746,8 @@ class StateReader:
         )
 
         if general_price_raw is None:
-            _LOGGER.warning(
+            _LOGGER.log(
+                self._price_missing_level(),
                 "General price entity '%s' is unavailable - prices_available=False. "
                 "Grid charging decisions will be deferred. Check entity configuration.",
                 general_price_entity,
@@ -746,7 +757,8 @@ class StateReader:
             data.general_price = general_price_raw
 
         if feed_in_price_raw is None:
-            _LOGGER.warning(
+            _LOGGER.log(
+                self._price_missing_level(),
                 "Feed-in price entity '%s' is unavailable - prices_available=False. "
                 "Grid charging decisions will be deferred. Check entity configuration.",
                 feed_in_price_entity,

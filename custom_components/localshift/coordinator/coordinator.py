@@ -323,8 +323,14 @@ class LocalShiftCoordinator:
         self._tick_scheduler = TickScheduler(self)
 
         _pricing_provider = create_provider(pricing_source)
+        # Issue #1205: price entities may not exist yet right after an HA restart
+        _pricing_provider.startup_grace_active = self._is_in_startup_grace
         self._state_reader = StateReader(
-            self.hass, self.entry, self._entity_validator, _pricing_provider
+            self.hass,
+            self.entry,
+            self._entity_validator,
+            _pricing_provider,
+            startup_grace_active=self._is_in_startup_grace,
         )
         self._cost_tracker = CostTracker(self.hass)
         # Issue #1102: bring back the day's totals before any timer is

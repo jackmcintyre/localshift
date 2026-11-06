@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -25,6 +26,8 @@ class PricingProvider(Protocol):
     - Forecast data location and format
     - Spike detection logic
     """
+
+    startup_grace_active: Callable[[], bool] | None
 
     @property
     def name(self) -> str:  # pragma: no cover
@@ -61,6 +64,20 @@ class _ProviderMixin:
     """Shared helper methods for pricing providers."""
 
     _VALID_DURATIONS = (5, 15, 30)
+
+    # Issue #1205: set by the coordinator. While it returns True (HA start-up,
+    # before the price integration has created its entities) a missing
+    # forecast is expected, so it is logged at DEBUG instead of WARNING.
+    startup_grace_active: Callable[[], bool] | None = None
+
+    def _log_no_forecasts(self, entity_id: str) -> None:
+        """Log a missing forecast: DEBUG during start-up grace, else WARNING."""
+        in_grace = self.startup_grace_active is not None and self.startup_grace_active()
+        _LOGGER.log(
+            logging.DEBUG if in_grace else logging.WARNING,
+            "No forecasts found for %s",
+            entity_id,
+        )
 
     def _normalize_slot(self, raw: dict[str, Any]) -> ForecastSlot:
         """Convert raw forecast dict to ForecastSlot."""
@@ -136,7 +153,7 @@ class AmberProvider(_ProviderMixin):
         raw_forecasts = self._read_attribute(hass, forecast_entity, "forecasts", [])
 
         if not raw_forecasts:
-            _LOGGER.warning("No forecasts found on %s", forecast_entity)
+            self._log_no_forecasts(forecast_entity)
             return []
 
         slots = []
@@ -197,7 +214,7 @@ class AmberExpressProvider(_ProviderMixin):
             )
 
         if not raw_forecasts:
-            _LOGGER.warning("No forecasts found for %s", price_entity_id)
+            self._log_no_forecasts(price_entity_id)
             return []
 
         slots = []
