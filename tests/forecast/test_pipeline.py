@@ -417,6 +417,48 @@ def test_compute_solar_battery_forecast_uses_allow_dw_entry_under_target_branch(
     assert data.solar_battery_forecast["boost_needed"] is True
 
 
+def test_compute_solar_battery_forecast_no_boost_when_switch_on_and_solar_reaches_target():
+    """#1266: switch on and solar reaches target in the DW -> the waiver applies, no boost.
+
+    The switch-off formula would call for a boost here (SOC below target, no solar
+    or load data), so only the gated waiver branch returns False.
+    """
+    data = CoordinatorData()
+    data.soc = 40.0
+    data.solcast_today = []
+    data.solcast_tomorrow = []
+    data.load_forecast_slots = [1.0] * 8
+    data.optimizer_decisions = [
+        {
+            "timestamp_iso": "2026-02-16T18:00:00+00:00",
+            "predicted_soc_pct": 60.0,
+            "slot_interval_minutes": 15,
+        }
+    ]
+    data.solar_can_reach_target_in_dw = True
+
+    pipeline = ForecastPipeline(
+        load_forecaster=_StubLoadForecaster(1.0),
+        price_signals=_StubPriceSignals(),
+        forecast_history_store=_StubForecastHistoryStore(),
+        get_switch_state=lambda _key: True,
+        excess_solar_signals=MagicMock(),
+    )
+
+    now_dt = datetime(2026, 2, 16, 10, 0, 0, tzinfo=UTC)
+    with patch("homeassistant.util.dt.now", return_value=now_dt):
+        pipeline.compute_solar_battery_forecast(
+            data=data,
+            now_dt=now_dt,
+            target_hour=18,
+            before_dw=True,
+            after_dw=False,
+            target_pct=80.0,
+        )
+
+    assert data.solar_battery_forecast["boost_needed"] is False
+
+
 def test_get_dp_decision_skips_invalid_entries_and_returns_none():
     data = CoordinatorData()
     data.optimizer_decisions = [
