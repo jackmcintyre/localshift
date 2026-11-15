@@ -11,6 +11,8 @@ Both cause the optimizer to see no backward incentive to grid-charge before the 
 
 from __future__ import annotations
 
+import dataclasses
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -22,6 +24,14 @@ from custom_components.localshift.engine.types import (
     PlannerAction,
     SlotContext,
 )
+
+
+def _slow_charger(inputs: OptimizerInputs) -> OptimizerInputs:
+    """Cap the grid charger so the target is unreachable before DW entry (#1266)."""
+    config = dataclasses.replace(
+        inputs.config, charge_rate_kw=0.5, boost_charge_rate_kw=0.5
+    )
+    return dataclasses.replace(inputs, config=config)
 
 
 def _make_shortfall_scenario(
@@ -208,11 +218,13 @@ class TestIssue816KillSwitchFix:
         """
         # This scenario has allow_dw_entry_under_target=True but solar cannot actually
         # reach the 95% target before DW entry.
-        inputs = _make_shortfall_scenario(
-            initial_soc_pct=14.0,
-            solar_kwh_per_slot=0.8,
-            allow_dw_entry_under_target=True,  # Kill switch was triggered here
-            accuracy=0.319,
+        inputs = _slow_charger(
+            _make_shortfall_scenario(
+                initial_soc_pct=14.0,
+                solar_kwh_per_slot=0.8,
+                allow_dw_entry_under_target=True,  # Kill switch was triggered here
+                accuracy=0.319,
+            )
         )
         result = DPPlanner().plan(inputs)
 
@@ -221,12 +233,18 @@ class TestIssue816KillSwitchFix:
         # #1266: the switch only waives the target when solar can reach it, so with
         # solar insufficient the plan and its shortfall equal switch-off.
         strict = DPPlanner().plan(
-            _make_shortfall_scenario(
-                initial_soc_pct=14.0,
-                solar_kwh_per_slot=0.8,
-                allow_dw_entry_under_target=False,
-                accuracy=0.319,
+            _slow_charger(
+                _make_shortfall_scenario(
+                    initial_soc_pct=14.0,
+                    solar_kwh_per_slot=0.8,
+                    allow_dw_entry_under_target=False,
+                    accuracy=0.319,
+                )
             )
+        )
+        assert result.terminal_shortfall_pct > 0, (
+            f"terminal_shortfall_pct={result.terminal_shortfall_pct:.2f}% must be > 0 "
+            f"when solar cannot reach target, whatever the switch says."
         )
         assert result.terminal_shortfall_pct == strict.terminal_shortfall_pct
         assert [d.action for d in result.decisions] == [

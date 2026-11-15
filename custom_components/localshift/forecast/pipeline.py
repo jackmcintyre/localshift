@@ -208,10 +208,11 @@ class ForecastPipeline:
             allow_dw_under_target = self._get_switch_state(
                 SWITCH_ALLOW_DW_ENTRY_UNDER_TARGET
             )
-            if allow_dw_under_target and hasattr(data, "solar_can_reach_target_in_dw"):
-                boost_needed = (
-                    data.soc < target_pct and not data.solar_can_reach_target_in_dw
-                )
+            if allow_dw_under_target and getattr(
+                data, "solar_can_reach_target_in_dw", False
+            ):
+                # Solar reaches target in the DW (#1266): the waiver applies, no boost.
+                boost_needed = False
             else:
                 boost_needed = data.soc < target_pct and net_solar < deficit_kwh
         else:

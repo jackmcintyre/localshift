@@ -27,7 +27,7 @@
     "planner_export_floor_pct": 10.0,
     "planner_threshold_used": 0.17,
     "solar_can_reach_target": false,
-    "solar_can_reach_target_in_dw": true
+    "solar_can_reach_target_in_dw": false
    },
    "optimizer_result_present": true,
    "result": {
@@ -35,15 +35,15 @@
     "error_message": null,
     "planner_version": "dp_v1",
     "projected_export_kwh": 0.252,
-    "projected_import_kwh": 20.345,
-    "projected_net_cost": 2.2199,
+    "projected_import_kwh": 20.093,
+    "projected_net_cost": 1.8738,
     "reason_code_histogram": {
-     "IDLE": 32,
+     "IDLE": 34,
      "SOC_CEILING_CONSTRAINT": 11,
-     "SOC_FLOOR_CONSTRAINT": 9,
+     "SOC_FLOOR_CONSTRAINT": 7,
      "TARGET_SHORTFALL_RISK": 6
     },
-    "states_explored": 5156,
+    "states_explored": 6002,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 58
@@ -56,7 +56,7 @@
     "dw_entry_actual_shortfall_pct": null,
     "dw_entry_actual_soc_pct": null,
     "dw_entry_actual_target_pct": null,
-    "dw_entry_soc_pct": 99.43,
+    "dw_entry_soc_pct": 96.81,
     "enabled": true,
     "error_message": null,
     "export_floor_pct": 10.0,
@@ -80,7 +80,7 @@
     "next_window_gap_min": null,
     "next_window_required_soc_pct": null,
     "next_window_tail_start_idx": null,
-    "next_window_tail_status": "under_target_mode",
+    "next_window_tail_status": "no_gap",
     "parity_completeness_pct": 84.9,
     "parity_defaulted_fields": {
      "consumption_kwh": 0,
@@ -92,12 +92,12 @@
     "precharge_runway_margin_min": 15.0,
     "precharge_runway_slack_min": 1285.0,
     "projected_export_kwh": 0.252,
-    "projected_import_kwh": 20.345,
-    "projected_net_cost": 2.2199,
+    "projected_import_kwh": 20.093,
+    "projected_net_cost": 1.8738,
     "reason_code_histogram": {
-     "IDLE": 32,
+     "IDLE": 34,
      "SOC_CEILING_CONSTRAINT": 11,
-     "SOC_FLOOR_CONSTRAINT": 9,
+     "SOC_FLOOR_CONSTRAINT": 7,
      "TARGET_SHORTFALL_RISK": 6
     },
     "slot0_price": {
@@ -178,19 +178,19 @@
     ["2026-10-10T09:30:00+11:00", 30, "hold", "SOC_FLOOR_CONSTRAINT", 10.0, 0.4575, 0.0, 0.0, 0.458, 0.1144, 0.0462, 10.0],
     ["2026-10-10T10:00:00+11:00", 30, "hold", "SOC_FLOOR_CONSTRAINT", 10.0, 0.4575, 0.0, 0.0, 0.458, 0.1056, 0.0259, 10.0],
     ["2026-10-10T10:30:00+11:00", 30, "hold", "SOC_FLOOR_CONSTRAINT", 10.0, 0.4575, 0.0, 0.0, 0.458, 0.0968, 0.0179, 10.0],
-    ["2026-10-10T11:00:00+11:00", 30, "hold", "SOC_FLOOR_CONSTRAINT", 10.0, 0.4575, 0.0, 0.0, 0.458, 0.0906, 0.0123, 10.0],
-    ["2026-10-10T11:30:00+11:00", 30, "hold", "SOC_FLOOR_CONSTRAINT", 10.0, 0.4575, 0.0, 0.0, 0.458, 0.0855, 0.0076, 10.0],
-    ["2026-10-10T12:00:00+11:00", 30, "charge_grid_boost", "TARGET_SHORTFALL_RISK", 27.04, 2.9575, 0.0, 0.0, 0.458, 0.0807, 0.0033, 10.0],
-    ["2026-10-10T12:30:00+11:00", 30, "charge_grid_boost", "TARGET_SHORTFALL_RISK", 44.07, 2.9575, 0.0, 0.0, 0.458, 0.0873, 0.0093, 10.0],
-    ["2026-10-10T13:00:00+11:00", 30, "charge_grid_boost", "TARGET_SHORTFALL_RISK", 61.11, 2.9575, 0.0, 0.0, 0.458, 0.0927, 0.0142, 10.0],
-    ["2026-10-10T13:30:00+11:00", 30, "charge_grid_boost", "TARGET_SHORTFALL_RISK", 78.15, 2.9575, 0.0, 0.0, 0.458, 0.0924, 0.0139, 10.0],
-    ["2026-10-10T14:00:00+11:00", 30, "charge_grid_boost", "TARGET_SHORTFALL_RISK", 94.53, 2.8619, 0.0, 0.0, 0.458, 0.094, 0.0154, 10.0],
-    ["2026-10-10T14:30:00+11:00", 30, "charge_grid_normal", "TARGET_SHORTFALL_RISK", 99.43, 1.1763, 0.0, 0.0, 0.458, 0.0924, 0.014, 10.0],
-    ["2026-10-10T15:00:00+11:00", 30, "hold", "IDLE", 95.87, 0.0, 0.0, 0.0, 0.458, 0.0946, 0.0282, 10.0],
-    ["2026-10-10T15:30:00+11:00", 30, "hold", "IDLE", 92.3, 0.0, 0.0, 0.0, 0.458, 0.1029, 0.0359, 10.0],
-    ["2026-10-10T16:00:00+11:00", 30, "hold", "IDLE", 88.73, 0.0, 0.0, 0.0, 0.458, 0.1101, 0.0809, 10.0],
-    ["2026-10-10T16:30:00+11:00", 30, "hold", "IDLE", 85.16, 0.0, 0.0, 0.0, 0.458, 0.12, 0.0899, 10.0],
-    ["2026-10-10T17:00:00+11:00", 30, "hold", "IDLE", 81.6, 0.0, 0.0, 0.0, 0.458, 0.1369, 0.1052, 10.0]
+    ["2026-10-10T11:00:00+11:00", 30, "charge_grid_boost", "TARGET_SHORTFALL_RISK", 27.04, 2.9575, 0.0, 0.0, 0.458, 0.0906, 0.0123, 10.0],
+    ["2026-10-10T11:30:00+11:00", 30, "charge_grid_boost", "TARGET_SHORTFALL_RISK", 44.07, 2.9575, 0.0, 0.0, 0.458, 0.0855, 0.0076, 10.0],
+    ["2026-10-10T12:00:00+11:00", 30, "charge_grid_boost", "TARGET_SHORTFALL_RISK", 61.11, 2.9575, 0.0, 0.0, 0.458, 0.0807, 0.0033, 10.0],
+    ["2026-10-10T12:30:00+11:00", 30, "charge_grid_boost", "TARGET_SHORTFALL_RISK", 78.15, 2.9575, 0.0, 0.0, 0.458, 0.0873, 0.0093, 10.0],
+    ["2026-10-10T13:00:00+11:00", 30, "hold", "IDLE", 74.58, 0.0, 0.0, 0.0, 0.458, 0.0927, 0.0142, 10.0],
+    ["2026-10-10T13:30:00+11:00", 30, "hold", "IDLE", 71.01, 0.0, 0.0, 0.0, 0.458, 0.0924, 0.0139, 10.0],
+    ["2026-10-10T14:00:00+11:00", 30, "charge_grid_boost", "TARGET_SHORTFALL_RISK", 88.05, 2.9575, 0.0, 0.0, 0.458, 0.094, 0.0154, 10.0],
+    ["2026-10-10T14:30:00+11:00", 30, "charge_grid_normal", "TARGET_SHORTFALL_RISK", 96.81, 1.7429, 0.0, 0.0, 0.458, 0.0924, 0.014, 10.0],
+    ["2026-10-10T15:00:00+11:00", 30, "hold", "IDLE", 93.24, 0.0, 0.0, 0.0, 0.458, 0.0946, 0.0282, 10.0],
+    ["2026-10-10T15:30:00+11:00", 30, "hold", "IDLE", 89.68, 0.0, 0.0, 0.0, 0.458, 0.1029, 0.0359, 10.0],
+    ["2026-10-10T16:00:00+11:00", 30, "hold", "IDLE", 86.11, 0.0, 0.0, 0.0, 0.458, 0.1101, 0.0809, 10.0],
+    ["2026-10-10T16:30:00+11:00", 30, "hold", "IDLE", 82.54, 0.0, 0.0, 0.0, 0.458, 0.12, 0.0899, 10.0],
+    ["2026-10-10T17:00:00+11:00", 30, "hold", "IDLE", 78.97, 0.0, 0.0, 0.0, 0.458, 0.1369, 0.1052, 10.0]
    ]
   },
   "strict": {

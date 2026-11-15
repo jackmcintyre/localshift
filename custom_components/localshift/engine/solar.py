@@ -19,8 +19,12 @@ def can_solar_reach_target(
 ) -> bool:
     """Check if solar can reach target during demand window.
 
-    This function checks if solar alone can reach target at any point during
-    the demand window (when allow_dw_entry_under_target is True).
+    True only when ``allow_dw_entry_under_target`` is on AND solar alone, on the
+    forecast-accuracy-discounted projection (the same discount as
+    ``check_global_solar_sufficiency``), brings SOC to target at some point INSIDE
+    the demand window. It gates every effect of the switch (#1266), so it counts only
+    SOC reached in window slots: a battery already at target now must not read as
+    "solar reaches" when solar-only SOC sits at the floor through the window.
     """
     from custom_components.localshift.engine.dp_math import (
         _simulate_max_soc_in_demand_window,
@@ -32,9 +36,18 @@ def can_solar_reach_target(
         return False
 
     max_soc_in_dw = _simulate_max_soc_in_demand_window(
-        inputs.initial_soc_pct, slots, config, demand_bounds
+        inputs.initial_soc_pct,
+        slots,
+        config,
+        demand_bounds,
+        include_start_soc=False,
     )
-    return max_soc_in_dw >= config.demand_window_target_soc_pct
+    start = inputs.initial_soc_pct
+    accuracy = max(0.0, min(1.0, config.solar_forecast_accuracy))
+    discounted = start + max(0.0, max_soc_in_dw - start) * accuracy
+    if max_soc_in_dw < start:
+        discounted = max_soc_in_dw
+    return discounted >= config.demand_window_target_soc_pct
 
 
 def can_solar_reach_target_feasible(

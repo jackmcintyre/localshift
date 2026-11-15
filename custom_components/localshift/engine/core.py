@@ -1031,7 +1031,6 @@ class DPPlanner:
 
         soc_grid = _build_soc_grid(config)
         demand_bounds = self._find_demand_window_bounds(slots)
-        solar_capable = can_solar_reach_target(inputs, slots, config, demand_bounds)
 
         terminal_penalty_idx = self._determine_terminal_penalty_idx(
             config, demand_bounds
@@ -1062,6 +1061,9 @@ class DPPlanner:
         config.solar_forecast_accuracy = get_forecast_accuracy(
             inputs.solar_accuracy_tracker
         )
+        # Needs the accuracy just set: the switch gate uses the same discounted solar
+        # bar as the hard floor (#1266).
+        solar_capable = can_solar_reach_target(inputs, slots, config, demand_bounds)
 
         # Target-first eligibility (2026-06-12): per-slot pre-DW charge thresholds sized
         # so the demand-window target is fundable from the cheapest sufficient slots up
@@ -1154,7 +1156,12 @@ class DPPlanner:
         )
 
         terminal_shortfall = self._compute_terminal_shortfall(
-            inputs, decisions, config, terminal_penalty_idx, demand_bounds, solar_capable
+            inputs,
+            decisions,
+            config,
+            terminal_penalty_idx,
+            demand_bounds,
+            solar_capable,
         )
 
         # Compute terminal diagnostics (PR #789 wiring fix). Issue #973: this

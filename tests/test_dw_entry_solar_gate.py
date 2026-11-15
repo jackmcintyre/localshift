@@ -21,6 +21,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SOLAR_CANNOT_REACH = (
     "simulations/replay/2026-08-25.json",
     "simulations/replay-1119/2026-10-12T161040.json",
+    # SOC is 100% now but solar-only SOC sits at the floor through the window: the
+    # gate counts only SOC inside the window, not the starting SOC.
+    "simulations/replay-1120/2026-10-04T173040.json",
+    "simulations/replay-1120/2026-10-10T190040.json",
 )
 # Switch on in the capture; solar reaches target in the window.
 SOLAR_REACHES = "simulations/replay/2026-09-03.json"
@@ -31,9 +35,7 @@ def _replay(capture: str, switch_on: bool) -> dict:
     scenario.setdefault("config_overrides", {})["allow_dw_entry_under_target"] = (
         switch_on
     )
-    scenario.setdefault("switch_states", {})["allow_dw_entry_under_target"] = (
-        switch_on
-    )
+    scenario.setdefault("switch_states", {})["allow_dw_entry_under_target"] = switch_on
     return rpb.replay(scenario, "captured")
 
 
