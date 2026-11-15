@@ -218,11 +218,20 @@ class TestIssue816KillSwitchFix:
 
         assert result.success
 
-        assert result.terminal_shortfall_pct > 0, (
-            f"terminal_shortfall_pct={result.terminal_shortfall_pct:.2f}% must be > 0 "
-            f"even when allow_dw_entry_under_target=True, when solar cannot reach target. "
-            f"Kill switch was incorrectly zeroing the terminal penalty."
+        # #1266: the switch only waives the target when solar can reach it, so with
+        # solar insufficient the plan and its shortfall equal switch-off.
+        strict = DPPlanner().plan(
+            _make_shortfall_scenario(
+                initial_soc_pct=14.0,
+                solar_kwh_per_slot=0.8,
+                allow_dw_entry_under_target=False,
+                accuracy=0.319,
+            )
         )
+        assert result.terminal_shortfall_pct == strict.terminal_shortfall_pct
+        assert [d.action for d in result.decisions] == [
+            d.action for d in strict.decisions
+        ]
 
     def test_optimizer_schedules_grid_charging_when_allow_dw_entry_under_target_true(
         self,

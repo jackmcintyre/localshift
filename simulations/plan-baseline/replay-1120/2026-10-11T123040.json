@@ -36,7 +36,7 @@
     "planner_version": "dp_v1",
     "projected_export_kwh": 0.221,
     "projected_import_kwh": 35.1,
-    "projected_net_cost": 5.2724,
+    "projected_net_cost": 5.2722,
     "reason_code_histogram": {
      "IDLE": 8,
      "SOC_CEILING_CONSTRAINT": 3,
@@ -46,7 +46,7 @@
     },
     "states_explored": 3194,
     "success": true,
-    "terminal_shortfall_pct": 36.77,
+    "terminal_shortfall_pct": 0.0,
     "total_slots": 43
    },
    "slot0_action": "charge_grid_normal",
@@ -81,7 +81,7 @@
     "next_window_gap_min": 600.0,
     "next_window_required_soc_pct": null,
     "next_window_tail_start_idx": null,
-    "next_window_tail_status": "under_target_mode",
+    "next_window_tail_status": "gap_too_long",
     "parity_completeness_pct": 94.2,
     "parity_defaulted_fields": {
      "consumption_kwh": 0,
@@ -94,7 +94,7 @@
     "precharge_runway_slack_min": 13.0,
     "projected_export_kwh": 0.221,
     "projected_import_kwh": 35.1,
-    "projected_net_cost": 5.2724,
+    "projected_net_cost": 5.2722,
     "reason_code_histogram": {
      "IDLE": 8,
      "SOC_CEILING_CONSTRAINT": 3,
@@ -130,7 +130,7 @@
     "spike_funding_net_cost_delta": 0.0,
     "spike_funding_slot_count": 0,
     "success": true,
-    "terminal_shortfall_pct": 36.77,
+    "terminal_shortfall_pct": 0.0,
     "total_slots": 43
    },
    "swallowed_failures": [],
@@ -145,8 +145,8 @@
     ["2026-10-11T13:05:00+11:00", 5, "hold", "SOLAR_SURPLUS_CAPTURE", 33.0, 0.0, 0.0, 0.461, 0.293, 0.0748, -0.0017, 10.0],
     ["2026-10-11T13:10:00+11:00", 5, "hold", "SOLAR_SURPLUS_CAPTURE", 34.15, 0.0, 0.0, 0.461, 0.293, 0.0745, -0.0034, 10.0],
     ["2026-10-11T13:15:00+11:00", 5, "hold", "SOLAR_SURPLUS_CAPTURE", 35.3, 0.0, 0.0, 0.461, 0.293, 0.0762, -0.0052, 10.0],
-    ["2026-10-11T13:20:00+11:00", 5, "charge_grid_normal", "TARGET_SHORTFALL_RISK", 38.33, 0.275, 0.0, 0.461, 0.293, 0.0691, -0.0085, 10.0],
-    ["2026-10-11T13:25:00+11:00", 5, "hold", "SOLAR_SURPLUS_CAPTURE", 39.48, 0.0, 0.0, 0.461, 0.293, 0.0686, -0.0091, 10.0],
+    ["2026-10-11T13:20:00+11:00", 5, "hold", "SOLAR_SURPLUS_CAPTURE", 36.46, 0.0, 0.0, 0.461, 0.293, 0.0691, -0.0085, 10.0],
+    ["2026-10-11T13:25:00+11:00", 5, "charge_grid_normal", "TARGET_SHORTFALL_RISK", 39.48, 0.275, 0.0, 0.461, 0.293, 0.0686, -0.0091, 10.0],
     ["2026-10-11T13:30:00+11:00", 30, "charge_grid_normal", "TARGET_SHORTFALL_RISK", 57.29, 1.65, 0.0, 2.719, 1.756, 0.0655, -0.0105, 10.0],
     ["2026-10-11T14:00:00+11:00", 30, "charge_grid_boost", "TARGET_SHORTFALL_RISK", 80.07, 2.5, 0.0, 2.597, 1.756, 0.0629, -0.0129, 10.0],
     ["2026-10-11T14:30:00+11:00", 30, "charge_grid_normal", "TARGET_SHORTFALL_RISK", 96.1, 1.65, 0.0, 2.459, 1.756, 0.065, -0.0109, 10.0],

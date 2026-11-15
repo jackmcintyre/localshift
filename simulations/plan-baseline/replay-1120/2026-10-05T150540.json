@@ -35,14 +35,15 @@
     "error_message": null,
     "planner_version": "dp_v1",
     "projected_export_kwh": 3.605,
-    "projected_import_kwh": 0.0,
-    "projected_net_cost": -0.4399,
+    "projected_import_kwh": 9.755,
+    "projected_net_cost": 0.2549,
     "reason_code_histogram": {
-     "IDLE": 41,
+     "IDLE": 36,
      "SOC_CEILING_CONSTRAINT": 15,
-     "SOLAR_SURPLUS_CAPTURE": 1
+     "SOLAR_SURPLUS_CAPTURE": 1,
+     "TARGET_SHORTFALL_RISK": 5
     },
-    "states_explored": 4448,
+    "states_explored": 8178,
     "success": true,
     "terminal_shortfall_pct": 0.0,
     "total_slots": 57
@@ -75,11 +76,11 @@
     "negative_fit_spill_threshold": 0.25,
     "negative_fit_suppressed": false,
     "negative_fit_window_open": false,
-    "next_window_entry_soc_pct": null,
+    "next_window_entry_soc_pct": 95.9,
     "next_window_gap_min": 0.0,
-    "next_window_required_soc_pct": null,
-    "next_window_tail_start_idx": null,
-    "next_window_tail_status": "under_target_mode",
+    "next_window_required_soc_pct": 95.0,
+    "next_window_tail_start_idx": 21,
+    "next_window_tail_status": "applied",
     "parity_completeness_pct": 86.8,
     "parity_defaulted_fields": {
      "consumption_kwh": 0,
@@ -91,12 +92,13 @@
     "precharge_runway_margin_min": 15.0,
     "precharge_runway_slack_min": null,
     "projected_export_kwh": 3.605,
-    "projected_import_kwh": 0.0,
-    "projected_net_cost": -0.4399,
+    "projected_import_kwh": 9.755,
+    "projected_net_cost": 0.2549,
     "reason_code_histogram": {
-     "IDLE": 41,
+     "IDLE": 36,
      "SOC_CEILING_CONSTRAINT": 15,
-     "SOLAR_SURPLUS_CAPTURE": 1
+     "SOLAR_SURPLUS_CAPTURE": 1,
+     "TARGET_SHORTFALL_RISK": 5
     },
     "slot0_price": {
      "buy": 0.1864,
@@ -179,15 +181,15 @@
     ["2026-10-06T09:00:00+11:00", 30, "hold", "IDLE", 47.5, 0.0, 0.0, 0.0, 0.223, 0.0916, 0.0255, 10.0],
     ["2026-10-06T09:30:00+11:00", 30, "hold", "IDLE", 45.76, 0.0, 0.0, 0.0, 0.223, 0.0806, 0.0156, 10.0],
     ["2026-10-06T10:00:00+11:00", 30, "hold", "IDLE", 44.02, 0.0, 0.0, 0.0, 0.223, 0.0748, -0.0021, 10.0],
-    ["2026-10-06T10:30:00+11:00", 30, "hold", "IDLE", 42.27, 0.0, 0.0, 0.0, 0.223, 0.0716, -0.0049, 10.0],
-    ["2026-10-06T11:00:00+11:00", 30, "hold", "IDLE", 40.53, 0.0, 0.0, 0.0, 0.223, 0.0721, -0.0046, 10.0],
-    ["2026-10-06T11:30:00+11:00", 30, "hold", "IDLE", 38.79, 0.0, 0.0, 0.0, 0.223, 0.0727, -0.0039, 10.0],
-    ["2026-10-06T12:00:00+11:00", 30, "hold", "IDLE", 37.05, 0.0, 0.0, 0.0, 0.223, 0.0722, -0.0044, 10.0],
-    ["2026-10-06T12:30:00+11:00", 30, "hold", "IDLE", 35.3, 0.0, 0.0, 0.0, 0.223, 0.0741, -0.0027, 10.0],
-    ["2026-10-06T13:00:00+11:00", 30, "hold", "IDLE", 33.56, 0.0, 0.0, 0.0, 0.223, 0.0751, -0.0017, 10.0],
-    ["2026-10-06T13:30:00+11:00", 30, "hold", "IDLE", 31.82, 0.0, 0.0, 0.0, 0.223, 0.071, -0.0055, 10.0],
-    ["2026-10-06T14:00:00+11:00", 30, "hold", "IDLE", 30.07, 0.0, 0.0, 0.0, 0.223, 0.0696, -0.0068, 10.0],
-    ["2026-10-06T14:30:00+11:00", 30, "hold", "IDLE", 28.33, 0.0, 0.0, 0.0, 0.223, 0.0758, -0.0011, 10.0]
+    ["2026-10-06T10:30:00+11:00", 30, "charge_grid_normal", "TARGET_SHORTFALL_RISK", 55.26, 1.8735, 0.0, 0.0, 0.223, 0.0716, -0.0049, 10.0],
+    ["2026-10-06T11:00:00+11:00", 30, "charge_grid_normal", "TARGET_SHORTFALL_RISK", 66.5, 1.8735, 0.0, 0.0, 0.223, 0.0721, -0.0046, 10.0],
+    ["2026-10-06T11:30:00+11:00", 30, "hold", "IDLE", 64.76, 0.0, 0.0, 0.0, 0.223, 0.0727, -0.0039, 10.0],
+    ["2026-10-06T12:00:00+11:00", 30, "charge_grid_normal", "TARGET_SHORTFALL_RISK", 76.01, 1.8735, 0.0, 0.0, 0.223, 0.0722, -0.0044, 10.0],
+    ["2026-10-06T12:30:00+11:00", 30, "hold", "IDLE", 74.26, 0.0, 0.0, 0.0, 0.223, 0.0741, -0.0027, 10.0],
+    ["2026-10-06T13:00:00+11:00", 30, "hold", "IDLE", 72.52, 0.0, 0.0, 0.0, 0.223, 0.0751, -0.0017, 10.0],
+    ["2026-10-06T13:30:00+11:00", 30, "charge_grid_normal", "TARGET_SHORTFALL_RISK", 83.77, 1.8735, 0.0, 0.0, 0.223, 0.071, -0.0055, 10.0],
+    ["2026-10-06T14:00:00+11:00", 30, "charge_grid_boost", "TARGET_SHORTFALL_RISK", 97.65, 2.2606, 0.0, 0.0, 0.223, 0.0696, -0.0068, 10.0],
+    ["2026-10-06T14:30:00+11:00", 30, "hold", "IDLE", 95.91, 0.0, 0.0, 0.0, 0.223, 0.0758, -0.0011, 10.0]
    ]
   },
   "strict": {

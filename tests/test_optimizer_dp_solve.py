@@ -9,6 +9,8 @@ These tests run ENTIRELY OFFLINE — no Home Assistant or Solcast data required.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from custom_components.localshift.engine.constraints import (
@@ -2211,6 +2213,14 @@ def test_cross_day_dw_solar_only_checks_first_block():
     )
 
 
+def _same_as_switch_off(result, inputs):
+    """#1266: with solar unable to reach target the switch changes nothing."""
+    config = dataclasses.replace(inputs.config, allow_dw_entry_under_target=False)
+    strict = DPPlanner().plan(dataclasses.replace(inputs, config=config))
+    assert result.terminal_shortfall_pct == strict.terminal_shortfall_pct
+    assert [d.action for d in result.decisions] == [d.action for d in strict.decisions]
+
+
 def test_cross_day_dw_grid_charges_for_today():
     """Issue #633: When today's DW has insufficient solar, shortfall is detected.
 
@@ -2288,10 +2298,9 @@ def test_cross_day_dw_grid_charges_for_today():
         "even though tomorrow's DW has abundant solar"
     )
 
-    # Terminal shortfall must reflect today's DW, not tomorrow's
-    assert result.terminal_shortfall_pct > 0, (
-        f"terminal_shortfall_pct={result.terminal_shortfall_pct}% must be > 0 when today's DW cannot reach target"
-    )
+    # Today's DW cannot reach target, so the switch is inert (#1266): the plan is
+    # the switch-off plan, not one that waives today's target on tomorrow's solar.
+    _same_as_switch_off(result, inputs)
 
 
 def test_cross_day_dw_regression_single_block_unchanged():
@@ -2425,9 +2434,8 @@ def test_terminal_shortfall_cross_day_uses_first_dw_only():
 
     result = DPPlanner().plan(inputs)
     assert result.success
-    assert result.terminal_shortfall_pct > 0.0, (
-        "Cross-day DW should report shortfall for first DW only"
-    )
+    assert result.can_solar_reach_target_in_dw is False
+    _same_as_switch_off(result, inputs)
 
 
 # ---------------------------------------------------------------------------

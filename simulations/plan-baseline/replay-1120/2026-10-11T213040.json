@@ -36,15 +36,15 @@
     "planner_version": "dp_v1",
     "projected_export_kwh": 0.0,
     "projected_import_kwh": 64.095,
-    "projected_net_cost": 21.8663,
+    "projected_net_cost": 21.4697,
     "reason_code_histogram": {
      "IDLE": 24,
      "SOC_FLOOR_CONSTRAINT": 27,
      "TARGET_SHORTFALL_RISK": 7
     },
-    "states_explored": 5344,
+    "states_explored": 5624,
     "success": true,
-    "terminal_shortfall_pct": 32.46,
+    "terminal_shortfall_pct": 29.38,
     "total_slots": 58
    },
    "slot0_action": "hold",
@@ -79,7 +79,7 @@
     "next_window_gap_min": 1050.0,
     "next_window_required_soc_pct": null,
     "next_window_tail_start_idx": null,
-    "next_window_tail_status": "under_target_mode",
+    "next_window_tail_status": "gap_too_long",
     "parity_completeness_pct": 81.5,
     "parity_defaulted_fields": {
      "consumption_kwh": 0,
@@ -92,7 +92,7 @@
     "precharge_runway_slack_min": 985.0,
     "projected_export_kwh": 0.0,
     "projected_import_kwh": 64.095,
-    "projected_net_cost": 21.8663,
+    "projected_net_cost": 21.4697,
     "reason_code_histogram": {
      "IDLE": 24,
      "SOC_FLOOR_CONSTRAINT": 27,
@@ -126,7 +126,7 @@
     "spike_funding_net_cost_delta": 0.0,
     "spike_funding_slot_count": 0,
     "success": true,
-    "terminal_shortfall_pct": 32.46,
+    "terminal_shortfall_pct": 29.38,
     "total_slots": 58
    },
    "swallowed_failures": [],

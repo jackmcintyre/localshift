@@ -478,9 +478,17 @@ _FLOOR_BASELINES = [
     ("repro", _repro_slots, 66.0, {}, 95.0),
     ("solar_sufficient", _solar_sufficient_slots, 66.0, {}, None),
     ("unreachable", _unreachable_slots, 20.0, {}, 37.03703703703704),
+    # #1266: the switch waives the floor only when solar reaches target in the DW.
     (
-        "allow_under_target",
+        "allow_under_target_solar_cannot_reach",
         _repro_slots,
+        66.0,
+        {"allow_dw_entry_under_target": True},
+        95.0,
+    ),
+    (
+        "allow_under_target_solar_reaches",
+        _solar_sufficient_slots,
         66.0,
         {"allow_dw_entry_under_target": True},
         None,
@@ -549,7 +557,7 @@ def test_suppressed_by_solar_false_when_target_unreachable():
     [
         (
             "allow_under_target",
-            _repro_slots,
+            _solar_sufficient_slots,
             66.0,
             {"allow_dw_entry_under_target": True},
         ),

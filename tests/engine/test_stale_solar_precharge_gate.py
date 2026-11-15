@@ -70,11 +70,13 @@ _START_HOUR = 6  # 06:00
 _DW_ENTRY_IDX = 18
 _DW_END_IDX = 30
 
-# Solar: moderate peak INSIDE the DW (17:00 = slot 22)
+# Solar: peak INSIDE the DW (17:00 = slot 22), large enough at confidence=1.0 that
+# solar alone reaches target in the DW (allow_dw_entry_under_target only waives the
+# target then, #1266)
 # At confidence=1.0: solar slightly exceeds load during DW → optimizer defers to DW solar
 # At confidence=0.3: P10 ≈ 0 → blended solar barely covers load → must pre-charge
 _SOLAR_PEAK_IDX = 22        # 17:00 (well inside DW)
-_SOLAR_PEAK_KWH = 1.5       # kWh per 30-min slot at peak (median, pv_estimate)
+_SOLAR_PEAK_KWH = 2.5       # kWh per 30-min slot at peak (median, pv_estimate)
 _SOLAR_P10_FRAC = 0.0       # P10 = 0 (cloudy-day floor)
 _SOLAR_SIGMA_SLOTS = 4.0    # Gaussian width in slots (~2h FWHM)
 
