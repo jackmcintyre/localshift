@@ -495,3 +495,24 @@ class TestAsyncSetupEntry:
         for sensor in added_entities:
             assert sensor.coordinator == mock_coordinator
             assert sensor._entry == mock_entry
+
+
+class TestSolarCanReachTargetGateAttributes:
+    """The sensor publishes the early-DW-entry gate beside its raw state (#1271)."""
+
+    def test_gate_off_while_state_on(self, mock_coordinator, mock_entry):
+        mock_coordinator.data.solar_can_reach_target = True
+        mock_coordinator.data.solar_can_reach_target_in_dw = False
+        mock_coordinator.data.optimizer_summary = {
+            "dw_entry_gate_soc_pct": 71.5,
+            "solar_forecast_accuracy_used": 0.29,
+        }
+        sensor = SolarCanReachTargetSensor(mock_coordinator, mock_entry)
+        sensor._update_from_coordinator()
+
+        assert sensor._attr_is_on is True
+        assert sensor.extra_state_attributes == {
+            "dw_entry_gate": False,
+            "dw_entry_gate_soc_pct": 71.5,
+            "forecast_accuracy": 0.29,
+        }

@@ -15,6 +15,7 @@ from custom_components.localshift.engine.constraints import (
     compute_max_feasible_terminal_soc,
     compute_max_normal_gain_pct_to_terminal,
     compute_pre_dw_charge_thresholds,
+    solar_only_dw_entry_soc,
 )
 from custom_components.localshift.engine.constraints import (
     feasible_actions as _constraints_feasible_actions,
@@ -49,6 +50,7 @@ from custom_components.localshift.engine.reason_codes import classify_reason
 from custom_components.localshift.engine.solar import (
     can_solar_reach_target,
     can_solar_reach_target_feasible,
+    discounted_in_window_solar_soc,
     get_forecast_accuracy,
 )
 from custom_components.localshift.engine.spike_event import find_funding_slots
@@ -307,6 +309,11 @@ def _is_urgency_precharge(
             )
         )
     )
+
+
+def _round_or_none(value: float | None) -> float | None:
+    """Round a display value to 2 places, passing None through."""
+    return None if value is None else round(value, 2)
 
 
 def _min_cycle_saving_blocks(
@@ -1198,6 +1205,17 @@ class DPPlanner:
             inputs, slots, config, terminal_penalty_idx
         )
 
+        # Display only (#1271, #1273): the accuracy-discounted values the charge
+        # decisions and the early-DW-entry gate compare with the target. Nothing
+        # on the planning path reads these.
+        gate_soc = discounted_in_window_solar_soc(inputs, slots, config, demand_bounds)
+        solar_only_raw: float | None = None
+        solar_only_discounted: float | None = None
+        if terminal_penalty_idx is not None:
+            solar_only_raw, solar_only_discounted = solar_only_dw_entry_soc(
+                slots, config, terminal_penalty_idx, inputs.initial_soc_pct
+            )
+
         return OptimizerResult(
             success=True,
             planner_version=self.VERSION,
@@ -1216,6 +1234,12 @@ class DPPlanner:
             accuracy_discount_factor=terminal_diags.get("accuracy_discount_factor"),
             peak_soc_pct=terminal_diags.get("peak_soc_pct"),
             dw_entry_soc_pct=terminal_diags.get("dw_entry_soc_pct"),
+            solar_forecast_accuracy_used=_round_or_none(config.solar_forecast_accuracy),
+            dw_entry_gate_soc_pct=_round_or_none(gate_soc),
+            dw_entry_solar_only_soc_pct=_round_or_none(solar_only_raw),
+            dw_entry_solar_only_discounted_soc_pct=_round_or_none(
+                solar_only_discounted
+            ),
             # Issue #1103: why a negative-FIT window did or did not open.
             negative_fit_spill_cost=negative_fit_assessment.spill_cost,
             negative_fit_spill_exposure=negative_fit_assessment.spill_exposure,

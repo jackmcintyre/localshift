@@ -400,6 +400,13 @@ def _build_summary(
     summary["accuracy_discount_factor"] = result.accuracy_discount_factor
     summary["peak_soc_pct"] = result.peak_soc_pct
     summary["dw_entry_soc_pct"] = result.dw_entry_soc_pct
+    # Display only (#1271, #1273): the accuracy-discounted view the decisions use.
+    summary["solar_forecast_accuracy_used"] = result.solar_forecast_accuracy_used
+    summary["dw_entry_gate_soc_pct"] = result.dw_entry_gate_soc_pct
+    summary["dw_entry_solar_only_soc_pct"] = result.dw_entry_solar_only_soc_pct
+    summary["dw_entry_solar_only_discounted_soc_pct"] = (
+        result.dw_entry_solar_only_discounted_soc_pct
+    )
 
     # Next-window tail (issue #1033). A start index means decisions from there on
     # were planned for the demand window that opens after the horizon ends, and

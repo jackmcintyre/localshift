@@ -151,6 +151,13 @@ class OptimizerSummarySensor(LocalShiftSensorBase):
             "initial_soc_pct": summary.get("initial_soc_pct"),
             "peak_soc_pct": summary.get("peak_soc_pct"),
             "dw_entry_soc_pct": summary.get("dw_entry_soc_pct"),
+            # Issue #1273: the plan's dw_entry_soc_pct uses the raw solar forecast;
+            # these are solar-only SOC entering the window, raw and discounted by
+            # forecast accuracy (what the charge decisions plan on).
+            "dw_entry_solar_only_soc_pct": summary.get("dw_entry_solar_only_soc_pct"),
+            "dw_entry_solar_only_discounted_soc_pct": summary.get(
+                "dw_entry_solar_only_discounted_soc_pct"
+            ),
             # Next-window tail (issue #1033): where the plan switches to the
             # window after the horizon, and the SOC it holds for it there. The
             # status says why the three below are null when they are.
