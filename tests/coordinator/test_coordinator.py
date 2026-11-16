@@ -316,6 +316,38 @@ class TestAsyncStart:
             assert coordinator._state_reader.pricing_provider is not None
 
     @pytest.mark.asyncio
+    async def test_async_start_wires_startup_grace_to_price_logging(
+        self, coordinator, mock_recorder
+    ):
+        """Issue #1205: the reader and provider follow the coordinator's grace."""
+        with (
+            patch(
+                "custom_components.localshift.services.subscription_manager.async_track_state_change_event"
+            ) as mock_track_state,
+            patch(
+                "custom_components.localshift.services.subscription_manager.async_track_time_interval"
+            ) as mock_track_time,
+            patch(
+                "custom_components.localshift.services.subscription_manager.async_track_time_change"
+            ) as mock_track_time_change,
+        ):
+            mock_track_state.return_value = MagicMock()
+            mock_track_time.return_value = MagicMock()
+            mock_track_time_change.return_value = MagicMock()
+
+            await coordinator.async_start()
+
+        reader = coordinator._state_reader
+        provider = reader.pricing_provider
+        state_machine = coordinator._state_machine
+        state_machine.set_startup_grace(30)
+        assert reader._startup_grace_active() is True
+        assert provider.startup_grace_active() is True
+        state_machine._startup_grace_until = None
+        assert reader._startup_grace_active() is False
+        assert provider.startup_grace_active() is False
+
+    @pytest.mark.asyncio
     async def test_async_setup_initializes_accuracy_metrics_storage(
         self, coordinator, mock_recorder
     ):
@@ -437,9 +469,7 @@ class TestHandleFastTick:
         # Verify state was read through entity monitor
         coordinator._entity_monitor.read_all_external_state.assert_called_once()
 
-    def test_fast_tick_accumulates_costs(
-        self, coordinator, coordinator_data
-    ):
+    def test_fast_tick_accumulates_costs(self, coordinator, coordinator_data):
         """Test that periodic tick accumulates costs."""
 
         coordinator.data = coordinator_data
