@@ -401,6 +401,7 @@ def _build_summary(
     summary["peak_soc_pct"] = result.peak_soc_pct
     summary["dw_entry_soc_pct"] = result.dw_entry_soc_pct
     # Display only (#1271, #1273): the accuracy-discounted view the decisions use.
+    summary["solar_forecast_accuracy_used"] = result.solar_forecast_accuracy_used
     summary["dw_entry_gate_soc_pct"] = result.dw_entry_gate_soc_pct
     summary["dw_entry_solar_only_soc_pct"] = result.dw_entry_solar_only_soc_pct
     summary["dw_entry_solar_only_discounted_soc_pct"] = (

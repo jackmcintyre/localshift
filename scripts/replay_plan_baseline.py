@@ -326,6 +326,7 @@ VOLATILE_KEYS = frozenset({
 # solve and read by nothing on the planning path. Held out so adding or changing
 # a dashboard figure does not rewrite the baseline of the plan itself.
 DISPLAY_ONLY_KEYS = frozenset({
+    "solar_forecast_accuracy_used",
     "dw_entry_gate_soc_pct",
     "dw_entry_solar_only_soc_pct",
     "dw_entry_solar_only_discounted_soc_pct",

@@ -997,6 +997,11 @@ class OptimizerResult:
     dw_entry_soc_pct: float | None = None
     """SOC (%) at demand window entry slot. None if no DW."""
 
+    solar_forecast_accuracy_used: float | None = None
+    """The forecast accuracy (0-1) the discount applied, published whether or not
+    there is a terminal penalty slot (``forecast_accuracy`` is None without one).
+    Display only (#1271)."""
+
     dw_entry_gate_soc_pct: float | None = None
     """Accuracy-discounted peak solar-only SOC (%) inside the demand window: the
     value the early-DW-entry gate (``can_solar_reach_target_in_dw``) compares with

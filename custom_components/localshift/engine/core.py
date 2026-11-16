@@ -1234,6 +1234,7 @@ class DPPlanner:
             accuracy_discount_factor=terminal_diags.get("accuracy_discount_factor"),
             peak_soc_pct=terminal_diags.get("peak_soc_pct"),
             dw_entry_soc_pct=terminal_diags.get("dw_entry_soc_pct"),
+            solar_forecast_accuracy_used=_round_or_none(config.solar_forecast_accuracy),
             dw_entry_gate_soc_pct=_round_or_none(gate_soc),
             dw_entry_solar_only_soc_pct=_round_or_none(solar_only_raw),
             dw_entry_solar_only_discounted_soc_pct=_round_or_none(

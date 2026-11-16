@@ -184,7 +184,7 @@ class SolarCanReachTargetSensor(LocalShiftBinarySensorBase):
         return {
             "dw_entry_gate": d.solar_can_reach_target_in_dw,
             "dw_entry_gate_soc_pct": summary.get("dw_entry_gate_soc_pct"),
-            "forecast_accuracy": summary.get("forecast_accuracy"),
+            "forecast_accuracy": summary.get("solar_forecast_accuracy_used"),
         }
 
 
