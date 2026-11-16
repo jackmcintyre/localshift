@@ -382,7 +382,7 @@
     "planner_version": "dp_v1",
     "projected_export_kwh": 68.319,
     "projected_import_kwh": 4.24,
-    "projected_net_cost": -19.5959,
+    "projected_net_cost": -19.5799,
     "reason_code_histogram": {
      "HIGH_SELL_PRICE_EXPORT": 4,
      "IDLE": 3,
@@ -442,7 +442,7 @@
     "precharge_runway_slack_min": 258.0,
     "projected_export_kwh": 68.319,
     "projected_import_kwh": 4.24,
-    "projected_net_cost": -19.5959,
+    "projected_net_cost": -19.5799,
     "reason_code_histogram": {
      "HIGH_SELL_PRICE_EXPORT": 4,
      "IDLE": 3,

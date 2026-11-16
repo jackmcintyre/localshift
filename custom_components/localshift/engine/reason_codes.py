@@ -18,6 +18,7 @@ from custom_components.localshift.engine.types import (
     ObjectiveTerms,
     OptimizerConfig,
     OptimizerInputs,
+    PlannedSlotDecision,
     PlannerAction,
     PlannerReasonCode,
     SlotContext,
@@ -161,10 +162,15 @@ def classify_charge_reason(
     *,
     objective_terms: ObjectiveTerms | None = None,
     inputs: OptimizerInputs | None = None,
+    skip_target_shortfall: bool = False,
 ) -> PlannerReasonCode:
-    """Classify CHARGE action reason."""
+    """Classify CHARGE action reason.
 
-    if _is_target_shortfall_risk(
+    ``skip_target_shortfall`` is set once the plan itself is known to reach the
+    target without grid charging (see ``relabel_unneeded_shortfall``).
+    """
+
+    if not skip_target_shortfall and _is_target_shortfall_risk(
         slot_idx,
         slots,
         soc,
@@ -185,6 +191,61 @@ def classify_charge_reason(
     if objective_terms and objective_terms.solar_opportunity_penalty > 0:
         return PlannerReasonCode.SOLAR_OPPORTUNITY_WAIT
     return PlannerReasonCode.UNCLASSIFIED
+
+
+def relabel_unneeded_shortfall(
+    decisions: list[PlannedSlotDecision],
+    slots: list[SlotContext],
+    initial_soc_pct: float,
+    config: OptimizerConfig,
+    terminal_penalty_idx: int | None,
+    inputs: OptimizerInputs | None = None,
+) -> None:
+    """Issue #1265: drop TARGET_SHORTFALL_RISK from a plan that never falls short.
+
+    The per-slot classifier discounts solar by forecast accuracy, so it can call a
+    charge a shortfall risk while the plan's own SOC path reaches the target on
+    solar alone. When the planned SOC entering the demand window, less everything
+    grid-charged before it, still meets the target, there was no shortfall to
+    guard against: re-classify those charges without the shortfall rule.
+    """
+    if terminal_penalty_idx is None or not 0 < terminal_penalty_idx <= len(decisions):
+        return
+    charge_actions = (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+    flagged = [
+        i
+        for i, d in enumerate(decisions[:terminal_penalty_idx])
+        if d.action in charge_actions
+        and d.reason_code == PlannerReasonCode.TARGET_SHORTFALL_RISK
+    ]
+    if not flagged:
+        return
+    grid_soc_pct = (
+        sum(
+            d.grid_import_kwh
+            for d in decisions[:terminal_penalty_idx]
+            if d.action in charge_actions
+        )
+        * config.charge_efficiency
+        / config.battery_capacity_kwh
+        * 100.0
+    )
+    entry_soc = decisions[terminal_penalty_idx - 1].predicted_soc_pct
+    if entry_soc - grid_soc_pct < config.demand_window_target_soc_pct:
+        return
+    for i in flagged:
+        soc = decisions[i - 1].predicted_soc_pct if i > 0 else initial_soc_pct
+        decisions[i].reason_code = classify_charge_reason(
+            slots[i],
+            i,
+            slots,
+            soc,
+            config,
+            terminal_penalty_idx,
+            objective_terms=decisions[i].objective_terms,
+            inputs=inputs,
+            skip_target_shortfall=True,
+        )
 
 
 def _is_target_shortfall_risk(

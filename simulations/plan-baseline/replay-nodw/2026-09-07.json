@@ -36,7 +36,7 @@
     "planner_version": "dp_v1",
     "projected_export_kwh": 0.056,
     "projected_import_kwh": 45.482,
-    "projected_net_cost": 6.152,
+    "projected_net_cost": 6.1538,
     "reason_code_histogram": {
      "CHEAP_IMPORT_WINDOW": 1,
      "IDLE": 10,
@@ -95,7 +95,7 @@
     "precharge_runway_slack_min": 226.0,
     "projected_export_kwh": 0.056,
     "projected_import_kwh": 45.482,
-    "projected_net_cost": 6.152,
+    "projected_net_cost": 6.1538,
     "reason_code_histogram": {
      "CHEAP_IMPORT_WINDOW": 1,
      "IDLE": 10,

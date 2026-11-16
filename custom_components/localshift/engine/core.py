@@ -45,7 +45,10 @@ from custom_components.localshift.engine.penalties import (
     get_solar_opportunity_penalty_factor,
 )
 from custom_components.localshift.engine.price_block import apply_price_block
-from custom_components.localshift.engine.reason_codes import classify_reason
+from custom_components.localshift.engine.reason_codes import (
+    classify_reason,
+    relabel_unneeded_shortfall,
+)
 from custom_components.localshift.engine.solar import (
     can_solar_reach_target,
     can_solar_reach_target_feasible,
@@ -2121,6 +2124,19 @@ class DPPlanner:
 
             current_soc = next_soc
             current_bin = _map_soc_to_bin(current_soc, soc_grid)
+
+        relabel_unneeded_shortfall(
+            decisions,
+            slots,
+            inputs.initial_soc_pct,
+            config,
+            terminal_penalty_idx,
+            inputs=inputs,
+        )
+        reason_histogram = {}
+        for decision in decisions:
+            key = decision.reason_code.value
+            reason_histogram[key] = reason_histogram.get(key, 0) + 1
 
         return decisions, totals, reason_histogram
 

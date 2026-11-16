@@ -217,4 +217,23 @@ def get_futile_cycling_penalty_factor(
         if soc <= min_soc:
             break
 
-    return min(1.0, total_drained / charge_kwh)
+    # Issue #1265: energy that merely displaces solar the battery would have
+    # absorbed for free before the demand window is as wasted as drained energy:
+    # the grid kWh just becomes extra solar export later. Solar stored without the
+    # charge minus solar stored with it is the displaced amount (0 when the solar
+    # cannot fill the battery anyway, the full charge when it can).
+    horizon_end = (
+        terminal_penalty_idx if terminal_penalty_idx is not None else len(slots)
+    )
+    solar_to_battery_kwh = config.charge_efficiency * sum(
+        max(0.0, s.solar_kwh - s.consumption_kwh)
+        for s in slots[slot_idx + 1 : horizon_end]
+    )
+    headroom_kwh = (
+        config.max_soc_pct - soc_after_charge_pct
+    ) / 100.0 * capacity_kwh + charge_kwh
+    displaced = min(solar_to_battery_kwh, headroom_kwh) - min(
+        solar_to_battery_kwh, headroom_kwh - charge_kwh
+    )
+
+    return min(1.0, (total_drained + displaced) / charge_kwh)

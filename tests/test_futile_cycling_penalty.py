@@ -939,3 +939,188 @@ class TestRecoveryModeSuppression:
         assert not cheap_recovery_charge_relief(
             slot_idx=0, slots=slots, config=config, terminal_penalty_idx=2
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1265: grid energy that only displaces the plan's own solar
+# ---------------------------------------------------------------------------
+
+
+_WINDOW_IDX = 8  # first 15:00 slot in _midday_slots
+
+
+def _midday_slots(solar_surplus_kwh: float) -> list[SlotContext]:
+    """11:00-14:30 with a flat 20c buy price and solar, then a 15:00-21:00 window."""
+    slots: list[SlotContext] = []
+    idx = 0
+    for half_hours in range(7):  # 11:00 .. 14:00 inclusive, 30-min slots
+        hour, minute = divmod(11 * 60 + half_hours * 30, 60)
+        slots.append(
+            make_slot(
+                idx,
+                hour,
+                minute,
+                buy_price=0.205,
+                sell_price=0.12,
+                solar_kwh=0.3 + solar_surplus_kwh,
+                consumption_kwh=0.3,
+            )
+        )
+        idx += 1
+    for half_hours in range(12):  # 14:30 .. 20:00
+        hour, minute = divmod(14 * 60 + 30 + half_hours * 30, 60)
+        in_window = hour >= 15
+        slots.append(
+            make_slot(
+                idx,
+                hour,
+                minute,
+                buy_price=0.60 if in_window else 0.25,
+                sell_price=0.50 if in_window else 0.20,
+                solar_kwh=0.0 if in_window else 0.2,
+                consumption_kwh=0.5,
+                is_demand_window_slot=in_window,
+                is_demand_window_entry=hour == 15 and minute == 0,
+            )
+        )
+        idx += 1
+    return slots
+
+
+def _plan_midday(solar_surplus_kwh: float, initial_soc_pct: float):
+    config = OptimizerConfig(
+        battery_capacity_kwh=13.5,
+        min_soc_pct=10.0,
+        max_soc_pct=100.0,
+        demand_window_target_soc_pct=80.0,
+        soc_bins=40,
+        optimization_mode="self_consumption",
+        effective_cheap_price=0.30,
+    )
+    inputs = OptimizerInputs(
+        cycle_id="test-1265",
+        initial_soc_pct=initial_soc_pct,
+        slots=_midday_slots(solar_surplus_kwh),
+        config=config,
+        all_solcast=[],
+    )
+    result = DPPlanner().plan(inputs)
+    assert result.success
+    return result
+
+
+def _grid_charge_before_window(result) -> float:
+    return sum(
+        d.grid_import_kwh
+        for d in result.decisions
+        if d.action
+        in (PlannerAction.CHARGE_GRID_NORMAL, PlannerAction.CHARGE_GRID_BOOST)
+        and d.slot_index < _WINDOW_IDX
+    )
+
+
+class TestDisplacedSolarIsFutile:
+    """The charge counts as wasted when solar would have filled the battery anyway."""
+
+    def test_factor_is_full_when_solar_fills_the_battery_regardless(
+        self, default_config
+    ):
+        slots = _midday_slots(solar_surplus_kwh=2.6)
+        factor = get_futile_cycling_penalty_factor(
+            action=PlannerAction.CHARGE_GRID_NORMAL,
+            slot_idx=0,
+            slots=slots,
+            config=default_config,
+            soc_after_charge_pct=50.0,
+            charge_kwh=2.4,
+            terminal_penalty_idx=_WINDOW_IDX,
+        )
+        assert factor == pytest.approx(1.0, abs=1e-6)
+
+    def test_factor_is_zero_when_solar_cannot_fill_the_battery(self, default_config):
+        slots = _midday_slots(solar_surplus_kwh=0.3)
+        factor = get_futile_cycling_penalty_factor(
+            action=PlannerAction.CHARGE_GRID_NORMAL,
+            slot_idx=0,
+            slots=slots,
+            config=default_config,
+            soc_after_charge_pct=50.0,
+            charge_kwh=2.4,
+            terminal_penalty_idx=_WINDOW_IDX,
+        )
+        assert factor == pytest.approx(0.0, abs=1e-6)
+
+    def test_no_grid_charge_when_solar_fills_the_battery_before_the_window(self):
+        result = _plan_midday(solar_surplus_kwh=2.6, initial_soc_pct=32.0)
+        assert _grid_charge_before_window(result) == pytest.approx(0.0, abs=1e-6)
+        # Solar alone still gets the battery to full before the window opens.
+        assert result.decisions[_WINDOW_IDX - 2].predicted_soc_pct >= 99.0
+
+    def test_still_pre_charges_when_solar_cannot_fill_the_battery(self):
+        result = _plan_midday(solar_surplus_kwh=0.1, initial_soc_pct=20.0)
+        assert _grid_charge_before_window(result) > 1.0
+
+
+class TestShortfallLabelNeedsAShortfall:
+    """Issue #1265: TARGET_SHORTFALL_RISK only when the plan would fall short."""
+
+    @staticmethod
+    def _decisions(entry_soc_pct: float, charge_kwh: float):
+        from custom_components.localshift.engine.types import (
+            PlannedSlotDecision,
+            PlannerReasonCode,
+        )
+
+        slots = _midday_slots(solar_surplus_kwh=2.6)
+        decisions = []
+        for i, slot in enumerate(slots[:_WINDOW_IDX]):
+            charging = i == 0
+            decisions.append(
+                PlannedSlotDecision(
+                    slot_index=slot.slot_index,
+                    timestamp_iso=slot.timestamp_iso,
+                    slot_interval_minutes=slot.slot_interval_minutes,
+                    action=PlannerAction.CHARGE_GRID_NORMAL
+                    if charging
+                    else PlannerAction.HOLD,
+                    reason_code=PlannerReasonCode.TARGET_SHORTFALL_RISK
+                    if charging
+                    else PlannerReasonCode.SOLAR_SURPLUS_CAPTURE,
+                    objective_terms=ObjectiveTerms(),
+                    predicted_soc_pct=entry_soc_pct,
+                    grid_import_kwh=charge_kwh if charging else 0.0,
+                    grid_export_kwh=0.0,
+                    solar_kwh=slot.solar_kwh,
+                    consumption_kwh=slot.consumption_kwh,
+                    buy_price=slot.buy_price,
+                    sell_price=slot.sell_price,
+                    export_floor_pct=10.0,
+                    is_demand_window=False,
+                )
+            )
+        return slots, decisions
+
+    def test_label_dropped_when_plan_reaches_target_without_the_charge(
+        self, default_config
+    ):
+        from custom_components.localshift.engine.reason_codes import (
+            relabel_unneeded_shortfall,
+        )
+        from custom_components.localshift.engine.types import PlannerReasonCode
+
+        slots, decisions = self._decisions(entry_soc_pct=100.0, charge_kwh=2.1)
+        relabel_unneeded_shortfall(decisions, slots, 32.0, default_config, _WINDOW_IDX)
+        assert decisions[0].reason_code != PlannerReasonCode.TARGET_SHORTFALL_RISK
+
+    def test_label_kept_when_the_charge_is_what_reaches_the_target(
+        self, default_config
+    ):
+        from custom_components.localshift.engine.reason_codes import (
+            relabel_unneeded_shortfall,
+        )
+        from custom_components.localshift.engine.types import PlannerReasonCode
+
+        # 85% with 2.1 kWh grid charged: without it the plan enters at ~70% < 80% target.
+        slots, decisions = self._decisions(entry_soc_pct=85.0, charge_kwh=2.1)
+        relabel_unneeded_shortfall(decisions, slots, 32.0, default_config, _WINDOW_IDX)
+        assert decisions[0].reason_code == PlannerReasonCode.TARGET_SHORTFALL_RISK
