@@ -21,13 +21,14 @@ How the test works
 ------------------
 We construct a scenario where solar arrives primarily *during* the demand
 window (DW, 15:00–21:00).  ``allow_dw_entry_under_target=True`` tells the
-optimizer it may enter the DW below target if solar will fill the deficit
-during the DW itself.
+optimizer it may enter the DW below target, but since #1266 only when solar
+alone (on the accuracy-discounted forecast) will reach target inside the DW.
+The high-confidence solar profile is sized so that it does.
 
 * **Scenario A — high confidence (1.0):** ``slot.solar_kwh`` equals the full
   median estimate.  The optimizer sees generous solar arriving inside the DW
   and concludes it can afford to skip pre-DW grid charging.  The battery
-  enters the DW at ~37% SOC, trusting the in-DW solar to get it to target.
+  enters the DW well under target, trusting the in-DW solar to get it to target.
 
 * **Scenario B — stale-capped confidence (0.3):** ``slot.solar_kwh`` is
   blended toward P10 ≈ 0.  The in-DW solar is now barely above load — the
@@ -70,11 +71,13 @@ _START_HOUR = 6  # 06:00
 _DW_ENTRY_IDX = 18
 _DW_END_IDX = 30
 
-# Solar: moderate peak INSIDE the DW (17:00 = slot 22)
-# At confidence=1.0: solar slightly exceeds load during DW → optimizer defers to DW solar
-# At confidence=0.3: P10 ≈ 0 → blended solar barely covers load → must pre-charge
+# Solar: peak INSIDE the DW (17:00 = slot 22), large enough at confidence=1.0 that
+# solar alone reaches target in the DW (allow_dw_entry_under_target only waives the
+# target then, #1266)
+# At confidence=1.0: in-DW solar reaches target → optimizer defers to DW solar
+# At confidence=0.3: blended solar is a fraction of that → target out of reach → must pre-charge
 _SOLAR_PEAK_IDX = 22        # 17:00 (well inside DW)
-_SOLAR_PEAK_KWH = 1.5       # kWh per 30-min slot at peak (median, pv_estimate)
+_SOLAR_PEAK_KWH = 2.5       # kWh per 30-min slot at peak (median, pv_estimate)
 _SOLAR_P10_FRAC = 0.0       # P10 = 0 (cloudy-day floor)
 _SOLAR_SIGMA_SLOTS = 4.0    # Gaussian width in slots (~2h FWHM)
 

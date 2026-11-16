@@ -9,6 +9,8 @@ These tests run ENTIRELY OFFLINE — no Home Assistant or Solcast data required.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from custom_components.localshift.engine.constraints import (
@@ -2195,6 +2197,10 @@ def test_cross_day_dw_solar_only_checks_first_block():
         optimization_mode="self_consumption",
         soc_bins=20,
         target_shortfall_penalty_per_pct=0.030,
+        # Slow charger: grid cannot close the gap before DW entry, so the shortfall
+        # is real whether or not the switch is on (#1266).
+        charge_rate_kw=0.5,
+        boost_charge_rate_kw=0.5,
     )
     inputs = OptimizerInputs(
         cycle_id="test-633-cross-day-solar-check",
@@ -2209,6 +2215,14 @@ def test_cross_day_dw_solar_only_checks_first_block():
     assert result.can_solar_reach_target_in_dw is False, (
         "Today's DW has insufficient solar; tomorrow's DW must not inflate the check"
     )
+
+
+def _same_as_switch_off(result, inputs):
+    """#1266: with solar unable to reach target the switch changes nothing."""
+    config = dataclasses.replace(inputs.config, allow_dw_entry_under_target=False)
+    strict = DPPlanner().plan(dataclasses.replace(inputs, config=config))
+    assert result.terminal_shortfall_pct == strict.terminal_shortfall_pct
+    assert [d.action for d in result.decisions] == [d.action for d in strict.decisions]
 
 
 def test_cross_day_dw_grid_charges_for_today():
@@ -2271,6 +2285,10 @@ def test_cross_day_dw_grid_charges_for_today():
         optimization_mode="self_consumption",
         soc_bins=20,
         target_shortfall_penalty_per_pct=0.030,
+        # Slow charger: grid cannot close the gap before DW entry, so the shortfall
+        # is real whether or not the switch is on (#1266).
+        charge_rate_kw=0.5,
+        boost_charge_rate_kw=0.5,
     )
     inputs = OptimizerInputs(
         cycle_id="test-633-cross-day-grid-charge",
@@ -2292,6 +2310,9 @@ def test_cross_day_dw_grid_charges_for_today():
     assert result.terminal_shortfall_pct > 0, (
         f"terminal_shortfall_pct={result.terminal_shortfall_pct}% must be > 0 when today's DW cannot reach target"
     )
+    # And the switch is inert (#1266): the plan is the switch-off plan, not one that
+    # waives today's target on tomorrow's solar.
+    _same_as_switch_off(result, inputs)
 
 
 def test_cross_day_dw_regression_single_block_unchanged():
@@ -2332,6 +2353,10 @@ def test_cross_day_dw_regression_single_block_unchanged():
         optimization_mode="self_consumption",
         soc_bins=20,
         target_shortfall_penalty_per_pct=0.030,
+        # Slow charger: grid cannot close the gap before DW entry, so the shortfall
+        # is real whether or not the switch is on (#1266).
+        charge_rate_kw=0.5,
+        boost_charge_rate_kw=0.5,
     )
     inputs = OptimizerInputs(
         cycle_id="test-633-regression-single-dw",
@@ -2415,6 +2440,10 @@ def test_terminal_shortfall_cross_day_uses_first_dw_only():
         optimization_mode="self_consumption",
         soc_bins=20,
         target_shortfall_penalty_per_pct=0.030,
+        # Slow charger: grid cannot close the gap before DW entry, so the shortfall
+        # is real whether or not the switch is on (#1266).
+        charge_rate_kw=0.5,
+        boost_charge_rate_kw=0.5,
     )
     inputs = OptimizerInputs(
         cycle_id="test-633-shortfall-cross-day",
@@ -2425,9 +2454,11 @@ def test_terminal_shortfall_cross_day_uses_first_dw_only():
 
     result = DPPlanner().plan(inputs)
     assert result.success
+    assert result.can_solar_reach_target_in_dw is False
     assert result.terminal_shortfall_pct > 0.0, (
         "Cross-day DW should report shortfall for first DW only"
     )
+    _same_as_switch_off(result, inputs)
 
 
 # ---------------------------------------------------------------------------

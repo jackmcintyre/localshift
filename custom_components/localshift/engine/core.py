@@ -786,8 +786,8 @@ class DPPlanner:
         tail credits no solar in the unseen gap, so its slot 0 could command a
         grid charge the main solve would not.
 
-        Not applied under ``allow_dw_entry_under_target``, which already keeps
-        its target on the horizon boundary. Falls back to the main plan on any
+        Not applied under ``allow_dw_entry_under_target`` when solar reaches the
+        target in the window, which keeps its target on the horizon boundary. Falls back to the main plan on any
         failure, so a bug here can cost the tail but never the plan. Why the tail
         was or was not applied is always published as
         ``next_window_tail_status``.
@@ -925,7 +925,7 @@ class DPPlanner:
         gap_min = inputs.next_demand_window_gap_min
         if not config.next_window_tail_enabled:
             return TAIL_DISABLED, 0, 0.0
-        if config.allow_dw_entry_under_target:
+        if config.allow_dw_entry_under_target and main.can_solar_reach_target_in_dw:
             return TAIL_UNDER_TARGET_MODE, 0, 0.0
         if not main.success or len(main.decisions) != len(slots):
             return TAIL_MAIN_UNSUCCESSFUL, 0, 0.0
@@ -1031,7 +1031,6 @@ class DPPlanner:
 
         soc_grid = _build_soc_grid(config)
         demand_bounds = self._find_demand_window_bounds(slots)
-        solar_capable = can_solar_reach_target(inputs, slots, config, demand_bounds)
 
         terminal_penalty_idx = self._determine_terminal_penalty_idx(
             config, demand_bounds
@@ -1062,6 +1061,9 @@ class DPPlanner:
         config.solar_forecast_accuracy = get_forecast_accuracy(
             inputs.solar_accuracy_tracker
         )
+        # Needs the accuracy just set: the switch gate uses the same discounted solar
+        # bar as the hard floor (#1266).
+        solar_capable = can_solar_reach_target(inputs, slots, config, demand_bounds)
 
         # Target-first eligibility (2026-06-12): per-slot pre-DW charge thresholds sized
         # so the demand-window target is fundable from the cheapest sufficient slots up
@@ -1154,7 +1156,12 @@ class DPPlanner:
         )
 
         terminal_shortfall = self._compute_terminal_shortfall(
-            inputs, decisions, config, terminal_penalty_idx, demand_bounds
+            inputs,
+            decisions,
+            config,
+            terminal_penalty_idx,
+            demand_bounds,
+            solar_capable,
         )
 
         # Compute terminal diagnostics (PR #789 wiring fix). Issue #973: this
@@ -1369,8 +1376,9 @@ class DPPlanner:
         to — but never beyond — the target, routing the DP through the cheapest eligible
         pre-DW slots. Returns ``None`` (gate dormant, legacy soft-penalty behaviour) when:
 
-        - ``allow_dw_entry_under_target`` is True (target may be met mid-DW via solar — the
-          penalty stays at the horizon boundary and pre-charge must not be forced), or
+        - ``allow_dw_entry_under_target`` is True AND solar alone reaches the target during
+          the DW (``solar_capable``; the penalty stays at the horizon boundary and
+          pre-charge must not be forced, #505/#1266), or
         - the mode is not self-consumption / there is no demand window / the entry is slot
           0 (``compute_max_feasible_terminal_soc`` returns None), or
         - solar alone is projected to reach the target by the DW entry — either at the DW
@@ -1382,8 +1390,9 @@ class DPPlanner:
         the START of ``terminal_penalty_idx``), matching where the DP applies the terminal
         penalty (``dp[terminal_penalty_idx][bin]``) and how the shortfall is measured.
         """
-        if config.allow_dw_entry_under_target:
-            return None
+        # ``solar_capable`` is only ever True when the switch is on (#1266), so under
+        # ``allow_dw_entry_under_target`` the floor is waived only when solar alone
+        # reaches target during the DW; otherwise it behaves as with the switch off.
         if solar_capable:
             return None
         # Solar alone reaches target by the DW entry: don't force grid charge (#816/#849).
@@ -1450,7 +1459,7 @@ class DPPlanner:
         the two can never disagree about which branch fired:
 
         1. floor is set        -> not suppressed (the gate is live)
-        2. allow_dw_entry_under_target -> policy dormancy, NOT solar
+        2. allow_dw_entry_under_target and solar_capable -> policy dormancy, NOT solar
         3. neither solar check fired   -> dormant for some other reason
         4. max feasible is None        -> structural dormancy (no DW / slot-0 entry /
            non-self-consumption), NOT solar
@@ -1459,7 +1468,7 @@ class DPPlanner:
         """
         if config.hard_target_floor is not None:
             return False
-        if config.allow_dw_entry_under_target:
+        if config.allow_dw_entry_under_target and solar_capable:
             return False
         if not solar_capable and not check_global_solar_sufficiency(
             inputs.initial_soc_pct, 0, slots, config, terminal_penalty_idx
@@ -1713,8 +1722,8 @@ class DPPlanner:
                 else:
                     shortfall_penalty = _cost_terminal_cost(soc, target, config)
 
-                if config.allow_dw_entry_under_target:
-                    # Issue #505: target may be met mid-DW via solar — keep the penalty
+                if config.allow_dw_entry_under_target and solar_can_reach_target:
+                    # Issue #505 / #1266: only when solar can reach target in the DW: target may be met mid-DW via solar — keep the penalty
                     # at the horizon boundary (legacy behaviour) so it does not force
                     # pre-charge before the demand window. Issue #811: net the bounded
                     # residual salvage credit against it (raw bin soc — post-horizon
@@ -2122,6 +2131,7 @@ class DPPlanner:
         config: OptimizerConfig,
         terminal_penalty_idx: int | None,
         demand_bounds: dict[str, int | None] | None = None,
+        solar_capable: bool = False,
     ) -> float:
         """Compute terminal shortfall.
 
@@ -2147,7 +2157,7 @@ class DPPlanner:
 
         target = config.demand_window_target_soc_pct
 
-        if config.allow_dw_entry_under_target:
+        if config.allow_dw_entry_under_target and solar_capable:
             max_soc_in_dw = _simulate_max_soc_in_demand_window(
                 inputs.initial_soc_pct, inputs.slots, config, demand_bounds
             )

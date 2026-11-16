@@ -176,10 +176,16 @@ def _simulate_max_soc_in_demand_window(
     slots: list[SlotContext],
     config: OptimizerConfig,
     demand_bounds: dict[str, int | None] | None = None,
+    *,
+    include_start_soc: bool = True,
 ) -> float:
-    """Simulate solar-only SOC and return max SOC within demand window slots."""
+    """Simulate solar-only SOC and return max SOC within demand window slots.
+
+    By default the max is seeded with the starting SOC. ``include_start_soc=False``
+    counts only SOC reached inside demand window slots (``-inf`` if there are none).
+    """
     soc = initial_soc_pct
-    max_soc_in_dw = soc
+    max_soc_in_dw = soc if include_start_soc else float("-inf")
 
     entry_idx: int | None = None
     end_idx: int | None = None

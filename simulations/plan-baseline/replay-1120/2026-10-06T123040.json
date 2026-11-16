@@ -46,7 +46,7 @@
     },
     "states_explored": 3364,
     "success": true,
-    "terminal_shortfall_pct": 45.64,
+    "terminal_shortfall_pct": 0.0,
     "total_slots": 43
    },
    "slot0_action": "hold",
@@ -81,7 +81,7 @@
     "next_window_gap_min": 600.0,
     "next_window_required_soc_pct": null,
     "next_window_tail_start_idx": null,
-    "next_window_tail_status": "under_target_mode",
+    "next_window_tail_status": "gap_too_long",
     "parity_completeness_pct": 94.2,
     "parity_defaulted_fields": {
      "consumption_kwh": 0,
@@ -130,7 +130,7 @@
     "spike_funding_net_cost_delta": 0.0,
     "spike_funding_slot_count": 0,
     "success": true,
-    "terminal_shortfall_pct": 45.64,
+    "terminal_shortfall_pct": 0.0,
     "total_slots": 43
    },
    "swallowed_failures": [],
