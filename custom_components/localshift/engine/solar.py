@@ -26,14 +26,32 @@ def can_solar_reach_target(
     SOC reached in window slots: a battery already at target now must not read as
     "solar reaches" when solar-only SOC sits at the floor through the window.
     """
+    if not config.allow_dw_entry_under_target:
+        return False
+    discounted = discounted_in_window_solar_soc(inputs, slots, config, demand_bounds)
+    if discounted is None:
+        return False
+    return discounted >= config.demand_window_target_soc_pct
+
+
+def discounted_in_window_solar_soc(
+    inputs: OptimizerInputs,
+    slots: list[SlotContext],
+    config: OptimizerConfig,
+    demand_bounds: dict[str, int | None],
+) -> float | None:
+    """Accuracy-discounted peak solar-only SOC (%) inside the demand window.
+
+    The value ``can_solar_reach_target`` compares with the target. Independent of
+    the ``allow_dw_entry_under_target`` switch so it can be published for display
+    whether or not the switch is on. None when there is no demand window.
+    """
     from custom_components.localshift.engine.dp_math import (
         _simulate_max_soc_in_demand_window,
     )
 
-    demand_window_entry_idx = demand_bounds["entry_idx"]
-
-    if not config.allow_dw_entry_under_target or demand_window_entry_idx is None:
-        return False
+    if demand_bounds["entry_idx"] is None:
+        return None
 
     max_soc_in_dw = _simulate_max_soc_in_demand_window(
         inputs.initial_soc_pct,
@@ -44,10 +62,9 @@ def can_solar_reach_target(
     )
     start = inputs.initial_soc_pct
     accuracy = max(0.0, min(1.0, config.solar_forecast_accuracy))
-    discounted = start + max(0.0, max_soc_in_dw - start) * accuracy
     if max_soc_in_dw < start:
-        discounted = max_soc_in_dw
-    return discounted >= config.demand_window_target_soc_pct
+        return max_soc_in_dw
+    return start + (max_soc_in_dw - start) * accuracy
 
 
 def can_solar_reach_target_feasible(

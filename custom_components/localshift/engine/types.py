@@ -997,6 +997,20 @@ class OptimizerResult:
     dw_entry_soc_pct: float | None = None
     """SOC (%) at demand window entry slot. None if no DW."""
 
+    dw_entry_gate_soc_pct: float | None = None
+    """Accuracy-discounted peak solar-only SOC (%) inside the demand window: the
+    value the early-DW-entry gate (``can_solar_reach_target_in_dw``) compares with
+    the target (#1271). Display only. None if no DW."""
+
+    dw_entry_solar_only_soc_pct: float | None = None
+    """Raw-forecast SOC (%) entering the DW on solar alone, no grid charge (#1273).
+    Display only. None if no DW."""
+
+    dw_entry_solar_only_discounted_soc_pct: float | None = None
+    """The same SOC with the solar gain discounted by forecast accuracy: what the
+    charge decisions (shortfall risk, #816 sufficiency) plan on (#1273). Display
+    only. None if no DW."""
+
     # Next-window tail (issue #1033)
     next_window_tail_start_idx: int | None = None
     """Index of the first decision planned for the demand window that starts

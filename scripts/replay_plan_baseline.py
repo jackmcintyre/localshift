@@ -322,6 +322,14 @@ VOLATILE_KEYS = frozenset({
     "computed_at",
     "solve_time_seconds",
 })
+# Display-only values (#1271, #1273): derived from the plan's inputs after the
+# solve and read by nothing on the planning path. Held out so adding or changing
+# a dashboard figure does not rewrite the baseline of the plan itself.
+DISPLAY_ONLY_KEYS = frozenset({
+    "dw_entry_gate_soc_pct",
+    "dw_entry_solar_only_soc_pct",
+    "dw_entry_solar_only_discounted_soc_pct",
+})
 # Echoes of the inputs: large, and already pinned by the capture file itself.
 ECHO_KEYS = frozenset({"config_options"})
 
@@ -894,7 +902,7 @@ def _record(data: CoordinatorData) -> dict[str, Any]:
     summary = getattr(data, "optimizer_summary", None) or {}
     decisions = getattr(data, "optimizer_decisions", None) or []
     mode = getattr(data, "active_mode", None)
-    skip = VOLATILE_KEYS | ECHO_KEYS
+    skip = VOLATILE_KEYS | ECHO_KEYS | DISPLAY_ONLY_KEYS
     # Reduced to plain values here, not by the caller: a later evaluation of
     # the same data must not be able to reach back into this record.
     return _canonical({

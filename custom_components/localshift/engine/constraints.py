@@ -476,6 +476,33 @@ def compute_pre_dw_charge_thresholds(
     return thresholds
 
 
+def solar_only_dw_entry_soc(
+    slots: list[SlotContext],
+    config: OptimizerConfig,
+    terminal_penalty_idx: int,
+    initial_soc_pct: float,
+) -> tuple[float, float]:
+    """Solar-only SOC (%) entering the DW: ``(raw, accuracy_discounted)``.
+
+    The discounted figure is the one the charge decisions use (only the positive
+    gain is discounted, by ``config.solar_forecast_accuracy``); the raw one is
+    the plain forecast. No grid charging in either.
+    """
+    from custom_components.localshift.engine.dp_math import (
+        _simulate_solar_only_terminal_soc,
+    )
+
+    sim_soc = _simulate_solar_only_terminal_soc(
+        initial_soc_pct, slots[:terminal_penalty_idx], None, config
+    )
+    accuracy = max(0.0, min(1.0, config.solar_forecast_accuracy))
+    if sim_soc >= initial_soc_pct:
+        discounted = initial_soc_pct + (sim_soc - initial_soc_pct) * accuracy
+    else:
+        discounted = sim_soc
+    return sim_soc, discounted
+
+
 def _required_stored_kwh_to_target(
     slots: list[SlotContext],
     config: OptimizerConfig,
@@ -490,18 +517,9 @@ def _required_stored_kwh_to_target(
     measures the SOC entering the entry slot, so that slot's own solar does not
     count (#1185).
     """
-    from custom_components.localshift.engine.dp_math import (
-        _simulate_solar_only_terminal_soc,
+    _, expected_soc_at_dw = solar_only_dw_entry_soc(
+        slots, config, terminal_penalty_idx, initial_soc_pct
     )
-
-    sim_soc = _simulate_solar_only_terminal_soc(
-        initial_soc_pct, slots[:terminal_penalty_idx], None, config
-    )
-    accuracy = max(0.0, min(1.0, config.solar_forecast_accuracy))
-    if sim_soc >= initial_soc_pct:
-        expected_soc_at_dw = initial_soc_pct + (sim_soc - initial_soc_pct) * accuracy
-    else:
-        expected_soc_at_dw = sim_soc
     return max(
         0.0,
         (config.demand_window_target_soc_pct - expected_soc_at_dw)

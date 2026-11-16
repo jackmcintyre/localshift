@@ -170,6 +170,23 @@ class SolarCanReachTargetSensor(LocalShiftBinarySensorBase):
     def _update_from_coordinator(self) -> None:
         self._attr_is_on = self.coordinator.data.solar_can_reach_target
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return what the early-DW-entry gate decided (#1271).
+
+        The state is the raw forecast reaching target entering the window. The
+        ``allow_dw_entry_under_target`` switch is gated on a different test: solar
+        alone, discounted by forecast accuracy, reaching target inside the window.
+        ``dw_entry_gate`` is that test's result, so it can be read next to the state.
+        """
+        d = self.coordinator.data
+        summary = d.optimizer_summary or {}
+        return {
+            "dw_entry_gate": d.solar_can_reach_target_in_dw,
+            "dw_entry_gate_soc_pct": summary.get("dw_entry_gate_soc_pct"),
+            "forecast_accuracy": summary.get("forecast_accuracy"),
+        }
+
 
 class BoostChargeNeededSensor(LocalShiftBinarySensorBase):
     """Whether 3.3kW charge rate is insufficient (need 5kW boost)."""
